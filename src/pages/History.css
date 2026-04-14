@@ -1,0 +1,165 @@
+.history-page {
+  padding: 24px;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.header-actions {
+  display: flex;
+  gap: 12px;
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.filters-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  padding: 24px;
+  margin-bottom: 30px;
+  align-items: flex-end;
+}
+
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-width: 200px;
+}
+
+.filter-group label {
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.filter-group select, 
+.filter-group input {
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 0.9rem;
+}
+
+.filter-group select option {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+}
+
+.search-btn {
+  height: 45px;
+  padding: 0 30px;
+  gap: 10px;
+}
+
+.history-content {
+  display: grid;
+  grid-template-columns: 1fr 350px;
+  gap: 24px;
+}
+
+.chart-container, .logs-container {
+  padding: 24px;
+}
+
+.chart-wrapper {
+  height: 400px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 20px;
+}
+
+.empty-state {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.table-wrapper {
+  max-height: 500px;
+  overflow-y: auto;
+  margin-top: 20px;
+}
+
+.log-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.log-table th {
+  text-align: left;
+  padding: 12px;
+  border-bottom: 2px solid var(--border-color);
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+}
+
+.log-table td {
+  padding: 12px;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.9rem;
+}
+
+.error-message {
+  padding: 16px;
+  background: rgba(239, 68, 68, 0.1);
+  border: 1px solid #ef4444;
+  border-radius: 8px;
+  color: #ef4444;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+@media (max-width: 1100px) {
+  .history-content {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .history-page {
+    padding: 12px;
+  }
+
+  .filters-bar {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 16px;
+    gap: 12px;
+  }
+
+  .filter-group {
+    min-width: 0;
+  }
+
+  .search-btn {
+    width: 100%;
+  }
+
+  .chart-wrapper {
+    height: 300px;
+  }
+
+  .log-table th:nth-child(3),
+  .log-table td:nth-child(3) {
+    display: none;
+  }
+}

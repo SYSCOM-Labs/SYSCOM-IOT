@@ -1,0 +1,12 @@
+---
+description: Consultar el brief del proyecto antes de trabajar en SYSCOM-IOT
+alwaysApply: true
+---
+
+# Contexto del proyecto
+
+**Siempre** revisa el archivo `.cursor/AGENT_BRIEF.md` (raíz del repo) al abrir el proyecto, al iniciar una tarea nueva o antes de cambios que afecten arquitectura, auth, API, rutas o base de datos.
+
+- Usa ese documento como mapa (stack, carpetas, comandos, convenciones).
+- Si el brief no cubre el tema, sigue con `README.md` y el código citado allí.
+- No asumas herramientas o rutas que no estén en el repo; confirma en el código o en el brief.

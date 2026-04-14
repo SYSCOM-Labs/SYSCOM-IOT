@@ -1,0 +1,352 @@
+/* Valor simple (sin tarjeta anidada: el panel ya es glass) */
+.value-widget-premium {
+  position: relative;
+  border-radius: 12px;
+  padding: 0.35rem 0.15rem 0.5rem;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--accent-blue) 8%, transparent),
+    color-mix(in srgb, var(--accent-cyan) 5%, transparent)
+  );
+  border: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
+  min-height: 3.5rem;
+}
+
+.value-widget-premium__eyebrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin-bottom: 0.35rem;
+}
+
+.value-widget-premium__value-row {
+  margin-top: 0;
+}
+
+.value-stale {
+  margin-top: 0.65rem;
+  font-size: 0.78rem;
+  color: var(--warning);
+}
+
+.value-widget .widget-content {
+  margin-top: 1rem;
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.widget-value {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.widget-unit {
+  font-size: 1.25rem;
+  color: var(--text-secondary);
+}
+
+.widget-footer {
+  margin-top: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+
+.trend.up { color: var(--success); }
+.trend.down { color: var(--danger); }
+.trend-label { color: var(--text-secondary); }
+
+.status-content {
+  margin-top: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.status-badge {
+  padding: 0.25rem 0.75rem;
+  border-radius: 999px;
+  width: fit-content;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.last-seen {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.pulse {
+  animation: pulse-animation 2s infinite;
+}
+
+@keyframes pulse-animation {
+  0% { opacity: 1; }
+  50% { opacity: 0.4; }
+  100% { opacity: 1; }
+}
+
+.widget-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.widget-title {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* KPI comparativa */
+.kpi-widget {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-height: 4rem;
+}
+
+.kpi-main-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+
+.kpi-value {
+  font-size: 2.25rem;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  background: linear-gradient(120deg, var(--text-primary), var(--accent-cyan));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.kpi-unit {
+  font-size: 1rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.kpi-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.8rem;
+}
+
+.kpi-muted {
+  color: var(--text-secondary);
+}
+
+.kpi-delta {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 600;
+}
+
+.kpi-stale {
+  font-size: 0.78rem;
+  color: var(--warning);
+}
+
+/* Tabla de eventos */
+.events-table-wrap {
+  overflow: auto;
+  max-height: 220px;
+  margin-top: 0.25rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.events-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.75rem;
+}
+
+.events-table th {
+  text-align: left;
+  padding: 0.45rem 0.5rem;
+  background: color-mix(in srgb, var(--glass-bg) 80%, transparent);
+  color: var(--text-secondary);
+  font-weight: 600;
+  position: sticky;
+  top: 0;
+}
+
+.events-table td {
+  padding: 0.4rem 0.5rem;
+  border-top: 1px solid var(--border-color);
+  vertical-align: top;
+}
+
+.events-ts {
+  white-space: nowrap;
+  color: var(--text-secondary);
+  width: 38%;
+}
+
+.events-summary {
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.events-table-muted,
+.timeline-muted {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  padding: 0.5rem 0;
+}
+
+/* Línea de tiempo */
+.timeline-root {
+  margin-top: 0.35rem;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.timeline-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 0.5rem;
+  border-left: 2px solid color-mix(in srgb, var(--accent-blue) 35%, var(--border-color));
+}
+
+.timeline-item {
+  position: relative;
+  padding: 0.35rem 0 0.85rem 1rem;
+}
+
+.timeline-dot {
+  position: absolute;
+  left: -0.5rem;
+  top: 0.55rem;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-blue) 25%, transparent);
+}
+
+.timeline-time {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+}
+
+.timeline-change {
+  font-size: 0.85rem;
+  margin-top: 0.15rem;
+  font-weight: 500;
+}
+
+.timeline-from {
+  color: var(--danger);
+  opacity: 0.9;
+}
+
+.timeline-arrow {
+  margin: 0 0.35rem;
+  color: var(--text-secondary);
+}
+
+.timeline-to {
+  color: var(--success);
+}
+
+/* ── Soft chart shell ── */
+.soft-chart-widget {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.soft-chart-widget__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-shrink: 0;
+}
+
+.soft-chart-widget__title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+}
+
+.soft-chart-widget__hint {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.soft-chart-widget__body {
+  flex: 1;
+  min-height: 140px;
+  width: 100%;
+}
+
+.soft-chart-widget__empty {
+  height: 140px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  border-radius: var(--card-radius);
+  background: var(--bg-hover);
+  border: 1px dashed var(--border-color);
+}
+
+/* ── Barra de progreso / meta ── */
+.progress-widget-soft {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 0.15rem 0;
+}
+
+.progress-widget-soft__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.progress-widget-soft__pct {
+  font-size: 1.75rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--primary-color);
+}
+
+.progress-widget-soft__cap {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-weight: 500;
+  text-align: right;
+}
+
+.progress-widget-soft__track {
+  height: 12px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border-color);
+  overflow: hidden;
+}
+
+.progress-widget-soft__fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--chart-color-3), var(--primary-color));
+  transition: width 0.45s ease;
+}

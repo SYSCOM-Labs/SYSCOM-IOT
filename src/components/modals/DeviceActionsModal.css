@@ -1,0 +1,153 @@
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.modal-content {
+  width: 90%;
+  max-width: 500px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  overflow: hidden;
+  animation: modalIn 0.3s ease;
+}
+
+@keyframes modalIn {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.modal-header {
+  padding: 20px;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.modal-header h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 0;
+}
+
+.modal-body {
+  padding: 24px;
+}
+
+.modal-footer {
+  padding: 20px;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.form-group {
+  margin-bottom: 20px;
+}
+
+.form-group label {
+  display: block;
+  font-size: 0.875rem;
+  font-weight: 500;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+}
+
+.form-group input {
+  width: 100%;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 1rem;
+}
+
+.downlink-description {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+}
+
+.downlink-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+  max-height: 300px;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+
+.downlink-row {
+  padding: 12px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+}
+
+.row-inputs {
+  flex: 1;
+  display: flex;
+  gap: 8px;
+}
+
+.row-inputs input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  font-size: 0.875rem;
+  color: var(--text-primary);
+  border-bottom: 1px solid transparent;
+  padding: 4px 0;
+}
+
+.row-inputs input:focus {
+  border-bottom-color: var(--accent-blue);
+  outline: none;
+}
+
+.row-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.btn-icon.send {
+  color: var(--accent-blue);
+}
+
+.btn-icon.send:hover {
+  background: rgba(0, 102, 255, 0.1);
+}
+
+.btn-icon.delete {
+  color: #ef4444;
+}
+
+.btn-icon.delete:hover {
+  background: rgba(239, 68, 68, 0.1);
+}
+
+.add-btn {
+  width: 100%;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  border-style: dashed;
+}

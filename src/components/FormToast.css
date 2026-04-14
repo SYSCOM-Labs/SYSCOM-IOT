@@ -1,0 +1,50 @@
+.form-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  margin-bottom: 0.75rem;
+  animation: form-toast-in 0.2s ease-out;
+}
+
+.form-toast span {
+  flex: 1;
+}
+
+.form-toast--success {
+  background: #ecfdf5;
+  border: 1px solid #34d399;
+  color: #047857;
+}
+
+.form-toast--error {
+  background: #fef2f2;
+  border: 1px solid #f87171;
+  color: #b91c1c;
+}
+
+body.theme-dark .form-toast--success {
+  background: #064e3b;
+  border-color: #10b981;
+  color: #d1fae5;
+}
+
+body.theme-dark .form-toast--error {
+  background: #7f1d1d;
+  border-color: #f87171;
+  color: #fecaca;
+}
+
+@keyframes form-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

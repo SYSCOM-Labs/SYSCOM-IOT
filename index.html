@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/logo-syscom.svg" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>SYSCOM IoT</title>
+  </head>
+  <body>
+    <script>
+      window.onerror = function(message, source, lineno, colno, error) {
+        document.body.innerHTML = '<div style="background: white; color: red; padding: 20px; z-index: 9999; position: absolute; top:0; left:0; width: 100vw; height: 100vh; overflow: auto;">' +
+          '<h1>Error</h1><p>' + message + '</p><pre>' + (error && error.stack) + '</pre></div>';
+      };
+    </script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

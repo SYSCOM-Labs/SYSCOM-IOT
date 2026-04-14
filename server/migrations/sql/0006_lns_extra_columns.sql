@@ -1,0 +1,15 @@
+ALTER TABLE lorawan_lns_sessions ADD COLUMN device_class TEXT DEFAULT 'A';
+ALTER TABLE lorawan_lns_sessions ADD COLUMN last_uplink_wall_ms INTEGER;
+ALTER TABLE lorawan_lns_sessions ADD COLUMN class_b_ping_periodicity INTEGER DEFAULT -1;
+ALTER TABLE lorawan_lns_sessions ADD COLUMN class_b_data_rate INTEGER;
+ALTER TABLE lorawan_lns_downlink ADD COLUMN not_before_ms INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE lorawan_lns_sessions ADD COLUMN rx_delay_sec INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE lorawan_lns_sessions ADD COLUMN pending_mac_ack INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE lorawan_lns_downlink ADD COLUMN priority INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE lorawan_lns_downlink ADD COLUMN track_tx_ack INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE lorawan_lns_downlink ADD COLUMN tx_dev_eui TEXT;
+ALTER TABLE lorawan_lns_downlink ADD COLUMN tx_new_fcnt INTEGER;
+ALTER TABLE lorawan_lns_downlink ADD COLUMN tx_prev_fcnt INTEGER;
+ALTER TABLE lorawan_lns_downlink ADD COLUMN tx_retries_left INTEGER;
+ALTER TABLE lorawan_lns_downlink ADD COLUMN is_confirmed_down INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE lorawan_lns_sessions ADD COLUMN awaiting_confirmed_dl_ack INTEGER NOT NULL DEFAULT 0;

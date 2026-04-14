@@ -1,0 +1,76 @@
+.action-menu-container {
+  position: relative;
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  min-width: 200px;
+  z-index: 100;
+  padding: 4px;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+  animation: dropdownFade 0.2s ease;
+}
+
+/* Portal al body: posición vía inline style (evita recorte por overflow-x del scroll de tabla) */
+.dropdown-menu--portal {
+  position: fixed;
+  top: auto;
+  left: auto;
+  right: auto;
+  margin-top: 0;
+  max-height: min(70vh, 420px);
+  overflow-y: auto;
+}
+
+@keyframes dropdownFade {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.dropdown-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 0.875rem;
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+}
+
+.dropdown-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--accent-blue);
+}
+
+.dropdown-item svg {
+  color: var(--text-secondary);
+}
+
+.dropdown-item:hover svg {
+  color: var(--accent-blue);
+}
+
+.dropdown-item--danger {
+  color: var(--danger-color, #c62828);
+}
+
+.dropdown-item--danger:hover {
+  background: rgba(198, 40, 40, 0.12);
+  color: var(--danger-color, #c62828);
+}
+
+.dropdown-item--danger:hover svg {
+  color: var(--danger-color, #c62828);
+}
