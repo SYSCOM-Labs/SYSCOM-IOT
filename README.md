@@ -166,8 +166,3 @@ npm run build
 npm test
 ```
 
-## Licencia
-
-Este repositorio **no incluye un archivo de licencia tipo SPDX** (MIT, Apache, etc.). El código se entiende en régimen de **uso libre**: puedes revisarlo, copiarlo, modificarlo y desplegarlo según tus necesidades. Si necesitas un marco jurídico explícito para terceros, conviene añadir un `LICENSE` (por ejemplo [Unlicense](https://unlicense.org/) o [CC0](https://creativecommons.org/publicdomain/zero/1.0/)) o el texto que acuerdes con los titulares.
-
-`"private": true` en `package.json` solo indica que el paquete **no está pensado para publicarse en el registro npm**; no define por sí solo reservas de derechos sobre el código.
