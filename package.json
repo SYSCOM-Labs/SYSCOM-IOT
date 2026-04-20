@@ -15,7 +15,8 @@
     "preview": "vite preview",
     "verify": "node scripts/verify-integration.mjs",
     "test": "node --test server/test/selfhosted.test.cjs",
-    "simulate:lns": "node scripts/simulate-lorawan-classes.mjs"
+    "simulate:lns": "node scripts/simulate-lorawan-classes.mjs",
+    "certs:dev": "node scripts/generate-dev-certs.mjs"
   },
   "dependencies": {
     "@react-oauth/google": "^0.13.5",

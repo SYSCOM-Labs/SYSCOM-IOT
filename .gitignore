@@ -61,6 +61,10 @@ Desktop.ini
 
 # Debug / misc
 *.pem
+
+# TLS desarrollo local (npm run certs:dev)
+certs/*.key
+certs/*.crt
 .turbo
 
 # Credenciales / integraciones locales (no versionar)
