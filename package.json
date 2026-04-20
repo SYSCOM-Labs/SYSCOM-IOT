@@ -14,7 +14,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "verify": "node scripts/verify-integration.mjs",
-    "test": "node --test server/test/selfhosted.test.cjs",
+    "test": "node --test server/test/lorawan-lns-crypto.test.cjs server/test/milesight-ws101.test.cjs server/test/selfhosted.test.cjs",
     "simulate:lns": "node scripts/simulate-lorawan-classes.mjs",
     "certs:dev": "node scripts/generate-dev-certs.mjs"
   },

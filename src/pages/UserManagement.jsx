@@ -395,7 +395,7 @@ const UserManagement = () => {
       </div>
 
       {modal === 'create' && (
-        <div className="modal-overlay" onClick={closeModal} onKeyDown={(e) => e.key === 'Escape' && closeModal()} role="presentation">
+        <div className="modal-overlay" onKeyDown={(e) => e.key === 'Escape' && closeModal()} role="presentation">
           <div className="modal-content glass um-modal" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()} role="dialog">
             <div className="modal-header">
               <h2>Nuevo Usuario</h2>
@@ -497,7 +497,7 @@ const UserManagement = () => {
       )}
 
       {modal === 'edit' && activeUser && (
-        <div className="modal-overlay" onClick={closeModal} role="presentation">
+        <div className="modal-overlay" role="presentation">
           <div className="modal-content glass um-modal" onClick={(e) => e.stopPropagation()} role="dialog">
             <div className="modal-header">
               <h2>Editar Usuario</h2>
@@ -586,7 +586,7 @@ const UserManagement = () => {
       )}
 
       {modal === 'password' && activeUser && (
-        <div className="modal-overlay" onClick={closeModal} role="presentation">
+        <div className="modal-overlay" role="presentation">
           <div className="modal-content glass um-modal-sm" onClick={(e) => e.stopPropagation()} role="dialog">
             <div className="modal-header">
               <h2>Cambiar Contraseña</h2>

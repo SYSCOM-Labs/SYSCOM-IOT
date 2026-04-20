@@ -30,6 +30,10 @@ Las migraciones se aplican **automáticamente al arrancar** el servidor, en orde
 | `0008_lns_ui_events` | Tabla `lns_ui_events` |
 | `0009_roles_normalize` | `viewer`→`user`, admins sin creador→`superadmin`, correos bootstrap→`superadmin` |
 | `0010_seed_bootstrap_superadmins` | Alta de superadministradores SYSCOM si no existen ([`bootstrap-admins.js`](./bootstrap-admins.js)) |
+| `0011_device_decode_downlinks` | Columna `downlinks_json` en `device_decode_config` (plantilla aplicada) |
+| `0012_device_decode_downlinks_repair` | Repite `ADD COLUMN` con tolerancia a duplicado si `0011` quedó registrada sin ejecutar el `ALTER` |
+| `0013_purge_devaddr_pseudo_devices` | Borra telemetría y `user_devices` con `device_id` tipo `devaddr-*` (alta automática indebida) |
+| `0014_device_decode_lorawan_class` | Columna `lorawan_class` en `device_decode_config` + backfill desde `user_devices` (clase alineada con plantilla) |
 
 ## Superadministradores de arranque
 

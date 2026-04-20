@@ -6,7 +6,8 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { normalizeLorawanUplink, expandLorawanPacketBodies } = require('./lns/lorawan-normalize');
-const { tryApplyStoredDecoder } = require('./decoders/payload-decoder');
+const { tryApplyStoredDecoder, promoteUc300GpioFromChannelHistory } = require('./decoders/payload-decoder');
+const { resolveAppFPortForDownlink } = require('./lib/resolve-app-fport');
 const {
   normalizeBaseUrl: ugNormalizeBaseUrl,
   ugJsonRequest,
@@ -21,9 +22,13 @@ const {
 } = require('./integrations/milesight/milesight-mqtt-publisher');
 const { store, isEnsuredSuperadminEmail } = require('./store');
 const { validatePasswordStrength } = require('./middleware/password-policy');
-const { isAllowedGatewayFrequencyBand } = require('./lns/lorawan-gateway-bands');
+const {
+  isAllowedGatewayFrequencyBand,
+  normalizeGatewayFrequencyBand,
+} = require('./lns/lorawan-gateway-bands');
 const metrics = require('./monitoring/syscom-metrics');
 const { createRealtimeHub } = require('./realtime/realtime-hub');
+const { sanitizeTelemetryForSse } = require('./telemetry-sse-sanitize');
 const { createRateLimiter } = require('./middleware/rate-limit-memory');
 const { fixUtf8Mojibake } = require('./lib/fixUtf8Mojibake');
 
@@ -48,6 +53,53 @@ if (IS_PRODUCTION && !process.env.JWT_SECRET) {
   process.exit(1);
 }
 const JWT_SECRET = process.env.JWT_SECRET || 'syscom-iot-dev-insecure-jwt-secret-change-me';
+
+/** Cadena `expiresIn` de jsonwebtoken (p. ej. `90d`, `8h`). Por defecto sesión larga para monitoreo / kiosco. */
+function syscomJwtExpiresIn() {
+  const v = process.env.SYSCOM_JWT_EXPIRES;
+  if (v != null && String(v).trim() !== '') return String(v).trim();
+  return '90d';
+}
+
+/** Tras caducar el `exp` del JWT, se acepta refresh (y SSE con token en query) hasta este margen. */
+function syscomJwtRefreshGraceMs() {
+  const n = parseInt(process.env.SYSCOM_JWT_REFRESH_GRACE_MS, 10);
+  if (Number.isFinite(n) && n >= 0) return n;
+  return 30 * 24 * 60 * 60 * 1000;
+}
+
+function signSessionJwt(payload) {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: syscomJwtExpiresIn() });
+}
+
+/**
+ * Verifica Bearer y asigna req.user. Caducado: solo en POST /auth/first-password aplica ventana de gracia
+ * (usuario con cambio de contraseña obligatorio puede completar el flujo con JWT vencido reciente).
+ */
+function verifyBearerForAuthMiddleware(req, token) {
+  const p = req.path || '';
+  const firstPwPath =
+    req.method === 'POST' && (p === '/api/auth/first-password' || p.endsWith('/auth/first-password'));
+  try {
+    req.user = jwt.verify(token, JWT_SECRET);
+    return true;
+  } catch (e) {
+    if (e?.name === 'TokenExpiredError' && firstPwPath) {
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET, { ignoreExpiration: true });
+        const expMs = decoded.exp != null ? Number(decoded.exp) * 1000 : 0;
+        if (!expMs || Date.now() > expMs + syscomJwtRefreshGraceMs()) {
+          return false;
+        }
+        req.user = decoded;
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }
+}
 
 /**
  * CORS: en desarrollo por defecto `*`. En producción use SYSCOM_CORS_ORIGINS (lista separada por comas) o `*` explícito.
@@ -82,8 +134,26 @@ const app = express();
 const PORT = parseInt(process.env.PORT || '3001', 10);
 /** Puerto opcional dedicado a ingesta (gateway → POST /ingest/:userId/:token). Si no se define, solo existe /api/ingest/... en PORT. */
 const INGEST_PORT = process.env.INGEST_PORT ? parseInt(process.env.INGEST_PORT, 10) : null;
-/** Puerto UDP Semtech GWMP (packet forwarder). No disponible en PaaS solo HTTP (p. ej. Render). */
-const LNS_UDP_PORT = process.env.LNS_UDP_PORT ? parseInt(process.env.LNS_UDP_PORT, 10) : null;
+/**
+ * Puerto UDP Semtech GWMP (packet forwarder). Por defecto **1700** (LNS activo sin checklist).
+ * Desactivar solo en entornos sin UDP entrante: `LNS_UDP_PORT=0` o `off` / `false` / `disabled`.
+ * Si el puerto UDP está ocupado, el proceso **no** termina: el listener UDP se reintenta cada `LNS_UDP_BIND_RETRY_MS` (def. 30000).
+ */
+function resolveLnsUdpPort() {
+  const raw = process.env.LNS_UDP_PORT;
+  if (raw === undefined || raw === null) return 1700;
+  const t = String(raw).trim();
+  if (t === '') return 1700;
+  const tl = t.toLowerCase();
+  if (tl === '0' || tl === 'off' || tl === 'false' || tl === 'disabled' || tl === 'none') return null;
+  const n = parseInt(t, 10);
+  if (!Number.isFinite(n) || n < 1 || n > 65535) {
+    console.warn(`[LNS] LNS_UDP_PORT="${t}" inválido; usando 1700.`);
+    return 1700;
+  }
+  return n;
+}
+const LNS_UDP_PORT = resolveLnsUdpPort();
 const RETENTION_MS =
   parseInt(process.env.SYSCOM_TELEMETRY_RETENTION_MS, 10) || 365 * 24 * 60 * 60 * 1000;
 /** Política fija: 40 min sin nueva telemetría → OFFLINE en listados (override: SYSCOM_DEVICE_STALE_OFFLINE_MS). */
@@ -94,7 +164,16 @@ const TSL_IGNORE = new Set([
   'rpsStatus', 'model', 'hardwareVersion', 'firmwareVersion', 'lastUpdateTime', 'application',
   'licenseStatus', 'deviceType', 'tag', 'devEUI', 'connectStatus', 'deviceId', 'sn', 'userId', 'id',
   'deviceName', 'timestamp', 'mac', 'imei', 'devEui', 'deviceSn', 'fpt',
+  'nwkSKey', 'appSKey', 'appsKey', 'nwk_s_key', 'app_s_key', 'apps_key',
 ]);
+
+function isBufferLikeValue(v) {
+  if (v == null) return false;
+  if (typeof Buffer !== 'undefined' && Buffer.isBuffer(v)) return true;
+  if (typeof v !== 'object' || Array.isArray(v)) return false;
+  if (v.type === 'Buffer' && Array.isArray(v.data)) return true;
+  return false;
+}
 
 /** Claves anidadas tipo `a.b` para selectores de widget / TSL */
 function flattenTelemetryProps(obj) {
@@ -103,10 +182,12 @@ function flattenTelemetryProps(obj) {
     if (!o || typeof o !== 'object' || Array.isArray(o)) return;
     for (const [k, v] of Object.entries(o)) {
       if (TSL_IGNORE.has(k)) continue;
+      if (isBufferLikeValue(v)) continue;
       const key = prefix ? `${prefix}.${k}` : k;
       if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
         walk(v, key);
       } else {
+        if (isBufferLikeValue(v)) continue;
         out[key] = v;
       }
     }
@@ -251,6 +332,34 @@ function isGatewayPseudoDeviceId(deviceId) {
   return /^[0-9a-f]{8,32}$/.test(hex);
 }
 
+/** Uplink Semtech sin OTAA: `devaddr-*` u otras claves que no son nodos dados de alta. */
+function isEphemeralLorawanPseudoDeviceId(deviceId) {
+  const s = String(deviceId || '').trim().toLowerCase();
+  if (s.startsWith('devaddr-')) return true;
+  if (/^gateway-[0-9a-f]{8,32}$/.test(s)) return true;
+  return false;
+}
+
+/**
+ * Filtro por etiqueta de producto (`user_devices.tag`).
+ * Por defecto (sin env): solo `uc300` y `ws101`.
+ * `SYSCOM_DEVICE_TAG_ALLOWLIST=*` o cadena vacía: sin filtro por tag.
+ */
+function getDeviceTagAllowlistSet() {
+  const raw = process.env.SYSCOM_DEVICE_TAG_ALLOWLIST;
+  if (raw === undefined) return new Set(['uc300', 'ws101']);
+  const s = String(raw).trim();
+  if (s === '' || s === '*') return null;
+  return new Set(s.split(',').map((x) => x.trim().toLowerCase()).filter(Boolean));
+}
+
+function userDevicePassesProductTagFilter(ud) {
+  const allow = getDeviceTagAllowlistSet();
+  if (!allow) return true;
+  const tag = String(ud.tag || '').trim().toLowerCase();
+  return allow.has(tag);
+}
+
 /** Último ts de ingesta en BD para el usuario; si es antiguo, forzar OFFLINE en el listado. */
 function applyStaleOfflineFromTelemetryRow(row, telemetryRow) {
   if (!telemetryRow || telemetryRow.timestamp == null) return;
@@ -304,6 +413,8 @@ function buildDevicesContentAssignedOnly(userId) {
   const content = [];
   for (const reg of registered) {
     if (isGatewayPseudoDeviceId(reg.deviceId)) continue;
+    if (isEphemeralLorawanPseudoDeviceId(reg.deviceId)) continue;
+    if (!userDevicePassesProductTagFilter(reg)) continue;
     if (!store.isLicenseActiveForEndUser(reg.deviceId)) continue;
     const t = latestMap[reg.deviceId];
     if (t) {
@@ -340,8 +451,15 @@ function buildDevicesContentSuperadmin() {
   const udList = store.listUserDevicesWithAccounts();
   const labelsByDevice = store.getAllLabelsGroupedByDevice();
 
+  const udFiltered = udList.filter(
+    (u) =>
+      !isGatewayPseudoDeviceId(u.deviceId) &&
+      !isEphemeralLorawanPseudoDeviceId(u.deviceId) &&
+      userDevicePassesProductTagFilter(u)
+  );
+
   const assignByDevice = {};
-  for (const u of udList) {
+  for (const u of udFiltered) {
     if (!assignByDevice[u.deviceId]) assignByDevice[u.deviceId] = [];
     assignByDevice[u.deviceId].push({
       email: u.email,
@@ -351,8 +469,7 @@ function buildDevicesContentSuperadmin() {
     });
   }
 
-  const deviceIds = new Set(Object.keys(latestMap));
-  for (const u of udList) deviceIds.add(u.deviceId);
+  const deviceIds = new Set(udFiltered.map((u) => u.deviceId));
 
   const mapTelemetryRow = (t) => {
     const p = t.properties || {};
@@ -374,6 +491,7 @@ function buildDevicesContentSuperadmin() {
   const content = [];
   for (const deviceId of deviceIds) {
     if (isGatewayPseudoDeviceId(deviceId)) continue;
+    if (isEphemeralLorawanPseudoDeviceId(deviceId)) continue;
     const t = latestMap[deviceId];
     const assigns = assignByDevice[deviceId] || [];
     const labelOpts = labelsByDevice[deviceId] || [];
@@ -590,6 +708,13 @@ function saveIngestEntry(userId, data) {
     return { ok: true, test: true, message: 'Sin device id (aceptado como prueba)' };
   }
 
+  if (isEphemeralLorawanPseudoDeviceId(rawDeviceId)) {
+    if (String(process.env.SYSCOM_LOG_EPHEMERAL_INGEST || '').trim() === '1') {
+      console.warn(`[Ingest] Omitido (pseudo device_id no registrable): ${rawDeviceId}`);
+    }
+    return { ok: true, skipped: true, message: 'ephemeral_device_id' };
+  }
+
   const incomingIdentifiers = [
     rawDeviceId,
     deviceName,
@@ -613,6 +738,18 @@ function saveIngestEntry(userId, data) {
   const canonicalDeviceId = resolveCanonicalDeviceId(userId, incomingIdentifiers) || rawDeviceId.toString();
   const normalizedDeviceName = deviceName || canonicalDeviceId;
 
+  if (isEphemeralLorawanPseudoDeviceId(canonicalDeviceId)) {
+    console.warn(`[Ingest] Omitido (device_id canónico inválido): ${canonicalDeviceId}`);
+    return { ok: true, skipped: true, message: 'ephemeral_canonical_id' };
+  }
+
+  if (!store.deviceRegisteredForUser(userId, canonicalDeviceId)) {
+    console.warn(
+      `[Ingest] Telemetría omitida (dispositivo no dado de alta para este usuario): user=${userId} device=${canonicalDeviceId}`
+    );
+    return { ok: true, skipped: true, message: 'device_not_registered' };
+  }
+
   const properties = { ...baseProps };
   properties.deviceId = canonicalDeviceId;
   properties.deviceName = normalizedDeviceName;
@@ -620,6 +757,7 @@ function saveIngestEntry(userId, data) {
   if (!properties.devEui && properties.devEUI) properties.devEui = properties.devEUI;
 
   tryApplyStoredDecoder(store, canonicalDeviceId, rawDeviceId, properties);
+  promoteUc300GpioFromChannelHistory(properties);
 
   pushDebugWebhook({
     timestamp: Date.now(),
@@ -636,6 +774,7 @@ function saveIngestEntry(userId, data) {
     deviceId: canonicalDeviceId,
     deviceName: normalizedDeviceName,
     timestamp: ts,
+    properties: sanitizeTelemetryForSse(properties),
   };
   for (const uid of telemetryUserIds) {
     realtimeHub.broadcast(String(uid), 'telemetry', telemEv);
@@ -690,6 +829,8 @@ function getLnsEngine() {
       runLegacyUplink: (uid, b) => runUplinkPipeline(uid, b),
       insertUiEvent: insertUiEventWithStream,
     });
+    /** Referencia global para el handler UDP Semtech (GW_TX_ACK → handleTxAck). */
+    globalThis.lnsEngine = lnsEngineSingleton;
   }
   return lnsEngineSingleton;
 }
@@ -754,11 +895,9 @@ function handleLorawanUplinkRequest(req, res) {
 
 // ── Auth middleware ────────────────────────────────────────
 const authMiddleware = (req, res, next) => {
-  const token = req.headers.authorization?.replace('Bearer ', '');
+  const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
   if (!token) return res.status(401).json({ error: 'Token requerido' });
-  try {
-    req.user = jwt.verify(token, JWT_SECRET);
-  } catch {
+  if (!verifyBearerForAuthMiddleware(req, token)) {
     return res.status(401).json({ error: 'Token inválido o expirado' });
   }
   const p = req.path || '';
@@ -848,7 +987,7 @@ app.get('/api/milesight/uplink/:userId/:ingestToken', (req, res) => {
 app.all('/api/webhook/milesight/:userId', (req, res) => {
   res.status(410).json({
     error: 'Obsoleto',
-    message: 'Configure el gateway con POST /api/ingest/<userId>/<ingestToken> (ver Ajustes en la app).',
+    message: 'Configure el gateway con POST /api/ingest/<userId>/<ingestToken> (token en administración de usuarios).',
   });
 });
 
@@ -867,17 +1006,55 @@ app.post('/api/auth/login', loginRateLimit, (req, res) => {
   }
   metrics.inc('login_success');
   const safe = sanitizeUserRecord(user);
-  const token = jwt.sign(
-    {
-      id: safe.id,
-      email: safe.email,
-      role: safe.role,
-      profileName: safe.profileName,
-      mustChangePassword: Boolean(user.mustChangePassword),
-    },
-    JWT_SECRET,
-    { expiresIn: '8h' }
-  );
+  const token = signSessionJwt({
+    id: safe.id,
+    email: safe.email,
+    role: safe.role,
+    profileName: safe.profileName,
+    mustChangePassword: Boolean(user.mustChangePassword),
+  });
+  res.json({ token, user: safe });
+});
+
+/**
+ * POST con `Authorization: Bearer <JWT>` (aunque el JWT esté caducado en calendario).
+ * Emite un JWT nuevo con los mismos claims que el login si sigue dentro de SYSCOM_JWT_REFRESH_GRACE_MS tras exp.
+ */
+app.post('/api/auth/refresh', loginRateLimit, (req, res) => {
+  const raw = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+  if (!raw) return res.status(401).json({ error: 'Token requerido' });
+  let decoded;
+  try {
+    decoded = jwt.verify(raw, JWT_SECRET, { ignoreExpiration: true });
+  } catch {
+    return res.status(401).json({ error: 'Token inválido o expirado' });
+  }
+  const expMs = decoded.exp != null ? Number(decoded.exp) * 1000 : 0;
+  if (!expMs) return res.status(401).json({ error: 'Token sin expiración' });
+  if (Date.now() > expMs + syscomJwtRefreshGraceMs()) {
+    return res.status(401).json({
+      error: 'Sesión demasiado antigua. Inicie sesión de nuevo.',
+      code: 'REFRESH_GRACE_EXCEEDED',
+    });
+  }
+  const user = store.getUserById(decoded.id);
+  if (!user) return res.status(401).json({ error: 'Usuario no encontrado' });
+  if (user.mustChangePassword && !decoded.impersonation) {
+    return res.status(403).json({
+      code: 'MUST_CHANGE_PASSWORD',
+      error: 'Debe definir una contraseña segura antes de continuar.',
+    });
+  }
+  const safe = sanitizeUserRecord(user);
+  const payload = {
+    id: safe.id,
+    email: safe.email,
+    role: safe.role,
+    profileName: safe.profileName,
+    mustChangePassword: Boolean(user.mustChangePassword),
+  };
+  if (decoded.impersonation) payload.impersonation = true;
+  const token = signSessionJwt(payload);
   res.json({ token, user: safe });
 });
 
@@ -952,17 +1129,13 @@ app.post('/api/auth/google/callback', loginRateLimit, async (req, res) => {
 
     metrics.inc('login_success');
     const safe = sanitizeUserRecord(user);
-    const token = jwt.sign(
-      {
-        id: safe.id,
-        email: safe.email,
-        role: safe.role,
-        profileName: safe.profileName,
-        mustChangePassword: false,
-      },
-      JWT_SECRET,
-      { expiresIn: '8h' }
-    );
+    const token = signSessionJwt({
+      id: safe.id,
+      email: safe.email,
+      role: safe.role,
+      profileName: safe.profileName,
+      mustChangePassword: false,
+    });
     res.json({ token, user: safe });
   } catch (e) {
     console.error('[auth/google/callback]', e.message);
@@ -983,17 +1156,13 @@ app.post('/api/auth/first-password', authMiddleware, (req, res) => {
   row.mustChangePassword = false;
   store.updateUserRecord(row);
   const safe = sanitizeUserRecord(row);
-  const token = jwt.sign(
-    {
-      id: safe.id,
-      email: safe.email,
-      role: safe.role,
-      profileName: safe.profileName,
-      mustChangePassword: false,
-    },
-    JWT_SECRET,
-    { expiresIn: '8h' }
-  );
+  const token = signSessionJwt({
+    id: safe.id,
+    email: safe.email,
+    role: safe.role,
+    profileName: safe.profileName,
+    mustChangePassword: false,
+  });
   res.json({ token, user: safe });
 });
 
@@ -1049,18 +1218,14 @@ app.post('/api/debug/impersonate', loginRateLimit, authMiddleware, loopbackOnlyD
     }
   }
   const safe = sanitizeUserRecord(user);
-  const token = jwt.sign(
-    {
-      id: safe.id,
-      email: safe.email,
-      role: safe.role,
-      profileName: safe.profileName,
-      mustChangePassword: Boolean(user.mustChangePassword),
-      impersonation: true,
-    },
-    JWT_SECRET,
-    { expiresIn: '8h' }
-  );
+  const token = signSessionJwt({
+    id: safe.id,
+    email: safe.email,
+    role: safe.role,
+    profileName: safe.profileName,
+    mustChangePassword: Boolean(user.mustChangePassword),
+    impersonation: true,
+  });
   res.json({ token, user: { ...safe, mustChangePassword: false } });
 });
 
@@ -1081,8 +1246,21 @@ const authFromBearerOrQuery = (req, res, next) => {
   if (!token) return res.status(401).json({ error: 'Token requerido' });
   try {
     req.user = jwt.verify(token, JWT_SECRET);
-  } catch {
-    return res.status(401).json({ error: 'Token inválido o expirado' });
+  } catch (e) {
+    if (e?.name === 'TokenExpiredError') {
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET, { ignoreExpiration: true });
+        const expMs = decoded.exp != null ? Number(decoded.exp) * 1000 : 0;
+        if (!expMs || Date.now() > expMs + syscomJwtRefreshGraceMs()) {
+          return res.status(401).json({ error: 'Token inválido o expirado' });
+        }
+        req.user = decoded;
+      } catch {
+        return res.status(401).json({ error: 'Token inválido o expirado' });
+      }
+    } else {
+      return res.status(401).json({ error: 'Token inválido o expirado' });
+    }
   }
   const fullUser = store.getUserById(req.user.id);
   if (fullUser?.mustChangePassword && !req.user.impersonation) {
@@ -1635,7 +1813,15 @@ app.post('/api/lorawan-gateways', authMiddleware, staffOnlyMiddleware, (req, res
   }
   if (!isAllowedGatewayFrequencyBand(frequencyBand)) {
     return res.status(400).json({
-      error: 'Seleccione una banda de frecuencia válida de la lista.',
+      error:
+        'Solo se admite US915 subbanda FSB2 (canales 125 kHz 8–15 y 500 kHz 65–70). Use US902-928-FSB2.',
+      code: 'GATEWAY_VALIDATION',
+    });
+  }
+  const bandNorm = normalizeGatewayFrequencyBand(frequencyBand);
+  if (!bandNorm) {
+    return res.status(400).json({
+      error: 'Banda de gateway no válida.',
       code: 'GATEWAY_VALIDATION',
     });
   }
@@ -1651,7 +1837,7 @@ app.post('/api/lorawan-gateways', authMiddleware, staffOnlyMiddleware, (req, res
     userId: req.user.id,
     name: nameTrim.slice(0, 128),
     gatewayEui: el,
-    frequencyBand: String(frequencyBand).slice(0, 64),
+    frequencyBand: bandNorm.slice(0, 64),
     createdAt: new Date().toISOString(),
   };
   store.insertLorawanGateway(row);
@@ -1685,6 +1871,12 @@ app.post('/api/devices/assign', authMiddleware, (req, res) => {
   const did = deviceId != null ? String(deviceId).trim() : '';
   const emailRaw = assigneeEmail != null ? String(assigneeEmail).trim().toLowerCase() : '';
   if (!did || !emailRaw) return res.status(400).json({ error: 'deviceId y assigneeEmail requeridos' });
+  if (isEphemeralLorawanPseudoDeviceId(did)) {
+    return res.status(400).json({
+      error:
+        'No se pueden asignar pseudo-dispositivos (devaddr-* / gateway-*). Registre el equipo por DevEUI y etiqueta de producto.',
+    });
+  }
 
   const assignee = store.getUserByEmail(emailRaw);
   if (!assignee) return res.status(404).json({ error: 'No existe un usuario con ese correo' });
@@ -1766,7 +1958,11 @@ app.delete('/api/devices/:deviceId/permanent', authMiddleware, superAdminOnlyMid
 });
 
 app.get('/api/user-devices', authMiddleware, (req, res) => {
-  const list = store.listUserDevices(req.user.id);
+  const list = store.listUserDevices(req.user.id).filter((ud) => {
+    if (isGatewayPseudoDeviceId(ud.deviceId)) return false;
+    if (isEphemeralLorawanPseudoDeviceId(ud.deviceId)) return false;
+    return userDevicePassesProductTagFilter(ud);
+  });
   if (req.user.role === 'superadmin') {
     res.json(list);
     return;
@@ -1781,6 +1977,13 @@ app.post('/api/user-devices', authMiddleware, superAdminOnlyMiddleware, (req, re
   const id = idRaw || eui;
   if (!id) {
     return res.status(400).json({ error: 'DevEUI o deviceId requerido', code: 'DEVICE_VALIDATION' });
+  }
+  if (isEphemeralLorawanPseudoDeviceId(id)) {
+    return res.status(400).json({
+      error:
+        'deviceId no válido: use el DevEUI del nodo (16 hex). No se admiten identificadores automáticos tipo devaddr-*.',
+      code: 'DEVICE_EPHEMERAL_ID',
+    });
   }
   const name = (displayName != null ? String(displayName).trim() : '') || id;
   const appEuiNorm = appEUI != null ? String(appEUI).replace(/[^0-9a-fA-F]/gi, '').toLowerCase() : '';
@@ -1812,6 +2015,17 @@ app.post('/api/user-devices', authMiddleware, superAdminOnlyMiddleware, (req, re
       error: 'Indique un nombre de dispositivo.',
       code: 'DEVICE_VALIDATION',
     });
+  }
+
+  const allowTags = getDeviceTagAllowlistSet();
+  if (allowTags) {
+    const tagNorm = tagStr.trim().toLowerCase();
+    if (!tagNorm || !allowTags.has(tagNorm)) {
+      return res.status(400).json({
+        error: `La etiqueta (tag) del producto es obligatoria y debe ser una de: ${[...allowTags].join(', ')}.`,
+        code: 'DEVICE_TAG',
+      });
+    }
   }
 
   const prev = store.getUserDevice(req.user.id, id);
@@ -1867,22 +2081,89 @@ app.post(
   }
 );
 
-app.get('/api/devices/:deviceId/decode-config', authMiddleware, superAdminOnlyMiddleware, (req, res) => {
-  res.json(store.getDeviceDecodeConfig(req.params.deviceId));
-});
-
-app.put('/api/devices/:deviceId/decode-config', authMiddleware, superAdminOnlyMiddleware, (req, res) => {
-  const { decoderScript, channel } = req.body || {};
-  const did = decodeURIComponent(req.params.deviceId || '').trim();
-  if (!did) return res.status(400).json({ error: 'deviceId requerido' });
-  const script = decoderScript != null ? String(decoderScript) : '';
-  if (script.length > 512 * 1024) {
-    return res.status(400).json({ error: 'Decoder demasiado largo (máx. 512 KB)' });
+app.get(
+  '/api/devices/:deviceId/decode-config',
+  authMiddleware,
+  staffOnlyMiddleware,
+  deviceAssignmentMiddleware,
+  (req, res) => {
+    const did = decodeURIComponent(req.params.deviceId || '').trim();
+    const cfg = store.getDeviceDecodeConfig(did);
+    const ud = store.getUserDevice(req.user.id, did);
+    let lorawanClass = '';
+    if (cfg.lorawanClass) {
+      lorawanClass = cfg.lorawanClass;
+    } else if (ud && ud.lorawanClass != null && String(ud.lorawanClass).trim() !== '') {
+      const u = String(ud.lorawanClass).trim().toUpperCase();
+      lorawanClass = u === 'B' || u === 'C' ? u : 'A';
+    }
+    if (!lorawanClass) lorawanClass = 'A';
+    res.json({ ...cfg, lorawanClass });
   }
-  const ch = channel != null ? String(channel).trim().slice(0, 64) : '';
-  store.setDeviceDecodeConfig(did, script, ch);
-  res.json(store.getDeviceDecodeConfig(did));
-});
+);
+
+app.put(
+  '/api/devices/:deviceId/decode-config',
+  authMiddleware,
+  staffOnlyMiddleware,
+  deviceAssignmentMiddleware,
+  (req, res) => {
+    const body = req.body || {};
+    const did = decodeURIComponent(req.params.deviceId || '').trim();
+    if (!did) return res.status(400).json({ error: 'deviceId requerido' });
+    const prev = store.getDeviceDecodeConfig(did);
+    const script =
+      body.decoderScript !== undefined ? String(body.decoderScript) : prev.decoderScript;
+    if (script.length > 512 * 1024) {
+      return res.status(400).json({ error: 'Decoder demasiado largo (máx. 512 KB)' });
+    }
+    const next = {
+      decoderScript: script,
+      channel: body.channel !== undefined ? String(body.channel).trim().slice(0, 64) : prev.channel,
+      downlinks: body.downlinks !== undefined ? body.downlinks : prev.downlinks,
+    };
+    const lcRaw = body.lorawanClass ?? body.lorawan_class;
+    if (lcRaw !== undefined) {
+      if (lcRaw === null || String(lcRaw).trim() === '') next.lorawanClass = null;
+      else {
+        const u = String(lcRaw).trim().toUpperCase();
+        next.lorawanClass = u === 'B' || u === 'C' ? u : 'A';
+      }
+    }
+    store.setDeviceDecodeConfig(did, next);
+
+    if (lcRaw !== undefined && lcRaw !== null && String(lcRaw).trim() !== '') {
+      const u = String(lcRaw).trim().toUpperCase();
+      const lorawanClass = u === 'B' || u === 'C' ? u : 'A';
+      const ud = store.getUserDevice(req.user.id, did);
+      if (ud) {
+        const nowIso = new Date().toISOString();
+        store.upsertUserDevice({
+          ...ud,
+          lorawanClass,
+          updatedAt: nowIso,
+        });
+        const deui = String(ud.devEUI || '')
+          .replace(/[^0-9a-fA-F]/g, '')
+          .toLowerCase();
+        if (deui.length === 16) {
+          store.lnsSyncSessionDeviceClass(req.user.id, deui, lorawanClass);
+        }
+      }
+    }
+
+    const cfgAfter = store.getDeviceDecodeConfig(did);
+    const udAfter = store.getUserDevice(req.user.id, did);
+    let lorawanClassOut = '';
+    if (cfgAfter.lorawanClass) lorawanClassOut = cfgAfter.lorawanClass;
+    else if (udAfter && udAfter.lorawanClass != null && String(udAfter.lorawanClass).trim() !== '') {
+      const u = String(udAfter.lorawanClass).trim().toUpperCase();
+      lorawanClassOut = u === 'B' || u === 'C' ? u : 'A';
+    }
+    if (!lorawanClassOut) lorawanClassOut = 'A';
+    res.json({ ...cfgAfter, lorawanClass: lorawanClassOut });
+  }
+);
 
 app.delete('/api/user-devices/:deviceId', authMiddleware, staffOnlyMiddleware, (req, res) => {
   const id = decodeURIComponent(req.params.deviceId);
@@ -1963,7 +2244,11 @@ app.get('/api/devices/:deviceId/properties/history', authMiddleware, deviceAssig
     endTime,
     pageSize
   );
-  const list = entries.map((t) => ({ ts: t.timestamp, properties: t.properties }));
+  const list = entries.map((t) => ({
+    ts: t.timestamp,
+    timestamp: t.timestamp,
+    properties: t.properties,
+  }));
   res.json({ status: 'Success', list });
 });
 
@@ -1984,6 +2269,29 @@ app.put('/api/devices', authMiddleware, staffOnlyMiddleware, (req, res) => {
   res.json({ status: 'Success' });
 });
 
+/**
+ * Borra la sesión LNS del dispositivo (OTAA). Útil si `rx_delay_sec` o claves quedaron incoherentes:
+ * luego reinicie el nodo para volver a unirse.
+ */
+app.delete('/api/devices/:deviceId/lns/session', authMiddleware, staffOnlyMiddleware, deviceAssignmentMiddleware, (req, res) => {
+  if (!getLnsEngine() || process.env.SYSCOM_LNS_MAC === '0') {
+    return res.status(501).json({
+      status: 'Error',
+      errMsg: 'LNS MAC desactivado o motor no cargado.',
+      code: 'LNS_DISABLED',
+    });
+  }
+  const idStr = req.params.deviceId.toString();
+  const ud = store.getUserDevice(req.user.id, idStr);
+  if (!ud) return res.status(404).json({ error: 'Dispositivo no encontrado' });
+  const deui = String(ud.devEUI || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+  if (deui.length !== 16) {
+    return res.status(400).json({ error: 'El dispositivo debe tener DevEUI (16 hex) para sesión LNS' });
+  }
+  const deleted = store.lnsDeleteSessionByDevEui(req.user.id, deui);
+  res.json({ status: 'Success', deleted: deleted > 0, devEui: deui });
+});
+
 app.post('/api/devices/:deviceId/downlink', authMiddleware, staffOnlyMiddleware, deviceAssignmentMiddleware, (req, res) => {
   const eng = getLnsEngine();
   if (!eng || process.env.SYSCOM_LNS_MAC === '0') {
@@ -2001,10 +2309,15 @@ app.post('/api/devices/:deviceId/downlink', authMiddleware, staffOnlyMiddleware,
   if (deui.length !== 16) {
     return res.status(400).json({ error: 'El dispositivo debe tener DevEUI (16 hex) para downlink LoRaWAN' });
   }
-  const fPort = Number(req.body?.fPort ?? req.body?.fport ?? 1);
-  if (!Number.isInteger(fPort) || fPort < 1 || fPort > 223) {
-    return res.status(400).json({ error: 'fPort inválido (1–223)' });
+  const fpRes = resolveAppFPortForDownlink(store, idStr, req.body || {});
+  if (!fpRes.ok) {
+    return res.status(400).json({
+      status: 'Error',
+      errMsg: fpRes.error,
+      code: fpRes.code || 'FPORT_REQUIRED',
+    });
   }
+  const fPort = fpRes.fPort;
   const rawPayload =
     req.body?.payloadHex ??
     req.body?.payload_hex ??
@@ -2031,6 +2344,9 @@ app.post('/api/devices/:deviceId/downlink', authMiddleware, staffOnlyMiddleware,
       lns: true,
       ...out,
     });
+    console.log(
+      `[LNS] App downlink encolado devEUI=${deui} fPort=${fPort} fCnt=${out.fCnt} class=${out.deviceClass} imme=${out.imme} txAckPending=${out.txAckPending} notBeforeMs=${out.notBeforeMs ?? 0}`
+    );
     insertUiEventWithStream(
       req.user.id,
       deui,
@@ -2041,6 +2357,11 @@ app.post('/api/devices/:deviceId/downlink', authMiddleware, staffOnlyMiddleware,
         fCnt: out.fCnt,
         confirmed: confirmedDl,
         deviceClass: out.deviceClass,
+        imme: out.imme,
+        classARxWindow: out.classARxWindow,
+        rxDelaySec: out.rxDelaySec,
+        txpkTmst: out.txpkTmst,
+        rx1DelayUs: out.rx1DelayUs,
       })
     );
     res.json({ status: 'Success', ...out });
@@ -2048,6 +2369,7 @@ app.post('/api/devices/:deviceId/downlink', authMiddleware, staffOnlyMiddleware,
     const code = e.code || 'LNS_DOWNLINK';
     const status =
       code === 'NO_SESSION' ? 400 : code === 'DOWNLINK_IN_FLIGHT' ? 429 : 503;
+    console.warn(`[LNS] App downlink rechazado devEUI=${deui} fPort=${fPort}:`, e.message, code);
     res.status(status).json({ status: 'Error', errMsg: e.message, code });
   }
 });
@@ -2117,8 +2439,9 @@ app.post('/api/lns/sim/seed-session', authMiddleware, staffOnlyMiddleware, (req,
     nwkSKeyHex: appKeyHex,
     appSKeyHex: appKeyHex,
     lastGatewayEui: gatewayEui,
-    lastRxTmst: 0,
-    lastRxFreq: 868.5,
+    /** tmst > 0 para que downlinks clase A usen ventana RX programada (no `imme`) en simulación. */
+    lastRxTmst: 10_000_000,
+    lastRxFreq: 904.1,
     lastRxDatr: 'SF12BW125',
     lastRxCodr: '4/5',
     lastRxRfch: 0,
@@ -2194,7 +2517,12 @@ app.post('/api/telemetry', authMiddleware, staffOnlyMiddleware, (req, res) => {
   const ts = Date.now();
   const tUserIds = store.appendTelemetry(req.user.id, did, deviceName, properties, ts);
   metrics.inc('telemetry_saved');
-  const ev = { deviceId: did, deviceName: deviceName || did, timestamp: ts };
+  const ev = {
+    deviceId: did,
+    deviceName: deviceName || did,
+    timestamp: ts,
+    properties: sanitizeTelemetryForSse(properties),
+  };
   for (const uid of tUserIds) realtimeHub.broadcast(String(uid), 'telemetry', ev);
   res.status(201).json({ ok: true, saved: true });
 });
@@ -2330,7 +2658,23 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   }, 60 * 60 * 1000);
   const { startMqttIngest } = require('./integrations/mqtt/mqtt-ingest');
   startMqttIngest();
+
+  const { getLorawanRegionalPlan, rx2DefaultsFromEnvAndPlan } = require('./lns/lorawan-regional-plan');
+  const planInfo = getLorawanRegionalPlan();
+  const rx2Ref = rx2DefaultsFromEnvAndPlan();
+  if (process.env.SYSCOM_LNS_MAC === '0') {
+    console.warn('[LNS] Motor MAC / OTAA / downlink integrado: DESACTIVADO (SYSCOM_LNS_MAC=0).');
+  } else {
+    getLnsEngine();
+    console.log(
+      `[LNS] Motor MAC / join / downlink: ACTIVO — plan regional ${planInfo.id} (RX2 ref ${rx2Ref.freq} MHz, ${rx2Ref.datr})`
+    );
+  }
+
   if (LNS_UDP_PORT) {
+    console.log(
+      `[LNS] Listener UDP Semtech GWMP: 0.0.0.0:${LNS_UDP_PORT} (plan ${planInfo.id}) — si el bind falla, reintentos periódicos (LNS_UDP_BIND_RETRY_MS, def. 30s; el API HTTP no se detiene)`
+    );
     const { startSemtechUdpLns } = require('./lns/semtech-udp-lns');
     startSemtechUdpLns({
       port: LNS_UDP_PORT,
@@ -2341,6 +2685,10 @@ const server = app.listen(PORT, '0.0.0.0', () => {
         else runUplinkPipeline(userId, json);
       },
     });
+  } else {
+    console.warn(
+      '[LNS] Listener UDP Semtech GWMP: DESACTIVADO (LNS_UDP_PORT=0 u off). Sin UDP público no hay packet forwarder GWMP hacia este proceso; use HTTPS ingesta, MQTT o VM/bare metal con reenvío UDP. Ver docs/LNS-SEMTECH-UDP.md'
+    );
   }
 });
 server.on('error', (err) => {

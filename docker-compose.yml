@@ -1,0 +1,28 @@
+# SYSCOM IoT — un solo `docker compose up` con HTTP + LNS Semtech UDP (US915 por defecto).
+#
+# Requisitos: definir JWT_SECRET (p. ej. archivo .env al lado de este compose):
+#   echo JWT_SECRET=$(openssl rand -hex 32) >> .env
+#
+# Tras el arranque, revise los logs: deben aparecer [LNS] Motor MAC… ACTIVO y [LNS] Listener UDP… 1700
+# y [LNS-UDP] Semtech GWMP activo.
+
+services:
+  syscom-iot:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+      - "1700:1700/udp"
+    environment:
+      NODE_ENV: production
+      NODE_OPTIONS: "--experimental-sqlite"
+      PORT: "3001"
+      SYSCOM_LNS_PLAN: US915
+      LNS_UDP_PORT: "1700"
+      SYSCOM_SQLITE_PATH: /data/syscom.db
+      JWT_SECRET: ${JWT_SECRET:?Defina JWT_SECRET en .env o en el entorno del host}
+    volumes:
+      - syscom-sqlite:/data
+
+volumes:
+  syscom-sqlite: {}

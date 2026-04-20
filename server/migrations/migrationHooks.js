@@ -113,9 +113,38 @@ function migration0010SeedBootstrapSuperadmins(db) {
   }
 }
 
+/**
+ * 0014: clase LoRaWAN en `device_decode_config` (fuente alineada con plantilla / decode-config).
+ * No envolver en try/catch global: si falla, no debe marcarse como aplicada en schema_migrations.
+ */
+function migration0014DeviceDecodeLorawanClass(db) {
+  const cols = db.prepare('PRAGMA table_info(device_decode_config)').all();
+  const names = new Set(cols.map((c) => c.name));
+  if (!names.has('lorawan_class')) {
+    try {
+      db.exec('ALTER TABLE device_decode_config ADD COLUMN lorawan_class TEXT');
+    } catch (e) {
+      const msg = String(e && e.message ? e.message : e);
+      if (!msg.includes('duplicate column')) throw e;
+    }
+    console.log('[Syscom] Migración: device_decode_config.lorawan_class');
+  }
+  db.exec(`
+    UPDATE device_decode_config
+    SET lorawan_class = (
+      SELECT ud.lorawan_class FROM user_devices ud
+      WHERE ud.device_id = device_decode_config.device_id
+        AND ud.lorawan_class IS NOT NULL AND length(trim(ud.lorawan_class)) > 0
+      LIMIT 1
+    )
+    WHERE (lorawan_class IS NULL OR length(trim(lorawan_class)) = 0)
+  `);
+}
+
 module.exports = {
   '0002_user_password_nullable': migration0002UserPasswordNullable,
   '0004_device_schema': migration0004DeviceSchema,
   '0009_roles_normalize': migration0009RolesNormalize,
   '0010_seed_bootstrap_superadmins': migration0010SeedBootstrapSuperadmins,
+  '0014_device_decode_lorawan_class': migration0014DeviceDecodeLorawanClass,
 };

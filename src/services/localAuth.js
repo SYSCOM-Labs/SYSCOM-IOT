@@ -11,6 +11,53 @@ const getToken = () => localStorage.getItem('local_token');
 const setToken = (t) => localStorage.setItem('local_token', t);
 const removeToken = () => localStorage.removeItem('local_token');
 
+/** Una sola promesa en vuelo para coalescer refresh concurrentes (401 en cascada, etc.). */
+let refreshSessionPromise = null;
+
+/**
+ * Renueva el JWT vía POST /api/auth/refresh. Actualiza localStorage y dispara `syscom-token-refreshed`.
+ * @returns {Promise<string>} nuevo token
+ */
+export async function refreshSession() {
+  if (refreshSessionPromise) return refreshSessionPromise;
+  const tok = getToken();
+  if (!tok) {
+    return Promise.reject(new Error('No hay token almacenado'));
+  }
+  refreshSessionPromise = (async () => {
+    try {
+      const res = await fetch(`${API}/auth/refresh`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${tok}`, 'Content-Type': 'application/json' },
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const err = new Error(data.error || 'No se pudo renovar la sesión');
+        if (data.code) err.code = data.code;
+        err.status = res.status;
+        throw err;
+      }
+      if (!data.token) {
+        const err = new Error('Respuesta de refresh sin token');
+        err.status = res.status;
+        throw err;
+      }
+      setToken(data.token);
+      try {
+        window.dispatchEvent(
+          new CustomEvent('syscom-token-refreshed', { detail: { token: data.token } })
+        );
+      } catch {
+        /* ignore (SSR) */
+      }
+      return data.token;
+    } finally {
+      refreshSessionPromise = null;
+    }
+  })();
+  return refreshSessionPromise;
+}
+
 const headers = () => ({
   'Content-Type': 'application/json',
   ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {})

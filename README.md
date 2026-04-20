@@ -79,6 +79,8 @@ Variables de entorno clave:
 | Variable | Descripción |
 |----------|-------------|
 | `JWT_SECRET` | **Obligatorio** en producción. Cadena larga y aleatoria (`openssl rand -hex 32`). |
+| `SYSCOM_JWT_EXPIRES` | Vigencia del JWT de sesión del navegador (p. ej. `90d`, `8h`). Por defecto `90d`. |
+| `SYSCOM_JWT_REFRESH_GRACE_MS` | Tras caducar `exp`, ventana (ms) en que `POST /api/auth/refresh` y el stream SSE con `?token=` siguen aceptando el JWT. Por defecto ~30 días. |
 | `GOOGLE_CLIENT_ID` | Client ID de Google OAuth (backend y frontend). |
 | `GOOGLE_CLIENT_SECRET` | Client Secret de Google OAuth (solo backend). |
 | `GOOGLE_REDIRECT_URI` | URI de redirección registrada en Google Cloud Console. |
@@ -86,7 +88,9 @@ Variables de entorno clave:
 | `VITE_GOOGLE_REDIRECT_URI` | URI de redirección en el cliente. |
 | `SYSCOM_CORS_ORIGINS` | Orígenes HTTPS permitidos (coma). Ej: `https://app.com` |
 | `SYSCOM_SQLITE_PATH` | Ruta al archivo SQLite en disco persistente |
-| `LNS_UDP_PORT` | Puerto UDP Semtech GWMP (requiere IP pública / VPS) |
+| `LNS_UDP_PORT` | UDP Semtech GWMP; por defecto **1700**. Use `0` o `off` solo sin UDP entrante (PaaS HTTP). |
+| `SYSCOM_LNS_PLAN` | Solo **US915** (902–928 MHz; RX2 ref. 923.3 / SF12BW500). Otros valores se ignoran. |
+| `SYSCOM_LNS_MAC` | Motor MAC/join; activo salvo `0`. |
 | `MQTT_BROKER_URL` | URL del broker MQTT. Ej: `mqtt://broker:1883` |
 | `VITE_API_BASE` | Solo si frontend y API están en dominios distintos |
 
@@ -133,8 +137,14 @@ syscom-iot/
 └── docs/                       # Guías de despliegue e integración de dispositivos
 ```
 
+## LoRaWAN: qué significa «canal»
+
+En la app hay tres ideas distintas: **banda/plan del gateway** (US915 **FSB2**: 125 kHz canales 8–15 y 500 kHz 65–70), **canal plantilla** en decoder (`device_decode_config.channel` ≈ FPort de aplicación) y **puerto UDP** del LNS (GWMP). Resumen en [docs/LORAWAN-CHANNELS-VS-APP.md](./docs/LORAWAN-CHANNELS-VS-APP.md).
+
 ## Autenticación y roles
 
+- La SPA renueva el JWT (`POST /api/auth/refresh`) ante `401`, al arrancar con token caducado (dentro de la gracia) y cada 6 h con sesión activa. Un JWT largo + gracia amplía el impacto si el token se roba: use **HTTPS**, `JWT_SECRET` fuerte y, si hace falta, `SYSCOM_JWT_EXPIRES` corto manteniendo el refresh automático.
+- La **ingesta HTTP/LoRaWAN** (`/api/ingest/…`, `/api/lorawan/uplink/…`), **webhooks** y el **UDP del gateway** no usan el JWT del navegador; solo la UI y las rutas REST con `Authorization: Bearer`.
 - Login exclusivamente mediante **Google OAuth** (flujo de redirección, sin popups).
 - Superadministradores de organización: se definen en [`server/migrations/bootstrap-admins.js`](./server/migrations/bootstrap-admins.js); al primer arranque se crean en la base si no existen. El endpoint de setup (`/api/setup`) solo aplica si aún no hay ningún admin/superadmin “raíz”.
 - Roles: `superadmin` › `admin` › `user`.
@@ -148,7 +158,7 @@ Por defecto se sirve `public/logo-syscom.svg`. Desde **Ajustes → Logotipo de l
 
 - **LoRaWAN** — OTAA, Class A, RX1/RX2, downlinks confirmados/no confirmados
 - **Milesight UG65 / UG67 / UG63** — HTTP REST + MQTT
-- **Semtech Packet Forwarder** — UDP GWMP (requiere VPS con IP pública)
+- **Semtech Packet Forwarder** — UDP GWMP (**1700** por defecto; requiere host con UDP público — ver [`docs/LNS-SEMTECH-UDP.md`](./docs/LNS-SEMTECH-UDP.md) y [`docker-compose.yml`](./docker-compose.yml))
 - **MQTT genérico** — ChirpStack, TTN, cualquier broker configurable
 - **Decodificadores built-in** — Timewave (agua), Eastron SDM230 (energía / Modbus RTU)
 
@@ -157,6 +167,16 @@ Por defecto se sirve `public/logo-syscom.svg`. Desde **Ajustes → Logotipo de l
 Las migraciones son archivos SQL numerados (`server/migrations/sql/0001_….sql`) y se aplican **en orden** al arrancar el servidor (pendientes solamente). Detalle e historial en [`server/migrations/README.md`](./server/migrations/README.md).
 
 La lista de **correos y nombres de superadministradores** que se insertan al aplicar la migración `0010` está en código en [`server/migrations/bootstrap-admins.js`](./server/migrations/bootstrap-admins.js) (también usada para no degradar su rol desde la API).
+
+## Docker (US915 + LNS UDP en un solo arranque)
+
+En la raíz del repo, con `JWT_SECRET` definido (p. ej. en un archivo `.env` junto al compose):
+
+```bash
+docker compose up --build -d
+```
+
+Expone **3001/tcp** (API + `dist/`) y **1700/udp** (Semtech GWMP). Verifique en logs las líneas `[LNS] Motor MAC…` y `[LNS-UDP] Semtech GWMP activo`. Detalle: [`docs/LNS-SEMTECH-UDP.md`](./docs/LNS-SEMTECH-UDP.md).
 
 ## Antes de desplegar
 

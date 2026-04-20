@@ -1,20 +1,15 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useRef, useState } from 'react';
 import './Settings.css';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { useTheme } from '../context/ThemeContext';
-import { getMe, getServerOrigin, updateUser } from '../services/localAuth';
-import { Copy, RefreshCw, Upload, Trash2 } from 'lucide-react';
+import { Upload, Trash2 } from 'lucide-react';
 import { DEFAULT_APP_LOGO_URL, LOGO_STORAGE_KEY } from '../constants/appLogo';
 
 const SettingsPage = () => {
-  const { user, refreshInterval, updateRefreshInterval, isAdmin } = useAuth();
+  const { refreshInterval, updateRefreshInterval, isAdmin } = useAuth();
   const { t } = useLanguage();
   const { isDarkMode, toggleTheme } = useTheme();
-
-  const [profile, setProfile] = useState(null);
-  const [copyOk, setCopyOk] = useState(false);
-  const [regenBusy, setRegenBusy] = useState(false);
 
   // Logo management: por defecto `/logo-syscom.svg`; un archivo subido sustituye y se guarda en localStorage.
   const logoInputRef = useRef(null);
@@ -40,62 +35,6 @@ const SettingsPage = () => {
     window.dispatchEvent(new CustomEvent('logo-changed'));
   };
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const p = await getMe();
-        if (!cancelled) setProfile(p);
-      } catch {
-        /* ignore */
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [user?.id]);
-
-  const origin = getServerOrigin();
-  const ingestUrl =
-    profile?.id && profile?.ingestToken
-      ? `${origin}/api/ingest/${profile.id}/${profile.ingestToken}`
-      : '';
-  const ingestUrlDedicated =
-    profile?.id && profile?.ingestToken
-      ? `Ej. con INGEST_PORT: http://<tu-servidor>:<INGEST_PORT>/ingest/${profile.id}/${profile.ingestToken}`
-      : '';
-  const lorawanUplinkUrl =
-    profile?.id && profile?.ingestToken
-      ? `${origin}/api/lorawan/uplink/${profile.id}/${profile.ingestToken}`
-      : '';
-  const milesightUplinkUrl =
-    profile?.id && profile?.ingestToken
-      ? `${origin}/api/milesight/uplink/${profile.id}/${profile.ingestToken}`
-      : '';
-
-  const regenerateToken = async () => {
-    if (!profile?.id) return;
-    if (!window.confirm('¿Regenerar token? Deberás actualizar la URL en todos los gateways.')) return;
-    setRegenBusy(true);
-    try {
-      const updated = await updateUser(profile.id, { regenerateIngestToken: true });
-      setProfile(updated);
-    } catch (e) {
-      alert(e.message || 'No se pudo regenerar el token');
-    } finally {
-      setRegenBusy(false);
-    }
-  };
-
-  const copyIngest = async () => {
-    if (!ingestUrl) return;
-    try {
-      await navigator.clipboard.writeText(ingestUrl);
-      setCopyOk(true);
-      setTimeout(() => setCopyOk(false), 2000);
-    } catch {
-      alert(ingestUrl);
-    }
-  };
-
   const [emailConfig, setEmailConfig] = useState(() => {
     const saved = localStorage.getItem('iot_email_config');
     return saved ? JSON.parse(saved) : { serviceId: '', templateId: '', publicKey: '' };
@@ -113,113 +52,6 @@ const SettingsPage = () => {
       </div>
 
       <div className="settings-grid">
-        <section className="settings-section card glass">
-          <h3>Ingesta HTTP (estilo Datacake)</h3>
-          <p className="description">
-            Configura tu gateway o script para enviar telemetría con <code>POST</code> y cuerpo JSON. La URL incluye tu
-            identificador de usuario y un token secreto; no la compartas públicamente. Referencia conceptual:{' '}
-            <a href="https://docs.datacake.de/" target="_blank" rel="noreferrer">
-              documentación Datacake
-            </a>
-            .
-          </p>
-          <p className="description" style={{ fontSize: '0.85rem' }}>
-            El JSON puede llevar <code>device_id</code> / <code>deviceId</code> / <code>devEUI</code>, y mediciones en{' '}
-            <code>data</code>, <code>properties</code>, <code>measurements</code> o en la raíz del objeto.
-          </p>
-          {ingestUrl ? (
-            <>
-              <div className="form-group">
-                <label>URL de ingesta (mismo puerto que la API, por defecto 3001)</label>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <input type="text" className="glass" readOnly value={ingestUrl} style={{ flex: 1, minWidth: '200px' }} />
-                  <button type="button" className="btn btn-primary" onClick={copyIngest}>
-                    <Copy size={16} style={{ marginRight: 6 }} />
-                    {copyOk ? 'Copiado' : 'Copiar'}
-                  </button>
-                  <button type="button" className="btn btn-secondary" onClick={regenerateToken} disabled={regenBusy}>
-                    <RefreshCw size={16} style={{ marginRight: 6 }} className={regenBusy ? 'spin' : ''} />
-                    Regenerar token
-                  </button>
-                </div>
-              </div>
-              <p className="description" style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-                Opcional: variable de entorno <code>INGEST_PORT</code> en el servidor abre un segundo puerto solo para{' '}
-                <code>POST /ingest/&lt;userId&gt;/&lt;token&gt;</code> (sin prefijo <code>/api</code>).
-              </p>
-              <p className="description mono" style={{ fontSize: '0.75rem', wordBreak: 'break-all' }}>
-                {ingestUrlDedicated}
-              </p>
-              <div className="form-group" style={{ marginTop: '1rem' }}>
-                <label>Uplink LoRaWAN (ChirpStack, TTS, Milesight NS embebido, …)</label>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <input
-                    type="text"
-                    className="glass"
-                    readOnly
-                    value={lorawanUplinkUrl}
-                    style={{ flex: 1, minWidth: '200px' }}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => lorawanUplinkUrl && navigator.clipboard.writeText(lorawanUplinkUrl)}
-                  >
-                    Copiar
-                  </button>
-                </div>
-              </div>
-              <div className="form-group">
-                <label>Alias Milesight (<code>dataUpURL</code> en el gateway)</label>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                  <input
-                    type="text"
-                    className="glass"
-                    readOnly
-                    value={milesightUplinkUrl}
-                    style={{ flex: 1, minWidth: '200px' }}
-                  />
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={() => milesightUplinkUrl && navigator.clipboard.writeText(milesightUplinkUrl)}
-                  >
-                    Copiar
-                  </button>
-                </div>
-              </div>
-              <div className="form-group" style={{ marginTop: '1.25rem' }}>
-                <label>LNS integrado — Packet Forward Semtech (UDP)</label>
-                <p className="description" style={{ fontSize: '0.85rem' }}>
-                  Si el backend arranca con la variable de entorno <code>LNS_UDP_PORT</code> (p. ej. <code>1700</code>),
-                  actúa como network server para el modo <strong>Semtech</strong> del gateway:{' '}
-                  <strong>Server Address</strong> = IP o nombre DNS <em>público</em> de la máquina donde corre Node
-                  (no uses la URL <code>https://…</code> de Render aquí). <strong>Port Up / Down</strong> = el mismo
-                  valor que <code>LNS_UDP_PORT</code> (típicamente 1700). Antes, registre el gateway en{' '}
-                  <strong>Gateways LoRaWAN</strong> con el mismo EUI que muestra el equipo; la ingesta se asocia al
-                  usuario por ese EUI. En Render u otros PaaS solo HTTP <strong>no</strong> exponen UDP: use una VM,
-                  Docker en su red, o túnel UDP. Pruebas sin alta de gateway:{' '}
-                  <code>SYSCOM_LNS_DEFAULT_USER_ID</code> = su <code>userId</code> (solo desarrollo).
-                </p>
-              </div>
-              {isAdmin && (
-                <div className="form-group" style={{ marginTop: '1rem' }}>
-                  <label>Tiempo casi real y métricas (autohospedado)</label>
-                  <p className="description" style={{ fontSize: '0.85rem' }}>
-                    El cliente mantiene <strong>SSE</strong> en <code>/api/events/stream</code> para actualizar listados y
-                    panel al guardarse telemetría o eventos LNS. Métricas en memoria del proceso Node:{' '}
-                    <code>GET /api/admin/syscom-metrics</code> (cabecera <code>Authorization: Bearer …</code>). Límites
-                    por IP: login y POST de ingesta; ajuste opcional con <code>SYSCOM_LOGIN_RATE_MAX</code> y{' '}
-                    <code>SYSCOM_INGEST_RATE_MAX</code>.
-                  </p>
-                </div>
-              )}
-            </>
-          ) : (
-            <p className="description">Inicia sesión de nuevo para cargar el token de ingesta.</p>
-          )}
-        </section>
-
         <section className="settings-section card glass">
           <h3>{t('settings.display_section')}</h3>
           <p className="description" style={{ marginBottom: '0.75rem' }}>

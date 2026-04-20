@@ -23,6 +23,7 @@ const LEGACY_ID_TO_NEW = {
 const IGNORE_DUP_STATEMENTS = new Set([
   '0003_user_legacy_columns',
   '0006_lns_extra_columns',
+  '0012_device_decode_downlinks_repair',
 ]);
 
 function ensureMigrationsTable(db) {

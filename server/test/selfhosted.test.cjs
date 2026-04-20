@@ -2,9 +2,9 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createRateLimiter, defaultKeyFromReq } = require('../rate-limit-memory');
-const { createRealtimeHub } = require('../realtime-hub');
-const metrics = require('../syscom-metrics');
+const { createRateLimiter, defaultKeyFromReq } = require('../middleware/rate-limit-memory');
+const { createRealtimeHub } = require('../realtime/realtime-hub');
+const metrics = require('../monitoring/syscom-metrics');
 
 test('rate limit: allows under max', async () => {
   const lim = createRateLimiter({ windowMs: 60000, max: 5 });

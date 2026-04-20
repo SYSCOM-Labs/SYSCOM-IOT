@@ -80,6 +80,17 @@ const DeviceDashboardModal = ({ device: initialDevice, onClose }) => {
     };
   }, [mergeDeviceData]);
 
+  /** Sincronizar con la fila del listado cuando el padre refresca telemetría (poll / SSE). */
+  useEffect(() => {
+    if (!initialDevice) return;
+    setLocalDevice((prev) => {
+      if (!prev || String(prev.deviceId) !== String(initialDevice.deviceId)) {
+        return applyStaleOfflineConnectStatus({ ...initialDevice });
+      }
+      return applyStaleOfflineConnectStatus({ ...prev, ...initialDevice });
+    });
+  }, [initialDevice]);
+
   const handleRefresh = async () => {
     setRefreshing(true);
     try {

@@ -247,36 +247,6 @@ body.theme-dark .user-popover {
   text-overflow: ellipsis;
 }
 
-.info-item.highlight {
-  background: var(--bg-hover);
-  padding: 10px;
-  border-radius: var(--card-radius);
-  border: 1px dashed var(--border-color);
-}
-
-.id-container {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.id-container label {
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  opacity: 0.6;
-}
-
-.user-id-code {
-  font-family: ui-monospace, 'Cascadia Code', monospace;
-  color: var(--accent-cyan);
-  background: var(--primary-light);
-  padding: 2px 6px;
-  border-radius: 6px;
-  font-size: 0.85rem;
-  word-break: break-all;
-}
-
 .logout-btn {
   width: 100%;
   display: flex;
@@ -405,6 +375,7 @@ body.theme-dark .debug-mode-toggle {
   max-width: 100%;
   min-width: 0;
   padding: var(--spacing-xl);
+  padding-bottom: calc(var(--spacing-xl) + var(--app-bottom-log-reserve, 0px));
   flex: 1;
 }
 
@@ -450,6 +421,7 @@ body.theme-dark .debug-mode-toggle {
 
   .page-content {
     padding: var(--spacing-md);
+    padding-bottom: calc(var(--spacing-md) + var(--app-bottom-log-reserve, 0px));
   }
 
   .license-expiry-banner {

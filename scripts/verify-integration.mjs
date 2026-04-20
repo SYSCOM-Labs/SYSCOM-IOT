@@ -53,6 +53,8 @@ async function main() {
       ...process.env,
       PORT: String(port),
       SYSCOM_SQLITE_PATH: dbPath,
+      /** Evita bindear UDP 1700 en la máquina de CI (por defecto el servidor sí usa 1700). */
+      LNS_UDP_PORT: '0',
       /** Sin LNS MAC: downlink HTTP devuelve 501 (prueba “solo ingesta”). */
       SYSCOM_LNS_MAC: '0',
     },
@@ -107,6 +109,9 @@ async function main() {
     const superUser = login.data.user;
     assert(superUser.role === 'superadmin', 'rol superadmin');
 
+    const refr = await req('POST', `${base}/api/auth/refresh`, { token: superToken });
+    assert(refr.status === 200 && refr.data.token, `POST auth/refresh ${refr.status} ${JSON.stringify(refr.data)}`);
+
     // ── Alta dispositivo (solo super) + telemetría vía ingesta ─────────
     const ud = await req('POST', `${base}/api/user-devices`, {
       token: superToken,
@@ -116,6 +121,7 @@ async function main() {
         devEUI: 'aabbccddeeff0011',
         appEUI: '1122334455667788',
         appKey: '0123456789abcdef0123456789abcdef',
+        tag: 'ws101',
       },
     });
     assert(ud.status === 201 || ud.status === 200, `user-devices ${ud.status} ${JSON.stringify(ud.data)}`);
@@ -216,7 +222,7 @@ async function main() {
       body: {
         name: 'GW test',
         gatewayEui: '1122334455667788',
-        frequencyBand: 'EU868-RX2-SF9',
+        frequencyBand: 'US902-928-FSB2',
       },
     });
     assert(postG.status === 201, `lorawan-gateways POST ${JSON.stringify(postG.data)}`);

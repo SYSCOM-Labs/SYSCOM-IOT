@@ -20,6 +20,8 @@ services:
         value: "--experimental-sqlite"
       - key: NODE_ENV
         value: production
-      # LNS Semtech UDP (LNS_UDP_PORT) no aplica en Render Web Service (solo HTTP). Ver docs/LNS-SEMTECH-UDP.md
+      # Render Web Service no expone UDP entrante; sin GWMP. Ver docs/LNS-SEMTECH-UDP.md / docker-compose.
+      - key: LNS_UDP_PORT
+        value: "0"
       # Obligatorio: en Render → servicio syscom-iot → Environment → añade JWT_SECRET (cadena larga aleatoria).
       # Si falta, el login puede fallar o ser inseguro.

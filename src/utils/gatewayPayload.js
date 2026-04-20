@@ -79,7 +79,14 @@ const GATEWAY_DECODER_METADATA = [
   'double_click_enable',
 ];
 
-export const PROPERTY_INFER_IGNORE_KEYS = [...DEVICE_REGISTRY_IGNORE, ...GATEWAY_DECODER_METADATA];
+/** Claves de sesión / cifrado LoRaWAN — no inferir como "valor" de proceso. */
+const LORAWAN_CRYPTO_IGNORE = ['nwkSKey', 'appSKey', 'appsKey', 'nwk_s_key', 'app_s_key', 'apps_key'];
+
+export const PROPERTY_INFER_IGNORE_KEYS = [
+  ...DEVICE_REGISTRY_IGNORE,
+  ...GATEWAY_DECODER_METADATA,
+  ...LORAWAN_CRYPTO_IGNORE,
+];
 
 export const PROPERTY_INFER_IGNORE_SET = new Set(PROPERTY_INFER_IGNORE_KEYS);
 

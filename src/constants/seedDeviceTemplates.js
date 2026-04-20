@@ -1,3 +1,6 @@
+import { WS558_DECODER_SCRIPT } from './ws558DecoderScript';
+import { UC300_DECODER_SCRIPT } from './uc300DecoderScript';
+
 /**
  * Plantillas predefinidas (Milesight / familia habitual).
  * Los HEX se guardan sin espacios y en minúsculas (formato que usa la app al enviar downlinks).
@@ -14,6 +17,15 @@ function decodeUplink(input) {
 const EASTRON_DECODER_SCRIPT = `
 function decodeUplink(input) {
   var r = Eastron.decodeActiveUpload(input.bytes);
+  if (!r || typeof r !== 'object') return { data: {} };
+  return { data: r };
+}
+`.trim();
+
+/** TLV Milesight WS101 (referencia SensorDecoders ws101-decoder.js); FPort típico 85 en \`channel\`. */
+const WS101_DECODER_SCRIPT = `
+function decodeUplink(input) {
+  var r = MilesightWs101.decode(input.bytes);
   if (!r || typeof r !== 'object') return { data: {} };
   return { data: r };
 }
@@ -69,8 +81,8 @@ export const SEED_DEVICE_TEMPLATES = [
   {
     modelo: 'WS101',
     marca: 'Milesight',
-    channel: '1',
-    decoderScript: '',
+    channel: '85',
+    decoderScript: WS101_DECODER_SCRIPT,
     downlinks: [
       { name: 'Intervalo de reporte (20 min)', hex: 'ff03b004' },
       { name: 'Intervalo de reporte (5 min)', hex: 'ff032c01' },
@@ -87,8 +99,8 @@ export const SEED_DEVICE_TEMPLATES = [
   {
     modelo: 'UC300',
     marca: 'Milesight',
-    channel: '1',
-    decoderScript: '',
+    channel: '85',
+    decoderScript: UC300_DECODER_SCRIPT,
     downlinks: [
       { name: 'DO 1 - Activar', hex: '070101ff' },
       { name: 'DO 1 - Desactivar', hex: '070100ff' },
@@ -100,8 +112,8 @@ export const SEED_DEVICE_TEMPLATES = [
   {
     modelo: 'WS558',
     marca: 'Milesight',
-    channel: '1',
-    decoderScript: '',
+    channel: '85',
+    decoderScript: WS558_DECODER_SCRIPT,
     downlinks: [
       { name: 'Abrir L1 (encender)', hex: '080101' },
       { name: 'Cerrar L1 (apagar)', hex: '080100' },
@@ -124,7 +136,7 @@ export const SEED_DEVICE_TEMPLATES = [
   {
     modelo: 'WS523',
     marca: 'Milesight',
-    channel: '1',
+    channel: '85',
     decoderScript: '',
     downlinks: [
       { name: 'Abrir socket (encender)', hex: '080100ff' },
@@ -152,7 +164,7 @@ export const SEED_DEVICE_TEMPLATES = [
   {
     modelo: 'WS501',
     marca: 'Milesight',
-    channel: '1',
+    channel: '85',
     decoderScript: '',
     downlinks: [
       { name: 'Apagar L1', hex: '0810ff' },
@@ -179,7 +191,7 @@ export const SEED_DEVICE_TEMPLATES = [
   {
     modelo: 'UC512',
     marca: 'Milesight',
-    channel: '1',
+    channel: '85',
     decoderScript: '',
     downlinks: [
       { name: 'Reiniciar dispositivo', hex: 'ff10ff' },

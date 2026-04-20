@@ -3,6 +3,8 @@
 const crypto = require('crypto');
 const lora_packet = require('lora-packet');
 const { deriveSessionKeys10x, parseKeyHex32 } = require('./lorawan-lns-crypto');
+const { rx2DefaultsFromEnvAndPlan, warnUplinkFreqMismatchedPlan } = require('./lorawan-regional-plan');
+const { buildUs915Fsb2JoinCFList } = require('./us915-fsb2-join-cflist');
 
 function envInt(name, def) {
   const v = parseInt(process.env[name], 10);
@@ -14,17 +16,17 @@ function envFloat(name, def) {
   return Number.isFinite(v) ? v : def;
 }
 
-function rx1DelayUs() {
-  return envInt('SYSCOM_LNS_RX1_DELAY_US', 1000000);
-}
-
-/** Retardo RX1 en µs: override por env o RxDelay de sesión (seg) alineado al Join-Accept. */
+/**
+ * Retardo RX1 en µs respecto al `tmst` del último uplink.
+ * - Si `SYSCOM_LNS_RX1_DELAY_US` está definida (p. ej. `5000000`), **anula** el cálculo por RxDelay de sesión.
+ * - Si no, usa **rx_delay_sec de sesión** (1–15 s, típico **5** en US915 tras Join-Accept) × 1e6 µs.
+ */
 function classARx1DelayUs(rxDelaySec) {
   if (process.env.SYSCOM_LNS_RX1_DELAY_US != null && String(process.env.SYSCOM_LNS_RX1_DELAY_US).trim() !== '') {
-    return envInt('SYSCOM_LNS_RX1_DELAY_US', 1000000);
+    return envInt('SYSCOM_LNS_RX1_DELAY_US', 5_000_000);
   }
-  const s = rxDelaySec != null ? Math.max(1, Math.min(15, Number(rxDelaySec))) : 1;
-  return s * 1000000;
+  const s = rxDelaySec != null ? Math.max(1, Math.min(15, Number(rxDelaySec))) : 5;
+  return s * 1_000_000;
 }
 
 function classARxWindowMode() {
@@ -35,17 +37,39 @@ function classARxWindowMode() {
   return 'RX1';
 }
 
-/** Si es false, el FCnt down se confirma al encolar (comportamiento anterior). Si es true, solo tras GW_TX_ACK. */
+/**
+ * @param {string} name
+ * @param {boolean | null} whenUnset null = variable no definida
+ */
+function parseOptionalEnvBool(name, whenUnset) {
+  const raw = process.env[name];
+  if (raw == null || String(raw).trim() === '') return whenUnset;
+  const s = String(raw).trim().toLowerCase();
+  if (s === '0' || s === 'false' || s === 'no' || s === 'off') return false;
+  if (s === '1' || s === 'true' || s === 'yes' || s === 'on') return true;
+  return whenUnset;
+}
+
+/**
+ * Downlinks de aplicación: si es false, FCnt al encolar; si true, solo tras GW_TX_ACK.
+ * Por defecto false (p. ej. Milesight UG65 sin `txpk_ack` fiable por UDP).
+ * Precedencia: `SYSCOM_LNS_APP_DOWNLINK_TX_ACK` → `SYSCOM_LNS_TX_ACK_ENABLED` → `SYSCOM_LNS_TX_ACK` (legado).
+ */
+function appDownlinkTxAckTrackingEnabled() {
+  const app = parseOptionalEnvBool('SYSCOM_LNS_APP_DOWNLINK_TX_ACK', null);
+  if (app !== null) return app;
+  const gen = parseOptionalEnvBool('SYSCOM_LNS_TX_ACK_ENABLED', null);
+  if (gen !== null) return gen;
+  return parseOptionalEnvBool('SYSCOM_LNS_TX_ACK', false);
+}
+
+/** @deprecated Use appDownlinkTxAckTrackingEnabled; alias para el mismo criterio. */
 function txAckTrackingEnabled() {
-  return String(process.env.SYSCOM_LNS_TX_ACK || '1').trim() !== '0';
+  return appDownlinkTxAckTrackingEnabled();
 }
 
 function txPower() {
   return envInt('SYSCOM_LNS_TX_POWER', 14);
-}
-
-function classARx1WindowMs() {
-  return envInt('SYSCOM_LNS_CLASS_A_RX1_WINDOW_MS', 35000);
 }
 
 function netIdBuf() {
@@ -55,11 +79,8 @@ function netIdBuf() {
 }
 
 function rx2Defaults() {
-  return {
-    freq: envFloat('SYSCOM_LNS_RX2_FREQ', 869.525),
-    datr: process.env.SYSCOM_LNS_RX2_DATR || 'SF12BW125',
-    codr: process.env.SYSCOM_LNS_RX2_CODR || '4/5',
-  };
+  const o = rx2DefaultsFromEnvAndPlan();
+  return { freq: o.freq, datr: o.datr, codr: o.codr };
 }
 
 function normalizeDeviceClass(v) {
@@ -70,10 +91,52 @@ function normalizeDeviceClass(v) {
 }
 
 /**
+ * Clase efectiva: primero `device_decode_config` (plantilla aplicada), luego `user_devices`, luego sesión LNS.
+ * @param {{ findUserDeviceByDevEuiNorm?: Function, getDeviceDecodeConfig?: Function, lnsSyncSessionDeviceClass?: Function }} store
+ */
+function resolveLnsDeviceClassFromDecodeConfigThenUserDevice(store, userId, devEuiNorm16, session) {
+  if (!session) return 'A';
+  if (
+    typeof store.findUserDeviceByDevEuiNorm !== 'function' ||
+    typeof store.getDeviceDecodeConfig !== 'function'
+  ) {
+    return normalizeDeviceClass(session.deviceClass);
+  }
+  const ud = store.findUserDeviceByDevEuiNorm(userId, devEuiNorm16);
+  const deviceId = ud ? String(ud.deviceId || '').trim() : String(devEuiNorm16 || '').trim();
+  const cfg = deviceId ? store.getDeviceDecodeConfig(deviceId) : { lorawanClass: '' };
+  const decRaw = String(cfg.lorawanClass || '').trim();
+  let profileCls;
+  if (decRaw) {
+    profileCls = normalizeDeviceClass(decRaw);
+  } else {
+    const rawUd = ud && String(ud.lorawanClass || '').trim();
+    if (rawUd) profileCls = normalizeDeviceClass(ud.lorawanClass);
+    else profileCls = normalizeDeviceClass(session.deviceClass);
+  }
+  const sessionCls = normalizeDeviceClass(session.deviceClass);
+  if (profileCls !== sessionCls && typeof store.lnsSyncSessionDeviceClass === 'function') {
+    store.lnsSyncSessionDeviceClass(userId, devEuiNorm16, profileCls);
+  }
+  session.deviceClass = profileCls;
+  return profileCls;
+}
+
+/**
  * @param {Buffer} phy
  * @param {{ tmst?: number, freq?: number, datr?: string, codr?: string, rfch?: number }} rxpk
  * @param {{ imme?: boolean, rxDelaySec?: number, classAWindow?: 'RX1'|'RX2' }} [opts]
  */
+function immeTxRfch(rxpk) {
+  if (
+    process.env.SYSCOM_LNS_TX_RFCH_IMME_US915 != null &&
+    String(process.env.SYSCOM_LNS_TX_RFCH_IMME_US915).trim() !== ''
+  ) {
+    return envInt('SYSCOM_LNS_TX_RFCH_IMME_US915', 0);
+  }
+  return rxpk && rxpk.rfch != null ? Number(rxpk.rfch) : 0;
+}
+
 function buildTxpk(phy, rxpk, opts) {
   const useImme = opts && opts.imme;
   const rxDelaySec =
@@ -82,7 +145,7 @@ function buildTxpk(phy, rxpk, opts) {
   const r2 = rx2Defaults();
   const base = {
     imme: Boolean(useImme),
-    rfch: rxpk && rxpk.rfch != null ? Number(rxpk.rfch) : 0,
+    rfch: useImme ? immeTxRfch(rxpk) : rxpk && rxpk.rfch != null ? Number(rxpk.rfch) : 0,
     powe: txPower(),
     modu: 'LORA',
     ipol: true,
@@ -140,6 +203,34 @@ function buf8ToHex16(buf) {
   return buf.toString('hex').toLowerCase();
 }
 
+/** Plan regional US915; en BD debe ser `US902-928-FSB2` (FSB2: 125 kHz 8–15 + 500 kHz 65–70). */
+function isUs915RegionalBand(frequencyBand) {
+  const s = String(frequencyBand || '')
+    .trim()
+    .toUpperCase();
+  if (!s) return false;
+  if (s.includes('AU915') || s.includes('EU868')) return false;
+  return s.includes('US915') || s.includes('US902');
+}
+
+/**
+ * Métricas de radio Semtech `rxpk` para ingest / telemetría.
+ * @param {{ rssi?: number, lsnr?: number, freq?: number, datr?: string }} rxpk
+ */
+function buildRadioMetaFromRxpk(rxpk) {
+  if (!rxpk || typeof rxpk !== 'object') return {};
+  const meta = {};
+  if (rxpk.rssi != null && Number.isFinite(Number(rxpk.rssi))) meta.rssi = Number(rxpk.rssi);
+  if (rxpk.lsnr != null && Number.isFinite(Number(rxpk.lsnr))) meta.snr = Number(rxpk.lsnr);
+  if (rxpk.freq != null && Number.isFinite(Number(rxpk.freq))) meta.freq = Number(rxpk.freq);
+  const dr = rxpk.datr != null ? String(rxpk.datr).trim() : '';
+  if (dr) {
+    meta.datarate = dr;
+    meta.dr = dr;
+  }
+  return meta;
+}
+
 /**
  * @param {{
  *   store: object,
@@ -150,12 +241,15 @@ function buf8ToHex16(buf) {
  */
 function createLorawanLnsEngine(ctx) {
   const { store, saveIngestEntry, runLegacyUplink } = ctx;
+  /** Fin del slot reservado por downlink clase C (ms epoch), por gateway, para `SYSCOM_LNS_CLASS_C_TX_GAP_MS`. */
+  const lastClassCDlEndByGw = Object.create(null);
   const insertUiEvent =
     typeof ctx.insertUiEvent === 'function'
       ? ctx.insertUiEvent
       : (uid, deui, type, meta) => store.lnsInsertUiEvent(uid, deui, type, meta);
 
   function processJoin(userId, gatewayEuiNorm, p, rxpk) {
+    warnUplinkFreqMismatchedPlan(rxpk);
     const joinEui = buf8ToHex16(p.AppEUI);
     const devEui = buf8ToHex16(p.DevEUI);
     const row = store.lnsFindOtaaDeviceRow(userId, joinEui, devEui);
@@ -180,7 +274,8 @@ function createLorawanLnsEngine(ctx) {
     const nid = netIdBuf();
     const { nwkSKey, appSKey } = deriveSessionKeys10x(appKeyBuf, appNonce, nid, p.DevNonce);
 
-    const secUser = envInt('SYSCOM_LNS_RX_DELAY_SEC', 1);
+    /** Por defecto 5 s (US915 / Join-Accept típico); override con `SYSCOM_LNS_RX_DELAY_SEC`. */
+    const secUser = envInt('SYSCOM_LNS_RX_DELAY_SEC', 5);
     const rxEncoded = secUser <= 0 ? 0 : Math.min(15, secUser);
     const rxDelaySec = rxEncoded === 0 ? 1 : rxEncoded;
 
@@ -192,7 +287,7 @@ function createLorawanLnsEngine(ctx) {
         DevAddr: devAddrBuf,
         DLSettings: 0,
         RxDelay: rxEncoded,
-        CFList: Buffer.alloc(0),
+        CFList: buildUs915Fsb2JoinCFList(),
       },
       null,
       null,
@@ -200,7 +295,12 @@ function createLorawanLnsEngine(ctx) {
     );
     const phy = ja.getPHYPayload();
 
-    const deviceClass = normalizeDeviceClass(row.lorawan_class || row.lorawanClass);
+    const didJoin = String(row.device_id || '').trim();
+    const cfgJoin = didJoin ? store.getDeviceDecodeConfig(didJoin) : { lorawanClass: '' };
+    const decJoin = String(cfgJoin.lorawanClass || '').trim();
+    const deviceClass = decJoin
+      ? normalizeDeviceClass(decJoin)
+      : normalizeDeviceClass(row.lorawan_class || row.lorawanClass);
 
     store.lnsUpsertSessionJoin({
       userId,
@@ -223,8 +323,13 @@ function createLorawanLnsEngine(ctx) {
     });
 
     const pullObj = buildTxpk(phy, rxpk, { imme: false, rxDelaySec });
-    store.lnsEnqueuePullResp(userId, gatewayEuiNorm, pullObj, 0, 255);
 
+    const gwRow = typeof store.lnsGetGatewayByEui === 'function' ? store.lnsGetGatewayByEui(userId, gatewayEuiNorm) : null;
+    const us915JoinDelayMs = gwRow && isUs915RegionalBand(gwRow.frequencyBand) ? 5000 : 0;
+    const joinNotBeforeMs = us915JoinDelayMs > 0 ? Date.now() + us915JoinDelayMs : 0;
+    store.lnsEnqueuePullResp(userId, gatewayEuiNorm, pullObj, joinNotBeforeMs, 255);
+
+    const radioMeta = buildRadioMetaFromRxpk(rxpk);
     saveIngestEntry(userId, {
       deviceId: devEui,
       deviceName: row.display_name || devEui,
@@ -235,16 +340,37 @@ function createLorawanLnsEngine(ctx) {
         devAddr: devAddrBuf.toString('hex').toUpperCase(),
         lorawan_class: deviceClass,
         connectStatus: 'joined',
+        gateway_id: gatewayEuiNorm,
+        frequency_band: gwRow ? gwRow.frequencyBand : undefined,
+        us915_join_delay_ms: us915JoinDelayMs || undefined,
+        ...radioMeta,
       },
     });
-    console.log('[LNS] OTAA Join-Accept encolado →', devEui, devAddrBuf.toString('hex'), 'clase', deviceClass);
+    if (us915JoinDelayMs > 0) {
+      console.log(
+        '[LNS] OTAA Join-Accept encolado (US915: retardo',
+        us915JoinDelayMs,
+        'ms) →',
+        devEui,
+        devAddrBuf.toString('hex')
+      );
+    } else {
+      console.log('[LNS] OTAA Join-Accept encolado →', devEui, devAddrBuf.toString('hex'), 'clase', deviceClass);
+    }
     return true;
   }
 
   function processDataUp(userId, gatewayEuiNorm, p, rxpk) {
+    warnUplinkFreqMismatchedPlan(rxpk);
     const devAddrHex = p.DevAddr.toString('hex').toUpperCase();
     const session = store.lnsGetSessionByDevAddr(userId, devAddrHex);
     if (!session) return false;
+    const devEuiNorm = String(session.devEui || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (devEuiNorm.length === 16) {
+      resolveLnsDeviceClassFromDecodeConfigThenUserDevice(store, userId, devEuiNorm, session);
+    }
     if (!lora_packet.verifyMIC(p, session.nwkSKey, undefined)) {
       console.warn('[LNS] MIC datos inválido DevAddr', devAddrHex);
       return false;
@@ -310,22 +436,29 @@ function createLorawanLnsEngine(ctx) {
 
     store.lnsUpdateSessionAfterUplink(devEui, session);
 
+    const radioMeta = buildRadioMetaFromRxpk(rxpk);
+    /** Solo metadatos seguros (nunca esparcir la sesión LNS: contiene Buffers de claves). */
     const props = {
       devEUI: devEui,
       devAddr: devAddrHex,
       fCnt: fcnt,
+      fcnt_up: fcnt,
       fPort: p.getFPort(),
       payload_hex: plain.toString('hex').toUpperCase(),
       payload_b64: plain.toString('base64'),
       gateway_id: gatewayEuiNorm,
       freq_mhz: rxpk.freq,
-      rssi: rxpk.rssi,
       lora_snr: rxpk.lsnr,
       datr: rxpk.datr,
       connectStatus: 'online',
       lns_decrypted: true,
       lorawan_class: session.deviceClass,
+      rx_delay_sec: session.rxDelaySec,
+      class_b_ping_periodicity: session.classBPingPeriodicity,
+      class_b_data_rate: session.classBDataRate,
+      fcnt_down: session.fcntDown,
       lora_downlink_device_acked: macAckForDownlink && hadAwaitingDlAck ? true : undefined,
+      ...radioMeta,
     };
 
     saveIngestEntry(userId, {
@@ -333,7 +466,6 @@ function createLorawanLnsEngine(ctx) {
       deviceName: displayName,
       devEUI: devEui,
       properties: props,
-      ...props,
     });
     return true;
   }
@@ -409,9 +541,9 @@ function createLorawanLnsEngine(ctx) {
       throw err;
     }
 
-    const cls = normalizeDeviceClass(session.deviceClass);
+    const cls = resolveLnsDeviceClassFromDecodeConfigThenUserDevice(store, userId, devEuiNorm16, session);
     const nextDown = session.fcntDown < 0 ? 0 : (session.fcntDown + 1) % 65536;
-    const useTxAck = txAckTrackingEnabled();
+    const useTxAck = appDownlinkTxAckTrackingEnabled();
     if (useTxAck && store.lnsHasTrackedDownlinkPendingForDev(userId, devEuiNorm16)) {
       const err = new Error(
         'Downlink anterior pendiente de confirmación del gateway; inténtelo de nuevo en unos segundos.'
@@ -450,23 +582,71 @@ function createLorawanLnsEngine(ctx) {
       rfch: session.lastRxRfch != null ? session.lastRxRfch : 0,
     };
 
-    const rxDelaySec = session.rxDelaySec != null ? session.rxDelaySec : 1;
+    const rxDelaySec =
+      session.rxDelaySec != null ? Math.max(1, Math.min(15, Number(session.rxDelaySec))) : 5;
     let useImme = true;
     let notBeforeMs = 0;
     let classAWindow = 'RX1';
 
     if (cls === 'C') {
       useImme = true;
-      notBeforeMs = 0;
-    } else if (cls === 'A') {
-      const wall = session.lastUplinkWallMs;
-      const fresh = wall != null && Date.now() - wall < classARx1WindowMs();
-      if (fresh && session.lastRxTmst != null) {
-        useImme = false;
-        classAWindow = classARxWindowMode();
+      const gap = envInt('SYSCOM_LNS_CLASS_C_TX_GAP_MS', 0);
+      const gw = session.lastGatewayEui;
+      if (gap > 0 && gw) {
+        const prevEnd = lastClassCDlEndByGw[gw] || 0;
+        const start = Math.max(Date.now(), prevEnd);
+        notBeforeMs = start;
+        lastClassCDlEndByGw[gw] = start + gap;
       } else {
-        useImme = true;
+        notBeforeMs = 0;
       }
+    } else if (cls === 'A') {
+      /**
+       * Clase A: nunca `imme: true` para datos de aplicación — el end-device solo escucha en RX1/RX2
+       * tras un uplink; hay que programar `tmst` relativo al último `rxpk.tmst` del gateway.
+       */
+      useImme = false;
+      const lastUplinkWall = session.lastUplinkWallMs;
+      const now = Date.now();
+      const rxD = Math.max(1, Math.min(15, Number(rxDelaySec) || 5));
+      const graceMs =
+        process.env.SYSCOM_LNS_CLASS_A_UPLINK_GRACE_MS != null &&
+        String(process.env.SYSCOM_LNS_CLASS_A_UPLINK_GRACE_MS).trim() !== ''
+          ? envInt('SYSCOM_LNS_CLASS_A_UPLINK_GRACE_MS', 2000)
+          : 2000;
+      const maxAgeMs = rxD * 1000 + graceMs;
+      if (session.lastRxTmst == null || Number.isNaN(Number(session.lastRxTmst))) {
+        const err = new Error(
+          'Downlink clase A: falta tmst del último uplink en el gateway. Espere un uplink por radio antes de enviar.'
+        );
+        err.code = 'CLASS_A_NO_RXTMST';
+        throw err;
+      }
+      if (Number(session.lastRxTmst) <= 0) {
+        const err = new Error(
+          'Downlink clase A: tmst del último uplink no válido (0). Espere un uplink real por el gateway Semtech.'
+        );
+        err.code = 'CLASS_A_INVALID_RXTMST';
+        throw err;
+      }
+      if (lastUplinkWall == null || Number.isNaN(Number(lastUplinkWall)) || now - lastUplinkWall > maxAgeMs) {
+        const agoSec =
+          lastUplinkWall != null && !Number.isNaN(Number(lastUplinkWall))
+            ? Math.round((now - lastUplinkWall) / 1000)
+            : null;
+        const err = new Error(
+          agoSec == null
+            ? `Downlink clase A: no hay registro de uplink reciente; envíe el comando dentro de los ${Math.round(
+                maxAgeMs / 1000
+              )} s posteriores a un uplink del dispositivo (RX1/RX2).`
+            : `Downlink clase A: el último uplink fue hace ${agoSec} s; el máximo permitido para programar RX es ${Math.round(
+                maxAgeMs / 1000
+              )} s (RxDelay ${rxD} s + margen).`
+        );
+        err.code = 'CLASS_A_STALE_UPLINK';
+        throw err;
+      }
+      classAWindow = classARxWindowMode();
       notBeforeMs = 0;
     } else if (cls === 'B') {
       useImme = true;
@@ -483,8 +663,14 @@ function createLorawanLnsEngine(ctx) {
     const pullObj = buildTxpk(phy, rxpkStub, {
       imme: useImme,
       rxDelaySec,
-      classAWindow: cls === 'A' && !useImme ? classAWindow : 'RX1',
+      classAWindow: cls === 'A' ? classAWindow : 'RX1',
     });
+    if (cls === 'A' && pullObj?.txpk && pullObj.txpk.imme === false) {
+      const rx1Us = classARx1DelayUs(rxDelaySec);
+      console.log(
+        `[LNS] Downlink clase A: tmst=${pullObj.txpk.tmst}, imme=false, rxDelaySec=${rxDelaySec}, window=${classAWindow}, rx1DelayUs=${classAWindow === 'RX1' ? rx1Us : 'RX2-offset'}`
+      );
+    }
     const dlPriority = opt.priority != null ? Number(opt.priority) : 0;
     if (useTxAck) {
       store.lnsEnqueuePullResp(userId, session.lastGatewayEui, pullObj, notBeforeMs, dlPriority, {
@@ -501,6 +687,7 @@ function createLorawanLnsEngine(ctx) {
       store.lnsClearPendingMacAck(userId, devEuiNorm16);
     }
 
+    const rx1DelayUsApplied = cls === 'A' && classAWindow === 'RX1' ? classARx1DelayUs(rxDelaySec) : null;
     return {
       ok: true,
       fCnt: nextDown,
@@ -509,13 +696,46 @@ function createLorawanLnsEngine(ctx) {
       notBeforeMs,
       confirmedDown: Boolean(opt.confirmed),
       macAckIncluded: macAck,
-      classARxWindow: cls === 'A' && !useImme ? classAWindow : null,
+      classARxWindow: cls === 'A' ? classAWindow : null,
+      rxDelaySec,
+      txpkTmst: pullObj?.txpk?.tmst != null ? pullObj.txpk.tmst : undefined,
+      rx1DelayUs: rx1DelayUsApplied != null ? rx1DelayUsApplied : undefined,
       priority: dlPriority,
       txAckPending: useTxAck,
     };
   }
 
-  return { processPushJson, enqueueAppDownlink, processRxpk, normalizeDeviceClass };
+  /**
+   * GW_TX_ACK (Semtech UDP 0x05): primero `store.lnsHandleGatewayTxAck` (inflight, FCnt, reintentos),
+   * luego evento UI/SSE para correlación en cliente (`downlink_gateway_tx_ack` / `downlink_gateway_tx_reject`).
+   * El JSON es solo el cuerpo GWMP tras el EUI (12 B), p. ej. `{ txpk_ack: { error: "NONE" } }`.
+   */
+  function handleTxAck(gatewayEuiNorm16, tokenBuf, txAckJson) {
+    if (!gatewayEuiNorm16 || !tokenBuf || tokenBuf.length < 2) return;
+    if (typeof store.lnsHandleGatewayTxAck !== 'function') return;
+    const json = txAckJson && typeof txAckJson === 'object' ? txAckJson : {};
+    const outcome = store.lnsHandleGatewayTxAck(gatewayEuiNorm16, tokenBuf, json);
+    if (!outcome || !outcome.devEui) return;
+    if (typeof insertUiEvent !== 'function') return;
+    try {
+      const eventType = outcome.success ? 'downlink_gateway_tx_ack' : 'downlink_gateway_tx_reject';
+      const meta = {
+        gatewayEui: outcome.gatewayEui,
+        tokenHex: Buffer.from(tokenBuf).toString('hex'),
+        success: outcome.success,
+        error: outcome.error,
+        fCnt: outcome.newFcnt,
+        trackTxAck: outcome.trackTxAck,
+        downlinkId: outcome.downlinkId,
+        txpkAck: json.txpk_ack != null ? json.txpk_ack : undefined,
+      };
+      insertUiEvent(outcome.userId, outcome.devEui, eventType, JSON.stringify(meta));
+    } catch (e) {
+      console.warn('[LNS] UI event tras GW_TX_ACK:', e.message);
+    }
+  }
+
+  return { processPushJson, enqueueAppDownlink, processRxpk, normalizeDeviceClass, handleTxAck };
 }
 
 module.exports = { createLorawanLnsEngine };

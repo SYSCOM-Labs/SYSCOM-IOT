@@ -3,7 +3,13 @@ import Chart from 'chart.js/auto';
 import { RefreshCw, Zap, AlertTriangle, Image as ImageIcon, Pencil, LayoutGrid, MapPin, Trash2 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
-import { fetchDevices, fetchDeviceProperties, fetchDeviceHistory, sendDownlink } from '../../services/api';
+import {
+  fetchDevices,
+  fetchDeviceProperties,
+  fetchDeviceHistory,
+  sendDownlink,
+  fetchDeviceDecodeConfig,
+} from '../../services/api';
 import { getLatestDeviceData, queryTelemetry } from '../../services/localAuth';
 import {
   parseTelemetryScalar,
@@ -551,6 +557,19 @@ function loadDownlinksFromStorage(deviceId) {
   }
 }
 
+async function loadDownlinksForDevice(deviceId) {
+  if (!deviceId) return [];
+  try {
+    const cfg = await fetchDeviceDecodeConfig(deviceId);
+    if (Array.isArray(cfg.downlinks) && cfg.downlinks.length > 0) {
+      return cfg.downlinks.filter((d) => d && d.name && d.hex);
+    }
+  } catch {
+    /* sin permiso o sin datos */
+  }
+  return loadDownlinksFromStorage(deviceId);
+}
+
 function coalesceMaxSeenMs(...vals) {
   const ms = vals
     .filter((x) => x != null)
@@ -571,7 +590,7 @@ async function mergeDeviceLive(dev, credentials, token) {
     const entry = findLocalEntry(dev, latest || []);
     const liveFromLocal = entry?.properties || {};
     const lastSeen = coalesceMaxSeenMs(apiData.lastTimestamp, entry?.timestamp, dev.lastUpdateTime);
-    let merged = { ...dev, ...liveFromAPI, ...liveFromLocal };
+    let merged = { ...dev, ...liveFromLocal, ...liveFromAPI };
     if (lastSeen != null) merged = { ...merged, lastUpdateTime: lastSeen };
     return applyStaleOfflineConnectStatus(merged);
   } catch {
@@ -590,6 +609,14 @@ function downlinkErrorMessage(err) {
   if (msg.toLowerCase().includes('offline') || msg.toLowerCase().includes('desconect')) return 'Dispositivo fuera de línea.';
   if (msg.toLowerCase().includes('hex') || msg.toLowerCase().includes('invalid')) return 'Comando inválido.';
   if (status === 501) return 'Downlink no disponible en este modo.';
+  if (
+    status === 400 &&
+    (err.response?.data?.code === 'FPORT_REQUIRED' ||
+      msg.toLowerCase().includes('fport') ||
+      msg.toLowerCase().includes('plantilla'))
+  ) {
+    return 'Falta FPort de aplicación: reaplique la plantilla o defina «Canal plantilla (FPort)» en el decoder del dispositivo (no es MHz ni banda del gateway).';
+  }
   return msg || 'Error al enviar comando.';
 }
 
@@ -885,7 +912,7 @@ export default function BudgetSensorsDashboard({
         const online = isDeviceVisuallyOnline(merged);
         setSatisfactionPct(online ? 100 : 0);
         setLiveProps(merged);
-        setDownlinkList(loadDownlinksFromStorage(device.deviceId));
+        setDownlinkList(await loadDownlinksForDevice(device.deviceId));
       } catch (e) {
         console.warn('[BudgetSensorsDashboard] device load', e);
         if (cancelled) return;
@@ -893,7 +920,7 @@ export default function BudgetSensorsDashboard({
         const built = propertiesToSensors(merged, 1, '', String(device.deviceId));
         setSensors(built.length ? built : DEFAULT_SENSORS.map((s, i) => ({ ...s, id: i + 1 })));
         setLiveProps(merged);
-        setDownlinkList(loadDownlinksFromStorage(device.deviceId));
+        setDownlinkList(await loadDownlinksForDevice(device.deviceId));
       }
     };
     deviceLiveTickRef.current = tick;
@@ -920,7 +947,7 @@ export default function BudgetSensorsDashboard({
       const merged = await mergeDeviceLive(dev, credentials, token);
       if (cancelled) return;
       setLiveProps(merged);
-      setDownlinkList(loadDownlinksFromStorage(controlDeviceId));
+      setDownlinkList(await loadDownlinksForDevice(controlDeviceId));
     };
     tick();
     const id = setInterval(tick, WIDGET_LIVE_REFRESH_MS);

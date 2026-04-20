@@ -1,7 +1,7 @@
-import React, { useMemo, useState, useCallback, useEffect } from 'react';
+import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, matchPath } from 'react-router-dom';
 import './DeviceList.css';
-import { Plus, Pencil, Trash2, X, Layers } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Layers, Wand2 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import {
@@ -10,7 +10,11 @@ import {
   deleteDeviceTemplate,
   getDefaultTemplateId,
   setDefaultTemplateId,
+  mergeDeviceTemplatesFromImport,
+  buildDeviceTemplatesExportDocument,
+  normalizeTemplateLorawanClass,
 } from '../services/deviceTemplates';
+import { adaptDecoderScriptForSyscom } from '../utils/adaptDecoderScript';
 import './TemplatesPage.css';
 import { ROUTES } from '../constants/routes';
 
@@ -19,8 +23,12 @@ const emptyForm = () => ({
   modelo: '',
   marca: '',
   channel: '1',
+  lorawanClass: 'A',
   decoderScript: '',
   downlinks: [{ name: '', hex: '' }],
+  lnsDevAddr: '',
+  lnsNwkSKey: '',
+  lnsAppSKey: '',
 });
 
 function mapTemplateToForm(t) {
@@ -29,11 +37,15 @@ function mapTemplateToForm(t) {
     modelo: t.modelo || '',
     marca: t.marca || '',
     channel: t.channel != null && String(t.channel).trim() !== '' ? String(t.channel) : '1',
+    lorawanClass: normalizeTemplateLorawanClass(t.lorawanClass),
     decoderScript: t.decoderScript || '',
     downlinks:
       t.downlinks?.length > 0
         ? t.downlinks.map((d) => ({ name: d.name || '', hex: d.hex || '' }))
         : [{ name: '', hex: '' }],
+    lnsDevAddr: t.lnsDevAddr || '',
+    lnsNwkSKey: t.lnsNwkSKey || '',
+    lnsAppSKey: t.lnsAppSKey || '',
   };
 }
 
@@ -47,21 +59,45 @@ function buildInitialFormForPath(pathname) {
   return emptyForm();
 }
 
-/** Estado del formulario local; `key={pathname}` en el padre reinicia al cambiar la ruta. */
 function TemplatesEditorPanel({ initialForm, onClose, onSave }) {
   const [form, setForm] = useState(initialForm);
+  const [baselineSnapshot, setBaselineSnapshot] = useState(() => initialForm.decoderScript || '');
+  const [approvedDecoder, setApprovedDecoder] = useState(() => initialForm.decoderScript || '');
+
+  useEffect(() => {
+    const d = initialForm.decoderScript || '';
+    setForm(initialForm);
+    setBaselineSnapshot(d);
+    setApprovedDecoder(d);
+  }, [initialForm]);
+
+  const decoderSaveBlocked =
+    form.decoderScript.trim() !== '' && form.decoderScript !== approvedDecoder;
+
+  const handleAdjustDecoder = () => {
+    const { script, messages } = adaptDecoderScriptForSyscom(form.decoderScript);
+    setForm((f) => ({ ...f, decoderScript: script }));
+    setApprovedDecoder(script);
+    window.alert(messages.length ? messages.join('\n') : 'Sin cambios.');
+  };
 
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!form.modelo.trim() || !form.marca.trim()) {
-      alert('Modelo y marca son obligatorios.');
+      window.alert('Modelo y marca son obligatorios.');
+      return;
+    }
+    if (decoderSaveBlocked) {
+      window.alert(
+        'El decoder ha cambiado respecto al último estado aprobado. Pulse «Ajustar» para normalizarlo a Syscom o restaure el texto original antes de guardar.'
+      );
       return;
     }
     onSave(form);
   };
 
   return (
-    <div className="modal-overlay" role="presentation" onClick={onClose}>
+    <div className="modal-overlay" role="presentation">
       <div className="modal-content glass templates-editor-modal" role="dialog" onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <h2>{form.id ? 'Editar plantilla' : 'Nueva plantilla'}</h2>
@@ -96,25 +132,88 @@ function TemplatesEditorPanel({ initialForm, onClose, onSave }) {
               />
             </label>
             <label className="device-modal-field templates-editor-label device-create-span2">
-              <span className="device-modal-label-text">Canal</span>
+              <span className="device-modal-label-text">Canal plantilla (FPort aplicación / downlink)</span>
               <input
                 className="glass device-modal-input device-modal-input--lg"
                 type="text"
                 inputMode="numeric"
                 value={form.channel}
                 onChange={(e) => setForm({ ...form, channel: e.target.value })}
-                placeholder="1"
+                placeholder="85 (Milesight típ.) o 1"
                 autoComplete="off"
               />
+              <p className="templates-fport-disclaimer">
+                No es la frecuencia RF del gateway; la banda LoRaWAN (902–928 MHz) se elige al registrar el gateway.
+              </p>
             </label>
-            <label className="device-modal-field templates-editor-label device-create-span2">
-              <span className="device-modal-label-text">Payload decoder</span>
+            <label className="device-modal-field templates-editor-label">
+              <span className="device-modal-label-text">Clase LoRaWAN (LNS)</span>
+              <select
+                className="glass device-modal-input device-modal-input--lg"
+                value={form.lorawanClass}
+                onChange={(e) => setForm({ ...form, lorawanClass: e.target.value })}
+                aria-label="Clase de dispositivo para downlinks y sesión LNS"
+              >
+                <option value="A">A — ventanas RX1/RX2 tras uplink</option>
+                <option value="B">B — ping slots / beacon</option>
+                <option value="C">C — recepción casi continua (imme)</option>
+              </select>
+            </label>
+            <div className="device-modal-field templates-editor-label device-create-span2">
+              <div className="templates-decoder-label-row">
+                <span className="device-modal-label-text">Payload decoder</span>
+                <button
+                  type="button"
+                  className="templates-decoder-adjust-btn"
+                  onClick={handleAdjustDecoder}
+                  title="Normalizar codec pegado (Milesight / ChirpStack) al contrato Syscom"
+                >
+                  <Wand2 size={16} aria-hidden />
+                  Ajustar
+                </button>
+              </div>
               <textarea
                 className="glass device-modal-textarea templates-decoder-textarea"
                 rows={12}
                 value={form.decoderScript}
-                onChange={(e) => setForm({ ...form, decoderScript: e.target.value })}
-                placeholder="// function Decoder(bytes, port) { return { data: { ... } }; }"
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setForm({ ...form, decoderScript: v });
+                  if (v === baselineSnapshot) {
+                    setApprovedDecoder(baselineSnapshot);
+                  }
+                }}
+                placeholder="// function decodeUplink(input) { return { data: { ... } }; }"
+                spellCheck={false}
+              />
+            </div>
+            <label className="device-modal-field templates-editor-label device-create-span2">
+              <span className="device-modal-label-text">LNS DevAddr (hex, opcional)</span>
+              <input
+                className="glass device-modal-input device-modal-input--lg mono"
+                value={form.lnsDevAddr}
+                onChange={(e) => setForm({ ...form, lnsDevAddr: e.target.value })}
+                placeholder="8 hex (4 B) si usa triple LNS en plantilla"
+                spellCheck={false}
+              />
+            </label>
+            <label className="device-modal-field templates-editor-label">
+              <span className="device-modal-label-text">LNS NwkSKey (hex, opcional)</span>
+              <input
+                className="glass device-modal-input device-modal-input--lg mono"
+                value={form.lnsNwkSKey}
+                onChange={(e) => setForm({ ...form, lnsNwkSKey: e.target.value })}
+                placeholder="32 hex"
+                spellCheck={false}
+              />
+            </label>
+            <label className="device-modal-field templates-editor-label">
+              <span className="device-modal-label-text">LNS AppSKey (hex, opcional)</span>
+              <input
+                className="glass device-modal-input device-modal-input--lg mono"
+                value={form.lnsAppSKey}
+                onChange={(e) => setForm({ ...form, lnsAppSKey: e.target.value })}
+                placeholder="32 hex"
                 spellCheck={false}
               />
             </label>
@@ -175,7 +274,16 @@ function TemplatesEditorPanel({ initialForm, onClose, onSave }) {
             <button type="button" className="btn btn-secondary" onClick={onClose}>
               Cancelar
             </button>
-            <button type="submit" className="btn btn-primary">
+            <button
+              type="submit"
+              className="btn btn-primary"
+              disabled={decoderSaveBlocked}
+              title={
+                decoderSaveBlocked
+                  ? 'Pulse «Ajustar» para aprobar el decoder Syscom, o deje el campo vacío / restaure el snapshot inicial.'
+                  : undefined
+              }
+            >
               Guardar plantilla
             </button>
           </div>
@@ -192,6 +300,7 @@ const TemplatesPage = () => {
   const { t } = useLanguage();
   const [templates, setTemplates] = useState(() => getDeviceTemplates());
   const [defaultTemplateId, setDefaultTemplateIdState] = useState(() => getDefaultTemplateId());
+  const importInputRef = useRef(null);
 
   const refresh = useCallback(() => {
     setTemplates(getDeviceTemplates());
@@ -208,10 +317,7 @@ const TemplatesPage = () => {
     return Boolean(matchPath({ path: '/plantillas/:templateId/editar', end: true }, p));
   }, [location.pathname]);
 
-  const editorInitialForm = useMemo(
-    () => buildInitialFormForPath(location.pathname),
-    [location.pathname]
-  );
+  const editorInitialForm = useMemo(() => buildInitialFormForPath(location.pathname), [location.pathname]);
 
   useEffect(() => {
     const m = matchPath({ path: '/plantillas/:templateId/editar', end: true }, location.pathname);
@@ -225,8 +331,8 @@ const TemplatesPage = () => {
     navigate(ROUTES.plantillaNueva);
   };
 
-  const openEdit = (t) => {
-    navigate(ROUTES.plantillaEditar(t.id));
+  const openEdit = (tpl) => {
+    navigate(ROUTES.plantillaEditar(tpl.id));
   };
 
   const persistTemplate = useCallback(
@@ -236,8 +342,12 @@ const TemplatesPage = () => {
         modelo: form.modelo,
         marca: form.marca,
         channel: form.channel,
+        lorawanClass: form.lorawanClass,
         decoderScript: form.decoderScript,
         downlinks: form.downlinks,
+        lnsDevAddr: form.lnsDevAddr,
+        lnsNwkSKey: form.lnsNwkSKey,
+        lnsAppSKey: form.lnsAppSKey,
       });
       refresh();
       navigate(ROUTES.plantillas);
@@ -245,11 +355,50 @@ const TemplatesPage = () => {
     [navigate, refresh]
   );
 
-  const handleDelete = (t) => {
-    if (!window.confirm(`¿Eliminar la plantilla "${t.modelo}" (${t.marca})?`)) return;
-    deleteDeviceTemplate(t.id);
+  const handleDelete = (tpl) => {
+    if (!window.confirm(`¿Eliminar la plantilla "${tpl.modelo}" (${tpl.marca})?`)) return;
+    deleteDeviceTemplate(tpl.id);
     refresh();
   };
+
+  const handleImportFile = useCallback(
+    async (e) => {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text);
+        const r = mergeDeviceTemplatesFromImport(parsed);
+        refresh();
+        const parts = [
+          `Añadidas: ${r.added}`,
+          `Reemplazadas: ${r.replaced}`,
+          `Omitidas: ${r.skipped}`,
+        ];
+        if (r.warnings?.length) parts.push('', ...r.warnings);
+        window.alert(parts.join('\n'));
+      } catch (err) {
+        window.alert(`Error al importar: ${err?.message || String(err)}`);
+      }
+    },
+    [refresh]
+  );
+
+  const handleExport = useCallback(() => {
+    const doc = buildDeviceTemplatesExportDocument();
+    const day = new Date().toISOString().slice(0, 10);
+    const name = `syscom-plantillas-dispositivo-${day}.json`;
+    const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }, []);
 
   const sorted = useMemo(
     () =>
@@ -276,12 +425,29 @@ const TemplatesPage = () => {
             Plantillas de dispositivo
           </h1>
           <p className="templates-page-subtitle">
-            Modelo, decoder y downlinks por plantilla; la <strong>predeterminada</strong> se hereda al crear dispositivos (o elige otra en el alta).
+            Modelo, clase LoRaWAN (A/B/C), decoder y downlinks por plantilla; la <strong>predeterminada</strong> se hereda al crear dispositivos (o elige otra en el alta).
+            Use <strong>Importar</strong>/<strong>Exportar</strong> para copias JSON (formato Syscom).
           </p>
         </div>
-        <button type="button" className="btn btn-primary" onClick={openNew}>
-          <Plus size={18} /> Nueva plantilla
-        </button>
+        <div className="templates-page-header-actions">
+          <input
+            ref={importInputRef}
+            type="file"
+            accept="application/json,.json"
+            className="templates-import-input"
+            aria-label="Importar plantillas JSON"
+            onChange={handleImportFile}
+          />
+          <button type="button" className="btn btn-secondary" onClick={() => importInputRef.current?.click()}>
+            Importar
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={handleExport}>
+            Exportar
+          </button>
+          <button type="button" className="btn btn-primary" onClick={openNew}>
+            <Plus size={18} /> Nueva plantilla
+          </button>
+        </div>
       </div>
 
       <div className="templates-table-wrap glass card">
@@ -293,7 +459,8 @@ const TemplatesPage = () => {
               <tr>
                 <th>Marca</th>
                 <th>Modelo</th>
-                <th>Canal</th>
+                <th>Canal plantilla (FPort)</th>
+                <th>Clase</th>
                 <th>Decoder</th>
                 <th>Downlinks</th>
                 <th>Altas</th>
@@ -301,19 +468,20 @@ const TemplatesPage = () => {
               </tr>
             </thead>
             <tbody>
-              {sorted.map((t) => (
-                <tr key={t.id}>
-                  <td>{t.marca || '—'}</td>
+              {sorted.map((tpl) => (
+                <tr key={tpl.id}>
+                  <td>{tpl.marca || '—'}</td>
                   <td>
-                    <strong>{t.modelo || '—'}</strong>
+                    <strong>{tpl.modelo || '—'}</strong>
                   </td>
-                  <td>{t.channel || '—'}</td>
+                  <td>{tpl.channel || '—'}</td>
+                  <td>{normalizeTemplateLorawanClass(tpl.lorawanClass)}</td>
                   <td className="templates-cell-mono">
-                    {t.decoderScript?.trim() ? `${t.decoderScript.trim().slice(0, 48)}…` : '—'}
+                    {tpl.decoderScript?.trim() ? `${tpl.decoderScript.trim().slice(0, 48)}…` : '—'}
                   </td>
-                  <td>{t.downlinks?.length || 0}</td>
+                  <td>{tpl.downlinks?.length || 0}</td>
                   <td className="templates-default-col">
-                    {defaultTemplateId === t.id ? (
+                    {defaultTemplateId === tpl.id ? (
                       <div className="templates-default-wrap">
                         <span className="templates-default-badge">Predeterminada</span>
                         <button
@@ -331,9 +499,9 @@ const TemplatesPage = () => {
                       <button
                         type="button"
                         className="btn btn-secondary templates-default-btn"
-                        title="Cada nuevo dispositivo heredará decoder y downlinks de esta plantilla"
+                        title="Cada nuevo dispositivo heredará clase LoRaWAN, decoder y downlinks de esta plantilla"
                         onClick={() => {
-                          setDefaultTemplateId(t.id);
+                          setDefaultTemplateId(tpl.id);
                           refresh();
                         }}
                       >
@@ -342,10 +510,10 @@ const TemplatesPage = () => {
                     )}
                   </td>
                   <td className="templates-actions-col">
-                    <button type="button" className="btn-icon btn-icon--edit" title="Editar" onClick={() => openEdit(t)}>
+                    <button type="button" className="btn-icon btn-icon--edit" title="Editar" onClick={() => openEdit(tpl)}>
                       <Pencil size={16} />
                     </button>
-                    <button type="button" className="btn-icon btn-icon--danger" title="Eliminar" onClick={() => handleDelete(t)}>
+                    <button type="button" className="btn-icon btn-icon--danger" title="Eliminar" onClick={() => handleDelete(tpl)}>
                       <Trash2 size={16} />
                     </button>
                   </td>

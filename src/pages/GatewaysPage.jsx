@@ -10,7 +10,8 @@ import './GatewaysPage.css';
 const EMPTY_FORM = {
   name: '',
   gatewayEui: '',
-  frequencyBand: LORAWAN_GATEWAY_BAND_OPTIONS[0].value,
+  /** US915 subbanda FSB2 (canales 125 kHz 8–15 + 500 kHz 65–70). */
+  frequencyBand: 'US902-928-FSB2',
 };
 
 function formatEuiDisplay(hex) {
@@ -227,7 +228,7 @@ const GatewaysPage = () => {
       )}
 
       {modalOpen && (
-        <div className="modal-overlay" role="presentation" onClick={closeModal}>
+        <div className="modal-overlay" role="presentation">
           <div
             className="modal-content gateways-modal"
             role="dialog"
@@ -281,7 +282,7 @@ const GatewaysPage = () => {
                   </p>
                 </div>
                 <div className="form-group">
-                  <label htmlFor="gw-freq">Frecuencia</label>
+                  <label htmlFor="gw-freq">Banda LoRaWAN (plan de frecuencias)</label>
                   <select
                     id="gw-freq"
                     className="glass"
@@ -294,6 +295,10 @@ const GatewaysPage = () => {
                       </option>
                     ))}
                   </select>
+                  <p className="field-hint">
+                    FSB2 = plan RF US915 con canales 125 kHz 8–15 (y 500 kHz 65–70). No confundir con «Canal plantilla» (FPort)
+                    del decoder en dispositivos.
+                  </p>
                 </div>
               </div>
               <div className="modal-footer">

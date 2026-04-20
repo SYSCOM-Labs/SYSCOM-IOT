@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { getEventsStreamUrl } from '../config/apiBase';
+import { dispatchAppLog } from '../constants/appLog';
 import { SYSCOM_REALTIME_LNS, SYSCOM_REALTIME_TELEMETRY } from '../constants/realtimeEvents';
 
 /**
@@ -10,6 +11,7 @@ export default function SyscomRealtimeBridge() {
   const { token, user } = useAuth();
   const esRef = useRef(null);
   const retryMsRef = useRef(2000);
+  const lastSseWarnRef = useRef(0);
 
   useEffect(() => {
     if (!token || !user?.id) {
@@ -36,6 +38,7 @@ export default function SyscomRealtimeBridge() {
 
       es.addEventListener('open', () => {
         retryMsRef.current = 2000;
+        dispatchAppLog('info', 'Tiempo real (SSE) conectado', { category: 'realtime' });
       });
 
       es.addEventListener('telemetry', (e) => {
@@ -61,6 +64,14 @@ export default function SyscomRealtimeBridge() {
         if (cancelled) return;
         const delay = retryMsRef.current;
         retryMsRef.current = Math.min(60000, Math.floor(retryMsRef.current * 1.5));
+        const now = Date.now();
+        if (now - lastSseWarnRef.current > 12000) {
+          lastSseWarnRef.current = now;
+          dispatchAppLog('warn', `Tiempo real (SSE) desconectado; reintento en ${Math.round(delay / 1000)}s`, {
+            category: 'realtime',
+            data: { reconnectDelayMs: delay },
+          });
+        }
         reconnectTimer = window.setTimeout(connect, delay);
       };
     };

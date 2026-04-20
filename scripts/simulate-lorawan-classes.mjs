@@ -131,6 +131,7 @@ async function main() {
           appEUI: '1122334455667788',
           appKey: APP_KEY,
           lorawanClass: cls,
+          tag: 'uc300',
         },
       });
       assert(
@@ -172,6 +173,9 @@ async function main() {
       );
       if (cls === 'C') {
         assert(dl.data?.imme === true, 'Clase C debe usar txpk inmediato (imme)');
+      }
+      if (cls === 'A') {
+        assert(dl.data?.imme === false, 'Clase A debe programar RX con tmst (imme false)');
       }
     }
 

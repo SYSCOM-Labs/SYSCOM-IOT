@@ -16,12 +16,15 @@ import FirstPasswordChange from './components/FirstPasswordChange';
 import { useAuth } from './context/AuthContext';
 import { DeviceWidgetPickerProvider } from './context/DeviceWidgetPickerContext';
 import { useLanguage } from './context/LanguageContext';
-import { Menu, User, Mail, Fingerprint, LogOut, ChevronDown, Bug } from 'lucide-react';
+import { Menu, User, Mail, LogOut, ChevronDown, Bug } from 'lucide-react';
 import { fetchLicenseWarnings } from './services/api';
 import { fetchDebugImpersonationUsers } from './services/localAuth';
 import { isLocalDebugHost } from './utils/debugHost';
 import LnsDownlinkToastBridge from './components/LnsDownlinkToastBridge';
 import SyscomRealtimeBridge from './components/SyscomRealtimeBridge';
+import AppLogRealtimeBridge from './components/AppLogRealtimeBridge';
+import AppBottomLog from './components/AppBottomLog';
+import { AppLogProvider } from './context/AppLogContext';
 import { ROUTES } from './constants/routes';
 
 const PAGE_HEADINGS = {
@@ -33,7 +36,7 @@ const PAGE_HEADINGS = {
   History: { title: 'Historial', subtitle: 'Series temporales y exportación' },
   SpecialReport: { title: 'Reporte especial', subtitle: 'Cálculos y documentos' },
   Automations: { title: 'Automatización', subtitle: 'Reglas, condiciones y acciones' },
-  Settings: { title: 'Ajustes', subtitle: 'Cuenta, ingesta HTTP y apariencia' },
+  Settings: { title: 'Ajustes', subtitle: 'Apariencia y notificaciones' },
   Users: { title: 'Usuarios', subtitle: 'Alta, roles y tokens de ingesta' },
   Templates: {
     title: 'Plantillas',
@@ -208,18 +211,19 @@ function AppShell() {
   }
 
   return (
-    <DeviceWidgetPickerProvider onSwitchToDashboard={() => navigate(ROUTES.panel)}>
-      <div className={`app-container app-container--premium ${sidebarOpen ? 'sidebar-open' : ''}`}>
-        <Sidebar
-          pathname={location.pathname}
-          isOpen={sidebarOpen}
-          onToggle={() => setSidebarOpen(!sidebarOpen)}
-          onAfterNavigate={() => setSidebarOpen(false)}
-        />
+    <AppLogProvider>
+      <DeviceWidgetPickerProvider onSwitchToDashboard={() => navigate(ROUTES.panel)}>
+        <div className={`app-container app-container--premium ${sidebarOpen ? 'sidebar-open' : ''}`}>
+          <Sidebar
+            pathname={location.pathname}
+            isOpen={sidebarOpen}
+            onToggle={() => setSidebarOpen(!sidebarOpen)}
+            onAfterNavigate={() => setSidebarOpen(false)}
+          />
 
-        {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)}></div>}
+          {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)}></div>}
 
-        <main className="main-content">
+          <main className="main-content">
           <header className="top-bar top-bar--premium">
             <div className="top-bar-leading">
               <button type="button" className="mobile-menu-btn glass" onClick={() => setSidebarOpen(true)}>
@@ -236,10 +240,10 @@ function AppShell() {
                   <input
                     type="search"
                     className="search-input glass"
-                    placeholder="Modelo, DevEUI, nombre…"
+                    placeholder="Nombre, etiqueta, DevEUI…"
                     value={devicesSearchQuery}
                     onChange={(e) => setDevicesSearchQuery(e.target.value)}
-                    aria-label="Filtrar dispositivos por modelo, DevEUI o nombre"
+                    aria-label="Filtrar dispositivos por nombre, etiqueta o DevEUI"
                     autoComplete="off"
                   />
                 )}
@@ -308,13 +312,6 @@ function AppShell() {
                         <Mail size={16} />
                         <span>{user?.email}</span>
                       </div>
-                      <div className="info-item highlight">
-                        <Fingerprint size={16} />
-                        <div className="id-container">
-                          <label>ID Webhook:</label>
-                          <code className="user-id-code">{user?.id}</code>
-                        </div>
-                      </div>
                     </div>
 
                     {showDebugMode && (
@@ -379,6 +376,7 @@ function AppShell() {
           </header>
           <LicenseExpiryBanner userId={user?.id} />
           <SyscomRealtimeBridge />
+          <AppLogRealtimeBridge />
           <LnsDownlinkToastBridge />
           <div className="page-content">
             <Routes>
@@ -399,9 +397,11 @@ function AppShell() {
               <Route path="*" element={<Navigate to={ROUTES.panel} replace />} />
             </Routes>
           </div>
+          <AppBottomLog />
         </main>
       </div>
-    </DeviceWidgetPickerProvider>
+      </DeviceWidgetPickerProvider>
+    </AppLogProvider>
   );
 }
 

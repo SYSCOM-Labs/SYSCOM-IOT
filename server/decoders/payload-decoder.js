@@ -9,6 +9,8 @@
 const vm = require('node:vm');
 const timewaveWaterMeter = require('./timewave-water-meter');
 const eastronSdm230 = require('./eastron-sdm230');
+const { milesightWs101Decode } = require('./milesight-ws101');
+const { resolveFPortForDecoder } = require('../lib/resolve-app-fport');
 
 const DECODER_TIMEOUT_MS = Math.min(
   Math.max(Number(process.env.SYSCOM_DECODER_TIMEOUT_MS || 4000), 200),
@@ -123,6 +125,12 @@ function runDecoderScript(script, fPortNum, byteBuffer) {
         return timewaveWaterMeter.buildIntervalCommand(meterNo12, minutes).toString('hex');
       },
     },
+    /** Milesight WS101 (y familia WS con mismo perfil TLV): evita scripts duplicados en plantilla. */
+    MilesightWs101: {
+      decode(bytes) {
+        return milesightWs101Decode(bytes);
+      },
+    },
     /** Eastron SDM230-LoraWAN (carga activa + Modbus RTU en downlink). Esclavo por defecto 1. */
     Eastron: {
       decodeActiveUpload(bytes) {
@@ -209,6 +217,24 @@ function runDecoderScript(script, fPortNum, byteBuffer) {
 }
 
 /**
+ * UC300 / Milesight: si GPIO o contadores solo vienen en `channel_history` (TLV 0x20/0xdc),
+ * promueve al raíz desde el último elemento cuando falten (mejora TSL e historial).
+ * @param {Record<string, unknown>} root
+ */
+function promoteUc300GpioFromChannelHistory(root) {
+  if (!root || typeof root !== 'object') return;
+  const ch = root.channel_history;
+  if (!Array.isArray(ch) || ch.length === 0) return;
+  const last = ch[ch.length - 1];
+  if (!last || typeof last !== 'object' || Array.isArray(last)) return;
+  const re = /^gpio_(input|output)_\d+$|^gpio_counter_\d+$/;
+  for (const k of Object.keys(last)) {
+    if (!re.test(k)) continue;
+    if (root[k] == null || root[k] === '') root[k] = last[k];
+  }
+}
+
+/**
  * Busca script en device_decode_config y, si hay bytes de payload, fusiona telemetría decodificada.
  * @param {{ getDeviceDecodeConfig: (id: string) => { decoderScript?: string } }} store
  * @param {string} canonicalDeviceId
@@ -231,6 +257,7 @@ function tryApplyStoredDecoder(store, canonicalDeviceId, rawDeviceId, properties
 
   const seen = new Set();
   let script = '';
+  let cfgUsed = null;
   for (const id of idCandidates) {
     if (seen.has(id)) continue;
     seen.add(id);
@@ -238,6 +265,7 @@ function tryApplyStoredDecoder(store, canonicalDeviceId, rawDeviceId, properties
     const s = cfg && cfg.decoderScript != null ? String(cfg.decoderScript).trim() : '';
     if (s) {
       script = cfg.decoderScript;
+      cfgUsed = cfg;
       break;
     }
   }
@@ -247,9 +275,13 @@ function tryApplyStoredDecoder(store, canonicalDeviceId, rawDeviceId, properties
   const buf = extractPayloadBytes(properties);
   if (!buf || buf.length === 0) return;
 
-  const fp = properties.fPort ?? properties.fport ?? 1;
-  const fPortNum = Number(fp);
-  const port = Number.isFinite(fPortNum) ? fPortNum : 1;
+  const port = resolveFPortForDecoder(properties, cfgUsed);
+  if (port == null) {
+    console.warn(
+      '[Ingest decoder] Sin FPort válido (uplink ni canal en decode-config del dispositivo); omitiendo decoder.'
+    );
+    return;
+  }
 
   const meta = snapshotMeta(properties);
 
@@ -268,4 +300,5 @@ module.exports = {
   extractPayloadBytes,
   snapshotMeta,
   INGEST_META_KEYS,
+  promoteUc300GpioFromChannelHistory,
 };

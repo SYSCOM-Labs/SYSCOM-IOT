@@ -203,6 +203,8 @@ class Store {
     this.filePath = filePath;
     this.db = openDb(filePath);
     runMigrations(this.db);
+    /** Si 0014 falló pero quedó registrada, o hubo arranque parcial, evita SELECT a columna inexistente (rompe join/uplink). */
+    this._ensureDeviceDecodeLorawanClassColumn();
     if (!fs.existsSync(MIGRATE_MARKER) && fs.existsSync(LEGACY_JSON)) {
       const row = this.db.prepare('SELECT COUNT(*) AS c FROM users').get();
       const n = Number(row && row.c);
@@ -211,6 +213,38 @@ class Store {
     this._prepareStatements();
     this._pruneCounter = 0;
     this.retentionMs = 365 * 24 * 60 * 60 * 1000;
+  }
+
+  /**
+   * Idempotente: asegura `lorawan_class` en `device_decode_config` y backfill desde `user_devices` solo si acabamos de crear la columna.
+   */
+  _ensureDeviceDecodeLorawanClassColumn() {
+    let cols;
+    try {
+      cols = this.db.prepare('PRAGMA table_info(device_decode_config)').all();
+    } catch {
+      return;
+    }
+    if (!Array.isArray(cols) || cols.length === 0) return;
+    const names = new Set(cols.map((c) => c.name));
+    if (names.has('lorawan_class')) return;
+    try {
+      this.db.exec('ALTER TABLE device_decode_config ADD COLUMN lorawan_class TEXT');
+    } catch (e) {
+      const msg = String(e && e.message ? e.message : e);
+      if (!msg.includes('duplicate column')) throw e;
+    }
+    console.log('[Syscom] Esquema reparado: device_decode_config.lorawan_class (columna faltante).');
+    this.db.exec(`
+      UPDATE device_decode_config
+      SET lorawan_class = (
+        SELECT ud.lorawan_class FROM user_devices ud
+        WHERE ud.device_id = device_decode_config.device_id
+          AND ud.lorawan_class IS NOT NULL AND length(trim(ud.lorawan_class)) > 0
+        LIMIT 1
+      )
+      WHERE (lorawan_class IS NULL OR length(trim(lorawan_class)) = 0)
+    `);
   }
 
   _prepareStatements() {
@@ -291,6 +325,13 @@ class Store {
         SELECT gateway_eui FROM lorawan_gateways WHERE user_id = ?
         AND lower(replace(replace(replace(gateway_eui,':',''),'-',''),' ','')) IN (?, ?) LIMIT 1
       `),
+      lgwByEuiForUser: this.db.prepare(`
+        SELECT id, user_id, name, gateway_eui, frequency_band, created_at
+        FROM lorawan_gateways
+        WHERE user_id = ?
+          AND lower(replace(replace(replace(gateway_eui,':',''),'-',''),' ','')) = ?
+        LIMIT 1
+      `),
       lnsOtaaDevice: this.db.prepare(`
         SELECT * FROM user_devices WHERE user_id = ?
         AND lower(replace(replace(replace(dev_eui,':',''),'-',''),' ','')) = ?
@@ -351,6 +392,9 @@ class Store {
       lnsClearAwaitingConfirmedDl: this.db.prepare(`
         UPDATE lorawan_lns_sessions SET awaiting_confirmed_dl_ack = 0, updated_at = ? WHERE user_id = ? AND dev_eui = ?
       `),
+      lnsSessionDeleteByDevEui: this.db.prepare(
+        'DELETE FROM lorawan_lns_sessions WHERE user_id = ? AND dev_eui = ?'
+      ),
       lnsUiEventInsert: this.db.prepare(`
         INSERT INTO lns_ui_events (user_id, dev_eui, event_type, meta_json, created_at)
         VALUES (?, ?, ?, ?, ?)
@@ -415,13 +459,17 @@ class Store {
           lorawan_class = excluded.lorawan_class,
           updated_at = excluded.updated_at
       `),
-      decodeGet: this.db.prepare('SELECT device_id, decoder_script, channel, updated_at FROM device_decode_config WHERE device_id = ?'),
+      decodeGet: this.db.prepare(
+        'SELECT device_id, decoder_script, channel, downlinks_json, lorawan_class, updated_at FROM device_decode_config WHERE device_id = ?'
+      ),
       decodeUpsert: this.db.prepare(`
-        INSERT INTO device_decode_config (device_id, decoder_script, channel, updated_at)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO device_decode_config (device_id, decoder_script, channel, downlinks_json, lorawan_class, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(device_id) DO UPDATE SET
           decoder_script = excluded.decoder_script,
           channel = excluded.channel,
+          downlinks_json = excluded.downlinks_json,
+          lorawan_class = excluded.lorawan_class,
           updated_at = excluded.updated_at
       `),
       decodeDelete: this.db.prepare('DELETE FROM device_decode_config WHERE device_id = ?'),
@@ -444,7 +492,7 @@ class Store {
         LIMIT 1
       `),
       udJoinUsers: this.db.prepare(`
-        SELECT ud.device_id, ud.user_id, ud.display_name, u.email, u.role
+        SELECT ud.device_id, ud.user_id, ud.display_name, ud.tag, u.email, u.role
         FROM user_devices ud
         JOIN users u ON u.id = ud.user_id
       `),
@@ -761,6 +809,25 @@ class Store {
     return String(r.gateway_eui || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
   }
 
+  /**
+   * Gateway LoRaWAN del usuario por EUI normalizado (16 hex minúsculas, sin separadores).
+   * @returns {{ id: string, userId: string, name: string, gatewayEui: string, frequencyBand: string, createdAt: string } | null}
+   */
+  lnsGetGatewayByEui(userId, gatewayEuiNorm16) {
+    const eui = String(gatewayEuiNorm16 || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+    if (eui.length < 8) return null;
+    const r = this.st.lgwByEuiForUser.get(userId, eui);
+    if (!r) return null;
+    return {
+      id: r.id,
+      userId: r.user_id,
+      name: r.name,
+      gatewayEui: String(r.gateway_eui || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase(),
+      frequencyBand: r.frequency_band != null ? String(r.frequency_band) : '',
+      createdAt: r.created_at,
+    };
+  }
+
   lnsFindOtaaDeviceRow(userId, joinEuiHex16, devEuiHex16) {
     return this.st.lnsOtaaDevice.get(userId, devEuiHex16, joinEuiHex16) || null;
   }
@@ -800,7 +867,7 @@ class Store {
       classBPingPeriodicity:
         r.class_b_ping_periodicity != null ? Number(r.class_b_ping_periodicity) : -1,
       classBDataRate: r.class_b_data_rate != null ? Number(r.class_b_data_rate) : null,
-      rxDelaySec: r.rx_delay_sec != null ? Math.max(1, Math.min(15, Number(r.rx_delay_sec))) : 1,
+      rxDelaySec: r.rx_delay_sec != null ? Math.max(1, Math.min(15, Number(r.rx_delay_sec))) : 5,
       pendingMacAck: Number(r.pending_mac_ack || 0) === 1,
       awaitingConfirmedDlAck: Number(r.awaiting_confirmed_dl_ack || 0) === 1,
     };
@@ -822,7 +889,7 @@ class Store {
       .toUpperCase();
     const deviceClass = cls === 'B' || cls === 'C' ? cls : 'A';
     const rxDelaySec =
-      row.rxDelaySec != null ? Math.max(1, Math.min(15, Number(row.rxDelaySec))) : 1;
+      row.rxDelaySec != null ? Math.max(1, Math.min(15, Number(row.rxDelaySec))) : 5;
     this.st.lnsUpsertSession.run(
       row.userId,
       row.devEui,
@@ -895,7 +962,7 @@ class Store {
   }
 
   /**
-   * @param {object | null} [txMeta] Si está definido (downlink de aplicación con SYSCOM_LNS_TX_ACK), no confirmar FCnt hasta TX_ACK.
+   * @param {object | null} [txMeta] Si está definido (downlink de aplicación con tracking TX_ACK activo), no confirmar FCnt hasta TX_ACK.
    * @param {{ devEui: string, newFcnt: number, prevFcnt: number, retriesLeft?: number }} txMeta
    */
   lnsEnqueuePullResp(userId, gatewayEuiNorm16, pullRespObj, notBeforeMs, priority, txMeta) {
@@ -984,16 +1051,28 @@ class Store {
    * @param {string|null} gwNorm
    * @param {Buffer} tokenBuf 2 bytes
    * @param {object} json
+   * @returns {{ userId: string, devEui: string, gatewayEui: string, success: boolean, error: string|null, newFcnt: number|null, trackTxAck: boolean, downlinkId: number } | null}
    */
   lnsHandleGatewayTxAck(gwNorm, tokenBuf, json) {
-    if (!gwNorm || !tokenBuf || tokenBuf.length < 2) return;
+    if (!gwNorm || !tokenBuf || tokenBuf.length < 2) return null;
     const th = tokenBuf[0];
     const tl = tokenBuf[1];
     const row = this.st.lnsTxInflightSelectJoin.get(gwNorm, th, tl);
-    if (!row) return;
+    if (!row) return null;
 
     const txpkAck = json && json.txpk_ack;
     const ok = this._lnsTxAckIsSuccess(txpkAck);
+    const errStr = ok ? null : txpkAck && txpkAck.error != null ? String(txpkAck.error) : 'UNKNOWN';
+    const outcome = {
+      userId: String(row.user_id),
+      devEui: row.tx_dev_eui ? String(row.tx_dev_eui).toLowerCase() : '',
+      gatewayEui: String(gwNorm).toLowerCase(),
+      success: ok,
+      error: errStr,
+      newFcnt: row.tx_new_fcnt != null ? Number(row.tx_new_fcnt) : null,
+      trackTxAck: Number(row.track_tx_ack) === 1,
+      downlinkId: Number(row.downlink_id),
+    };
     const inflightId = row.inflight_id;
     const delayMs = Math.max(
       0,
@@ -1037,6 +1116,7 @@ class Store {
         }
       }
       this.db.exec('COMMIT');
+      return outcome;
     } catch (e) {
       try {
         this.db.exec('ROLLBACK');
@@ -1044,6 +1124,7 @@ class Store {
         /* ignore */
       }
       console.error('[LNS-UDP] TX_ACK DB:', e.message);
+      return null;
     }
   }
 
@@ -1097,6 +1178,29 @@ class Store {
     this.st.lnsClearAwaitingConfirmedDl.run(now, userId, devEuiNorm16);
   }
 
+  /** Borra la sesión LNS (p. ej. para forzar OTAA de nuevo). Devuelve filas borradas. */
+  lnsDeleteSessionByDevEui(userId, devEuiNorm16) {
+    const r = this.st.lnsSessionDeleteByDevEui.run(userId, devEuiNorm16);
+    return Number(r.changes || 0);
+  }
+
+  /**
+   * Busca la fila user_devices por DevEUI normalizado (16 hex). Para alinear clase LoRaWAN con la sesión LNS.
+   */
+  findUserDeviceByDevEuiNorm(userId, devEuiNorm16) {
+    const want = String(devEuiNorm16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (want.length !== 16) return null;
+    for (const ud of this.listUserDevices(userId)) {
+      const e = String(ud.devEUI || '')
+        .replace(/[^0-9a-fA-F]/g, '')
+        .toLowerCase();
+      if (e === want) return ud;
+    }
+    return null;
+  }
+
   getUserDevice(userId, deviceId) {
     const r = this.st.udGet.get(userId, String(deviceId));
     if (!r) return null;
@@ -1133,6 +1237,30 @@ class Store {
     }));
   }
 
+  /**
+   * True si el usuario tiene el dispositivo dado de alta (device_id o DevEUI 16 hex coincidente).
+   * Evita ingesta / listados con pseudo-ids (p. ej. devaddr-*) que no existen en user_devices.
+   */
+  deviceRegisteredForUser(userId, canonicalDeviceId) {
+    const cid = String(canonicalDeviceId || '').trim();
+    if (!cid) return false;
+    if (this.getUserDevice(userId, cid)) return true;
+    const want = String(cid)
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (want.length !== 16) return false;
+    for (const ud of this.listUserDevices(userId)) {
+      const d = String(ud.deviceId || '')
+        .replace(/[^0-9a-fA-F]/g, '')
+        .toLowerCase();
+      const e = String(ud.devEUI || '')
+        .replace(/[^0-9a-fA-F]/g, '')
+        .toLowerCase();
+      if (d === want || e === want) return true;
+    }
+    return false;
+  }
+
   upsertUserDevice(row) {
     let lorawanClass = null;
     if (row.lorawanClass != null && String(row.lorawanClass).trim() !== '') {
@@ -1155,21 +1283,77 @@ class Store {
     );
   }
 
+  normalizeDownlinksForStore(arr) {
+    return (Array.isArray(arr) ? arr : [])
+      .map((d) => ({
+        name: String(d?.name || '').trim(),
+        hex: String(d?.hex || '').trim().replace(/\s/g, '').toLowerCase().replace(/^0x/, ''),
+      }))
+      .filter((d) => d.name && d.hex);
+  }
+
   getDeviceDecodeConfig(deviceId) {
     const r = this.st.decodeGet.get(String(deviceId));
-    if (!r) return { deviceId: String(deviceId), decoderScript: '', channel: '', updatedAt: null };
+    if (!r) {
+      return {
+        deviceId: String(deviceId),
+        decoderScript: '',
+        channel: '',
+        downlinks: [],
+        lorawanClass: '',
+        updatedAt: null,
+      };
+    }
+    let downlinks = [];
+    if (r.downlinks_json) {
+      try {
+        const p = JSON.parse(r.downlinks_json);
+        if (Array.isArray(p)) downlinks = this.normalizeDownlinksForStore(p);
+      } catch {
+        downlinks = [];
+      }
+    }
+    const lwRaw = String(r.lorawan_class || '')
+      .trim()
+      .toUpperCase();
+    const lorawanClass = lwRaw === 'B' || lwRaw === 'C' || lwRaw === 'A' ? lwRaw : '';
     return {
       deviceId: r.device_id,
       decoderScript: r.decoder_script || '',
       channel: r.channel || '',
+      downlinks,
+      lorawanClass,
       updatedAt: r.updated_at,
     };
   }
 
-  setDeviceDecodeConfig(deviceId, decoderScript, channel) {
+  /**
+   * @param {string} deviceId
+   * @param {{ decoderScript?: string, channel?: string, downlinks?: unknown[], lorawanClass?: string|null }} opts Campos omitidos conservan el valor previo.
+   */
+  setDeviceDecodeConfig(deviceId, opts) {
     const did = String(deviceId);
+    const prev = this.getDeviceDecodeConfig(did);
+    const o = opts && typeof opts === 'object' ? opts : {};
+    const script = o.decoderScript !== undefined ? String(o.decoderScript) : prev.decoderScript;
+    const ch = o.channel !== undefined ? String(o.channel).trim().slice(0, 64) : prev.channel;
+    const down =
+      o.downlinks !== undefined ? this.normalizeDownlinksForStore(o.downlinks) : prev.downlinks;
+    let lorawanSql = null;
+    if (o.lorawanClass !== undefined) {
+      if (o.lorawanClass === null || String(o.lorawanClass).trim() === '') {
+        lorawanSql = null;
+      } else {
+        const u = String(o.lorawanClass)
+          .trim()
+          .toUpperCase();
+        lorawanSql = u === 'B' || u === 'C' ? u : 'A';
+      }
+    } else {
+      lorawanSql = prev.lorawanClass === '' ? null : prev.lorawanClass;
+    }
     const now = new Date().toISOString();
-    this.st.decodeUpsert.run(did, decoderScript != null ? String(decoderScript) : '', channel != null ? String(channel) : '', now);
+    this.st.decodeUpsert.run(did, script, ch, JSON.stringify(down), lorawanSql, now);
   }
 
   deleteUserDevice(userId, deviceId) {
@@ -1316,6 +1500,7 @@ class Store {
       email: r.email,
       role: r.role,
       displayName: r.display_name,
+      tag: r.tag || '',
     }));
   }
 

@@ -6,11 +6,16 @@
  * Opcional: SYSCOM_LNS_DEFAULT_USER_ID si el GW aún no está dado de alta (solo pruebas).
  *
  * PULL_DATA → PULL_ACK y hasta SYSCOM_LNS_PULL_BURST mensajes PULL_RESP por ciclo (cola priorizada).
- * GW_TX_ACK → confirma o rechaza la transmisión; downlinks de aplicación confirman FCnt y reintentan si aplica.
+ * GW_TX_ACK (0x05) → JSON **solo** en bytes ≥12 (no parsear el datagrama UDP entero). Preferir
+ * `globalThis.lnsEngine.handleTxAck` (store + eventos UI/SSE). Si el motor no está cargado, solo `store.lnsHandleGatewayTxAck`.
+ *
+ * Resiliencia: no se llama a process.exit por errores UDP (p. ej. EADDRINUSE). El API HTTP sigue vivo;
+ * se reintenta el bind cada LNS_UDP_BIND_RETRY_MS hasta tener éxito (o hasta stop() explícito).
  */
 'use strict';
 
 const dgram = require('dgram');
+const { rx2DefaultsFromEnvAndPlan } = require('./lorawan-regional-plan');
 
 const PROTOCOL_VERSION = 0x02;
 const GW_PUSH_DATA = 0x00;
@@ -24,6 +29,12 @@ function pullBurstLimit() {
   const n = parseInt(process.env.SYSCOM_LNS_PULL_BURST, 10);
   if (!Number.isFinite(n)) return 1;
   return Math.max(1, Math.min(20, n));
+}
+
+function bindRetryMs() {
+  const n = parseInt(process.env.LNS_UDP_BIND_RETRY_MS || '30000', 10);
+  if (!Number.isFinite(n)) return 30000;
+  return Math.max(5000, Math.min(24 * 60 * 60 * 1000, n));
 }
 
 function gwAck(version, token2, identifier) {
@@ -45,20 +56,52 @@ function sendUdp(socket, buf, rinfo) {
  *   store: object,
  *   processPushDataJson: (userId: string, json: object) => void,
  * }} opts
+ * @returns {{ stop: () => void }}
  */
 function startSemtechUdpLns(opts) {
   const { port, store, processPushDataJson } = opts;
-  const socket = dgram.createSocket('udp4');
+  const retryMs = bindRetryMs();
+  let stopped = false;
+  /** @type {import('dgram').Socket | null} */
+  let liveSocket = null;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let retryTimer = null;
 
-  socket.on('error', (err) => {
-    console.error('[LNS-UDP]', err.message);
-    if (err.code === 'EADDRINUSE') {
-      console.error(`[LNS-UDP] Puerto ${port} en uso. Cambie LNS_UDP_PORT o libere el puerto.`);
-      process.exit(1);
+  function clearRetryTimer() {
+    if (retryTimer) {
+      clearTimeout(retryTimer);
+      retryTimer = null;
     }
-  });
+  }
 
-  socket.on('message', (msg, rinfo) => {
+  function safeCloseCurrent() {
+    if (!liveSocket) return;
+    const s = liveSocket;
+    liveSocket = null;
+    try {
+      s.removeAllListeners();
+      s.close();
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function scheduleRetry(reason) {
+    if (stopped) return;
+    if (retryTimer) return;
+    const sec = Math.round(retryMs / 1000);
+    console.warn(
+      `[LNS-UDP] ${reason || 'Error UDP'} — API HTTP sigue activa. Reintento de bind udp/0.0.0.0:${port} en ${sec}s (LNS_UDP_BIND_RETRY_MS).`
+    );
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      if (!stopped) attemptBind();
+    }, retryMs);
+  }
+
+  function onMessage(msg, rinfo) {
+    const s = liveSocket;
+    if (!s) return;
     if (msg.length < 4) return;
     const version = msg[0];
     if (version !== PROTOCOL_VERSION) return;
@@ -67,7 +110,7 @@ function startSemtechUdpLns(opts) {
 
     if (id === GW_PULL_DATA) {
       if (msg.length < 12) return;
-      sendUdp(socket, gwAck(version, token, GW_PULL_ACK), rinfo);
+      sendUdp(s, gwAck(version, token, GW_PULL_ACK), rinfo);
       const mac = msg.subarray(4, 12);
       const gwNorm = store.lnsResolveGatewayEuiNorm(mac);
       if (gwNorm && typeof store.lnsDequeuePullResp === 'function') {
@@ -83,7 +126,7 @@ function startSemtechUdpLns(opts) {
             pkt[2] = token[1];
             pkt[3] = GW_PULL_RESP;
             inner.copy(pkt, 4);
-            sendUdp(socket, pkt, rinfo);
+            sendUdp(s, pkt, rinfo);
             if (row.trackTxAck && typeof store.lnsPullRespEnterAwaitTxAck === 'function') {
               try {
                 store.lnsPullRespEnterAwaitTxAck(row.id, gwNorm, token[0], token[1]);
@@ -113,9 +156,14 @@ function startSemtechUdpLns(opts) {
         return;
       }
       const gwNorm = store.lnsResolveGatewayEuiNorm(mac);
-      if (!gwNorm || typeof store.lnsHandleGatewayTxAck !== 'function') return;
+      if (!gwNorm) return;
       try {
-        store.lnsHandleGatewayTxAck(gwNorm, token, jsonObj);
+        const eng = typeof globalThis !== 'undefined' && globalThis.lnsEngine;
+        if (eng && typeof eng.handleTxAck === 'function') {
+          eng.handleTxAck(gwNorm, token, jsonObj);
+        } else if (typeof store.lnsHandleGatewayTxAck === 'function') {
+          store.lnsHandleGatewayTxAck(gwNorm, token, jsonObj);
+        }
       } catch (e) {
         console.error('[LNS-UDP] TX_ACK:', e.message);
       }
@@ -124,7 +172,7 @@ function startSemtechUdpLns(opts) {
 
     if (id === GW_PUSH_DATA) {
       if (msg.length < 12) {
-        sendUdp(socket, gwAck(version, token, GW_PUSH_ACK), rinfo);
+        sendUdp(s, gwAck(version, token, GW_PUSH_ACK), rinfo);
         return;
       }
       const mac = msg.subarray(4, 12);
@@ -134,11 +182,11 @@ function startSemtechUdpLns(opts) {
         jsonObj = raw.trim() ? JSON.parse(raw) : {};
       } catch (e) {
         console.warn('[LNS-UDP] JSON inválido desde', rinfo.address, e.message);
-        sendUdp(socket, gwAck(version, token, GW_PUSH_ACK), rinfo);
+        sendUdp(s, gwAck(version, token, GW_PUSH_ACK), rinfo);
         return;
       }
 
-      sendUdp(socket, gwAck(version, token, GW_PUSH_ACK), rinfo);
+      sendUdp(s, gwAck(version, token, GW_PUSH_ACK), rinfo);
 
       let userIds = store.findUserIdsBySemtechGatewayMac8(mac);
       const defUid = process.env.SYSCOM_LNS_DEFAULT_USER_ID;
@@ -164,17 +212,48 @@ function startSemtechUdpLns(opts) {
       } catch (e) {
         console.error('[LNS-UDP] Error al procesar PUSH_DATA:', e.message);
       }
-      return;
     }
-  });
+  }
 
-  socket.bind(port, '0.0.0.0', () => {
-    console.log(
-      `[LNS-UDP] Semtech GWMP en udp/0.0.0.0:${port} — Packet Forward tipo Semtech → IP pública de este servidor y puerto ${port}`
-    );
-  });
+  function attemptBind() {
+    if (stopped) return;
+    clearRetryTimer();
+    safeCloseCurrent();
 
-  return socket;
+    const socket = dgram.createSocket('udp4');
+    liveSocket = socket;
+
+    socket.on('error', (err) => {
+      console.error('[LNS-UDP]', err.message, err.code ? `(${err.code})` : '');
+      safeCloseCurrent();
+      const reason =
+        err.code === 'EADDRINUSE'
+          ? `Puerto ${port} ocupado (EADDRINUSE)`
+          : `Socket UDP (${err.code || 'error'})`;
+      scheduleRetry(reason);
+    });
+
+    socket.on('message', onMessage);
+
+    socket.bind(port, '0.0.0.0', () => {
+      if (stopped || liveSocket !== socket) return;
+      clearRetryTimer();
+      const eff = rx2DefaultsFromEnvAndPlan();
+      console.log(
+        `[LNS-UDP] Semtech GWMP activo: udp/0.0.0.0:${port} — plan ${eff.planId}, RX2 efectivo ${eff.freq} MHz ${eff.datr} — packet forwarder → IP pública:${port}`
+      );
+    });
+  }
+
+  attemptBind();
+
+  return {
+    stop() {
+      stopped = true;
+      clearRetryTimer();
+      safeCloseCurrent();
+    },
+  };
 }
 
 module.exports = { startSemtechUdpLns };

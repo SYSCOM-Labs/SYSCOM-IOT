@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import './DeviceList.css';
-import { Battery, Loader, Plus, X, Settings, UserPlus, RefreshCw } from 'lucide-react';
+import { Battery, ChevronLeft, ChevronRight, Loader, Plus, X, Settings, UserPlus, RefreshCw } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import ActionMenu from '../components/ActionMenu';
@@ -23,19 +23,33 @@ import {
   filterDeviceTemplatesByQuery,
   getDefaultTemplateId,
   getDeviceTemplates,
+  normalizeTemplateLorawanClass,
   persistTemplateForDeviceId,
 } from '../services/deviceTemplates';
 import { saveTelemetry, getLatestDeviceData, getUsers } from '../services/localAuth';
 import { applyStaleOfflineConnectStatus, isDeviceVisuallyOnline } from '../utils/deviceConnectionStatus';
+import { mergeDeviceFromLatestRow } from '../utils/mergeDeviceFromLatest';
 import { SYSCOM_REALTIME_TELEMETRY } from '../constants/realtimeEvents';
 import { ROUTES } from '../constants/routes';
 
-const CHANNEL_PRESETS = ['EU868', 'US915', 'AS923-1', 'AS923-2', 'AS923-3', 'AU915', 'IN865', 'KR920', 'RU864'];
+/** Atajos para el campo «Canal plantilla» = FPort de aplicación (1–223); no son MHz ni banda del gateway. */
+const CHANNEL_PRESETS = ['1', '2', '85'];
 
-const EMPTY_CREATE = { devEUI: '', appEUI: '', appKey: '', displayName: '', tag: '' };
+const DEVICE_LIST_PAGE_SIZES = [5, 10, 25, 50, 100];
 
-/** Validación OTAA completa para alta de sensor (longitudes hex exactas). */
-function computeSensorFormValidation(form) {
+const EMPTY_CREATE = { devEUI: '', appEUI: '', appKey: '', displayName: '', etiqueta: '' };
+
+/** A partir del nombre de plantilla, fija el tag de producto permitido en listado (solo UC300 / WS101). */
+function inferProductTagFromTemplate(tpl) {
+  if (!tpl || !tpl.modelo) return '';
+  const m = String(tpl.modelo).trim().toLowerCase();
+  if (m.includes('ws101')) return 'ws101';
+  if (m.includes('uc300')) return 'uc300';
+  return '';
+}
+
+/** Validación OTAA completa para alta de sensor (longitudes hex exactas). El tag de producto sale solo de la plantilla. */
+function computeSensorFormValidation(form, selectedDeviceTemplate) {
   const devHex = String(form.devEUI || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
   const appEui = String(form.appEUI || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
   const appKey = String(form.appKey || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
@@ -52,10 +66,16 @@ function computeSensorFormValidation(form) {
   if (!String(form.displayName || '').trim()) {
     errors.push('Indique el nombre del dispositivo.');
   }
-  return { ok: errors.length === 0, errors, devHex, appEui, appKey };
+  const inferred = inferProductTagFromTemplate(selectedDeviceTemplate);
+  if (inferred !== 'uc300' && inferred !== 'ws101') {
+    errors.push(
+      'El modelo del producto debe obtenerse de una plantilla UC300 o WS101. Use «Atrás» y elija plantilla predeterminada u otra plantilla.'
+    );
+  }
+  return { ok: errors.length === 0, errors, devHex, appEui, appKey, productTag: inferred };
 }
 
-/** Coincidencia por modelo, DevEUI/sn/deviceId, nombre, etiqueta (insensible a mayúsculas y espacios en hex). */
+/** Coincidencia por nombre, notas/etiqueta, modelo, DevEUI/sn/deviceId, tag (insensible a mayúsculas y hex). */
 function deviceMatchesListSearch(device, query) {
   const raw = String(query || '').trim().toLowerCase();
   if (!raw) return true;
@@ -67,6 +87,7 @@ function deviceMatchesListSearch(device, query) {
     device.devEUI,
     device.devEui,
     device.tag,
+    device.notes,
   ]
     .filter((x) => x != null && String(x).trim() !== '')
     .map((x) => String(x).toLowerCase());
@@ -124,6 +145,8 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
   const [decoderForm, setDecoderForm] = useState({ decoderScript: '', channel: '' });
   const [loadingDecode, setLoadingDecode] = useState(false);
   const [renewingLicenseId, setRenewingLicenseId] = useState(null);
+  const [deviceListPage, setDeviceListPage] = useState(1);
+  const [deviceListPageSize, setDeviceListPageSize] = useState(10);
 
   const loadDevices = async () => {
     setLoading(true);
@@ -153,7 +176,11 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
   useEffect(() => {
     if (!deviceIdParam) {
       setShowDashboard(false);
-      setActiveDevice(null);
+      // En la lista no hay :deviceId en la URL; no vaciar activeDevice si hay modal (editar / downlink),
+      // porque el refresco de `devices` (polling/SSE) re-ejecutaría este efecto y cerraría el modal.
+      if (!modalType) {
+        setActiveDevice(null);
+      }
       return;
     }
     if (loading) return;
@@ -165,7 +192,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
     } else {
       navigate(ROUTES.dispositivos, { replace: true });
     }
-  }, [deviceIdParam, devices, loading, navigate]);
+  }, [deviceIdParam, devices, loading, navigate, modalType]);
 
   useEffect(() => {
     let interval;
@@ -178,20 +205,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
             prevDevices.map((dev) => {
               const localUpdate = latestData.find((d) => d.deviceId.toString() === dev.deviceId.toString());
               if (localUpdate && localUpdate.properties) {
-                const updatedStatus =
-                  localUpdate.properties.connectStatus || localUpdate.properties.status || dev.connectStatus;
-                const updatedBattery =
-                  localUpdate.properties.electricity !== undefined
-                    ? localUpdate.properties.electricity
-                    : dev.electricity;
-                const merged = {
-                  ...dev,
-                  connectStatus: updatedStatus,
-                  electricity: updatedBattery,
-                  lastUpdateTime:
-                    localUpdate.timestamp > (dev.lastUpdateTime || 0) ? localUpdate.timestamp : dev.lastUpdateTime,
-                };
-                return applyStaleOfflineConnectStatus(merged);
+                return mergeDeviceFromLatestRow(dev, localUpdate);
               }
               return applyStaleOfflineConnectStatus(dev);
             })
@@ -219,20 +233,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
             return prevDevices.map((dev) => {
               const localUpdate = latestData.find((d) => d.deviceId.toString() === dev.deviceId.toString());
               if (localUpdate && localUpdate.properties) {
-                const updatedStatus =
-                  localUpdate.properties.connectStatus || localUpdate.properties.status || dev.connectStatus;
-                const updatedBattery =
-                  localUpdate.properties.electricity !== undefined
-                    ? localUpdate.properties.electricity
-                    : dev.electricity;
-                const merged = {
-                  ...dev,
-                  connectStatus: updatedStatus,
-                  electricity: updatedBattery,
-                  lastUpdateTime:
-                    localUpdate.timestamp > (dev.lastUpdateTime || 0) ? localUpdate.timestamp : dev.lastUpdateTime,
-                };
-                return applyStaleOfflineConnectStatus(merged);
+                return mergeDeviceFromLatestRow(dev, localUpdate);
               }
               return applyStaleOfflineConnectStatus(dev);
             });
@@ -263,7 +264,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
   }, [assignForDevice, isAdmin]);
 
   useEffect(() => {
-    if (!configForDevice || !isSuperAdmin) return;
+    if (!configForDevice || !isAdmin) return;
     let cancelled = false;
     setLoadingDecode(true);
     (async () => {
@@ -284,7 +285,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
     return () => {
       cancelled = true;
     };
-  }, [configForDevice, isSuperAdmin]);
+  }, [configForDevice, isAdmin]);
 
   const templatesForPicker = useMemo(
     () => filterDeviceTemplatesByQuery(templatePickQuery),
@@ -303,7 +304,28 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
     [devices, listSearchQuery]
   );
 
-  const sensorFormValid = useMemo(() => computeSensorFormValidation(createForm), [createForm]);
+  const deviceListTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(filteredDevices.length / deviceListPageSize)),
+    [filteredDevices.length, deviceListPageSize]
+  );
+
+  useEffect(() => {
+    setDeviceListPage(1);
+  }, [listSearchQuery, deviceListPageSize]);
+
+  useEffect(() => {
+    setDeviceListPage((p) => Math.min(p, deviceListTotalPages));
+  }, [deviceListTotalPages]);
+
+  const paginatedDevices = useMemo(() => {
+    const start = (deviceListPage - 1) * deviceListPageSize;
+    return filteredDevices.slice(start, start + deviceListPageSize);
+  }, [filteredDevices, deviceListPage, deviceListPageSize]);
+
+  const sensorFormValid = useMemo(
+    () => computeSensorFormValidation(createForm, selectedDeviceTemplate),
+    [createForm, selectedDeviceTemplate]
+  );
 
   const assignFiltered = useMemo(() => {
     const q = assignSearch.trim().toLowerCase();
@@ -379,7 +401,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
       });
       return;
     }
-    const { devHex, appEui, appKey } = sensorFormValid;
+    const { devHex, appEui, appKey, productTag } = sensorFormValid;
     const name = createForm.displayName.trim();
     setSavingDevice(true);
     try {
@@ -389,8 +411,13 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
         devEUI: devHex,
         appEUI: appEui,
         appKey: appKey,
-        tag: createForm.tag.trim(),
-        notes: '',
+        tag: String(productTag || '').trim().toLowerCase(),
+        notes: String(createForm.etiqueta || '')
+          .trim()
+          .slice(0, 500),
+        lorawanClass: selectedDeviceTemplate
+          ? normalizeTemplateLorawanClass(selectedDeviceTemplate.lorawanClass)
+          : 'A',
       });
 
       let templateApplyFailed = false;
@@ -532,7 +559,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
               <input
                 type="search"
                 className="search-input glass"
-                placeholder="Modelo, DevEUI, nombre…"
+                placeholder="Nombre, etiqueta, DevEUI…"
                 value={listSearchQuery}
                 onChange={(e) => onListSearchQueryChange(e.target.value)}
                 aria-label="Filtrar dispositivos"
@@ -577,11 +604,11 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
             {filteredDevices.length === 0 && devices.length > 0 && (
               <tr>
                 <td colSpan={7} className="device-table-empty-filter">
-                  No hay dispositivos que coincidan con «{listSearchQuery.trim()}». Prueba con modelo, DevEUI o nombre.
+                  No hay dispositivos que coincidan con «{listSearchQuery.trim()}». Prueba con nombre, etiqueta, DevEUI o modelo.
                 </td>
               </tr>
             )}
-            {filteredDevices.map((device) => {
+            {paginatedDevices.map((device) => {
               const lic = licenseExpiryDisplay(device);
               const visuallyOnline = isDeviceVisuallyOnline(device);
               return (
@@ -635,15 +662,6 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                         <button
                           type="button"
                           className="btn-icon super-device-btn"
-                          title="Configuración: decoder y canal"
-                          aria-label="Configuración"
-                          onClick={() => setConfigForDevice(device)}
-                        >
-                          <Settings size={18} />
-                        </button>
-                        <button
-                          type="button"
-                          className="btn-icon super-device-btn"
                           title="Asignar dispositivo"
                           aria-label="Asignar dispositivo"
                           onClick={() => openAssignModal(device)}
@@ -651,6 +669,17 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                           <UserPlus size={18} />
                         </button>
                       </>
+                    )}
+                    {isAdmin && (
+                      <button
+                        type="button"
+                        className="btn-icon super-device-btn"
+                        title="Decoder y canal plantilla (FPort de aplicación); no es frecuencia del gateway"
+                        aria-label="Configuración decoder"
+                        onClick={() => setConfigForDevice(device)}
+                      >
+                        <Settings size={18} />
+                      </button>
                     )}
                     {isAdmin && (
                       <ActionMenu
@@ -680,6 +709,54 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
         </div>
       </div>
 
+      {filteredDevices.length > 0 && (
+        <div className="device-list-pagination glass card" role="navigation" aria-label="Paginación del listado">
+          <div className="device-list-pagination__sizes">
+            <label htmlFor="device-list-page-size">Mostrar</label>
+            <select
+              id="device-list-page-size"
+              className="glass device-list-pagination__select"
+              value={deviceListPageSize}
+              onChange={(e) => setDeviceListPageSize(Number(e.target.value))}
+            >
+              {DEVICE_LIST_PAGE_SIZES.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </select>
+            <span className="device-list-pagination__per">por página</span>
+          </div>
+          <div className="device-list-pagination__range" aria-live="polite">
+            {(deviceListPage - 1) * deviceListPageSize + 1}–
+            {Math.min(deviceListPage * deviceListPageSize, filteredDevices.length)} de {filteredDevices.length}
+          </div>
+          <div className="device-list-pagination__pages">
+            <button
+              type="button"
+              className="btn btn-secondary device-list-pagination__nav"
+              disabled={deviceListPage <= 1}
+              onClick={() => setDeviceListPage((p) => Math.max(1, p - 1))}
+              aria-label="Página anterior"
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <span className="device-list-pagination__current">
+              Página <strong>{deviceListPage}</strong> de <strong>{deviceListTotalPages}</strong>
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary device-list-pagination__nav"
+              disabled={deviceListPage >= deviceListTotalPages}
+              onClick={() => setDeviceListPage((p) => Math.min(deviceListTotalPages, p + 1))}
+              aria-label="Página siguiente"
+            >
+              <ChevronRight size={18} />
+            </button>
+          </div>
+        </div>
+      )}
+
       {modalType && activeDevice && (
         <DeviceActionsModal
           type={modalType}
@@ -706,13 +783,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
       )}
 
       {showCreateDevice && (
-        <div
-          className="modal-overlay"
-          role="presentation"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget && !savingDevice) closeCreateDeviceModal();
-          }}
-        >
+        <div className="modal-overlay" role="presentation">
           <div
             className={`modal-content glass device-create-modal ${createDeviceStep === 'form' ? 'device-create-modal--wide' : 'device-create-modal--chooser'}`}
             role="dialog"
@@ -732,9 +803,8 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
             {createDeviceStep === 'choose' && (
               <div className="device-create-choose">
                 <p className="device-create-hint device-create-hint--tight">
-                  El <strong>payload decoder</strong> permite al sistema interpretar los bytes que llegan del gateway y convertirlos en
-                  propiedades (temperatura, estado, etc.). Los <strong>downlinks</strong> definidos en la plantilla se copian a cada
-                  dispositivo al guardarlo.
+                  Al guardar se copian el <strong>decoder</strong> y los <strong>downlinks</strong> de la plantilla elegida. El modelo de
+                  producto (UC300 / WS101) se deduce del nombre de la plantilla.
                 </p>
                 <p className="device-create-choose-question">¿Cómo quieres dar de alta el dispositivo?</p>
                 <div
@@ -762,20 +832,12 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                     className="device-create-choose-card glass"
                     onClick={() => {
                       setSelectedDeviceTemplate(null);
-                      setCreateDeviceStep('form');
+                      setCreateDeviceStep('pickTemplate');
                     }}
                   >
-                    <span className="device-create-choose-title">Dispositivo en blanco</span>
-                    <span className="device-create-choose-desc">Sin decoder ni downlinks predefinidos. Podrás configurarlos después.</span>
-                  </button>
-                  <button
-                    type="button"
-                    className="device-create-choose-card glass"
-                    onClick={() => setCreateDeviceStep('pickTemplate')}
-                  >
-                    <span className="device-create-choose-title">Otra plantilla</span>
+                    <span className="device-create-choose-title">Elegir plantilla</span>
                     <span className="device-create-choose-desc">
-                      Elige otro modelo desde la lista: decoder y downlinks de esa plantilla.
+                      Lista de modelos: decoder, downlinks y modelo de producto según la fila que elijas.
                     </span>
                   </button>
                 </div>
@@ -835,33 +897,6 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
 
             {createDeviceStep === 'form' && (
               <>
-                {selectedDeviceTemplate && (
-                  <div className="device-create-template-banner glass">
-                    Plantilla: <strong>{selectedDeviceTemplate.modelo}</strong> · {selectedDeviceTemplate.marca} — al guardar se copian el
-                    decoder (servidor) y {selectedDeviceTemplate.downlinks?.length || 0} downlink(s) (este navegador).
-                    <button
-                      type="button"
-                      className="btn btn-secondary device-create-template-change"
-                      onClick={() => setCreateDeviceStep('pickTemplate')}
-                    >
-                      Cambiar plantilla
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-secondary device-create-template-change"
-                      onClick={() => {
-                        setSelectedDeviceTemplate(null);
-                        setCreateDeviceStep('choose');
-                      }}
-                    >
-                      Quitar plantilla
-                    </button>
-                  </div>
-                )}
-                <p className="device-create-hint">
-                  Registro LoRaWAN (OTAA): todos los campos marcados son obligatorios. El identificador interno será el
-                  DevEUI normalizado.
-                </p>
                 {createNotify && (
                   <FormToast
                     type={createNotify.type}
@@ -869,13 +904,6 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                     onDismiss={() => setCreateNotify(null)}
                     durationMs={createNotify.type === 'error' ? 9000 : 4000}
                   />
-                )}
-                {!sensorFormValid.ok && (
-                  <ul className="device-create-validation-hint glass" aria-live="polite">
-                    {sensorFormValid.errors.map((line) => (
-                      <li key={line}>{line}</li>
-                    ))}
-                  </ul>
                 )}
                 <form onSubmit={handleCreateDevice} className="device-create-form">
                   <div className="device-create-grid">
@@ -929,12 +957,14 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                       />
                     </label>
                     <label className="device-modal-field">
-                      <span className="device-modal-label-text">Etiqueta (identificación)</span>
+                      <span className="device-modal-label-text">Etiqueta (opcional)</span>
                       <input
                         className="glass device-modal-input device-modal-input--lg"
-                        value={createForm.tag}
-                        onChange={(e) => setCreateForm({ ...createForm, tag: e.target.value })}
-                        placeholder="Ej. sitio, edificio, cliente"
+                        value={createForm.etiqueta}
+                        onChange={(e) => setCreateForm({ ...createForm, etiqueta: e.target.value })}
+                        placeholder="Código interno, zona, responsable… (búsqueda en Dispositivos)"
+                        maxLength={500}
+                        autoComplete="off"
                       />
                     </label>
                   </div>
@@ -959,13 +989,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
       )}
 
       {assignForDevice && (
-        <div
-          className="modal-overlay"
-          role="presentation"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget && !savingDevice) setAssignForDevice(null);
-          }}
-        >
+        <div className="modal-overlay" role="presentation">
           <div
             className="modal-content glass device-create-modal device-assign-modal"
             role="dialog"
@@ -1026,13 +1050,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
       )}
 
       {configForDevice && (
-        <div
-          className="modal-overlay"
-          role="presentation"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget && !savingDevice) setConfigForDevice(null);
-          }}
-        >
+        <div className="modal-overlay" role="presentation">
           <div
             className="modal-content glass device-create-modal device-decode-modal"
             role="dialog"
@@ -1045,22 +1063,25 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
               </button>
             </div>
             <p className="device-create-hint">
-              Pega el código del payload decoder (p. ej. función JavaScript para transformar bytes en campos). El canal indica la banda LoRaWAN de referencia.
+              <strong>Canal plantilla (FPort de aplicación)</strong> (1–223): metadato del decoder/downlink;{' '}
+              <strong>no</strong> es la frecuencia LoRaWAN del gateway (eso es la banda en Gateways LoRaWAN). Se usa en downlinks e
+              ingesta si el uplink no trae fPort; debe alinearse con la plantilla del modelo. Pegue el <strong>payload decoder</strong>{' '}
+              (JavaScript) en el servidor para este dispositivo.
             </p>
             {loadingDecode ? (
               <div className="assign-user-empty"><Loader className="spin" /> Cargando…</div>
             ) : (
               <form onSubmit={handleSaveDecodeConfig} className="device-create-form">
                 <label className="device-modal-field">
-                  <span className="device-modal-label-text">Canal</span>
+                  <span className="device-modal-label-text">Canal plantilla (FPort aplicación)</span>
                   <input
                     className="glass device-modal-input device-modal-input--lg"
-                    list="lorawan-channel-presets"
+                    list="decode-fport-presets"
                     value={decoderForm.channel}
                     onChange={(e) => setDecoderForm({ ...decoderForm, channel: e.target.value })}
-                    placeholder="Ej. EU868"
+                    placeholder="Ej. 85 (FPort Milesight)"
                   />
-                  <datalist id="lorawan-channel-presets">
+                  <datalist id="decode-fport-presets">
                     {CHANNEL_PRESETS.map((c) => (
                       <option key={c} value={c} />
                     ))}

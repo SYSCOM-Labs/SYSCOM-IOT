@@ -9,6 +9,7 @@ import {
   checkSetup,
   completeFirstPassword as submitFirstPassword,
   debugImpersonate as apiDebugImpersonate,
+  refreshSession,
 } from '../services/localAuth';
 import { fixUtf8Mojibake } from '../utils/fixUtf8Mojibake';
 
@@ -68,17 +69,31 @@ export const AuthProvider = ({ children }) => {
         return;
       }
 
-      if (isTokenValid()) {
-        const stored = localStorage.getItem('local_token');
-        setToken(stored);
-        const localUser = getLocalUser();
-        setUser(normalizeAuthUser(localUser));
-        setUserProfile(normalizeAuthUser(localUser));
+      const stored = localStorage.getItem('local_token');
+      if (stored && !isTokenValid()) {
         try {
-          const profile = await getMe();
-          setUserProfile(normalizeAuthUser(profile));
+          await refreshSession();
         } catch (e) {
-          console.warn('Could not refresh profile:', e.message);
+          const payload = getLocalUser();
+          if (e?.code !== 'MUST_CHANGE_PASSWORD' || !payload?.mustChangePassword) {
+            localLogout();
+          }
+        }
+      }
+
+      const still = localStorage.getItem('local_token');
+      const jwtPayload = getLocalUser();
+      if (still && (isTokenValid() || jwtPayload?.mustChangePassword)) {
+        setToken(still);
+        setUser(normalizeAuthUser(jwtPayload));
+        setUserProfile(normalizeAuthUser(jwtPayload));
+        if (isTokenValid()) {
+          try {
+            const profile = await getMe();
+            setUserProfile(normalizeAuthUser(profile));
+          } catch (e) {
+            console.warn('Could not refresh profile:', e.message);
+          }
         }
       } else {
         try {
@@ -92,6 +107,25 @@ export const AuthProvider = ({ children }) => {
     };
     restoreSession();
   }, []);
+
+  useEffect(() => {
+    const onRefreshed = (e) => {
+      const t = e.detail?.token;
+      if (typeof t === 'string' && t) setToken(t);
+    };
+    window.addEventListener('syscom-token-refreshed', onRefreshed);
+    return () => window.removeEventListener('syscom-token-refreshed', onRefreshed);
+  }, []);
+
+  /** Renovar JWT periódicamente (kiosco / JWT corto en servidor). */
+  useEffect(() => {
+    if (!token) return undefined;
+    const sixHours = 6 * 60 * 60 * 1000;
+    const id = window.setInterval(() => {
+      refreshSession().catch(() => {});
+    }, sixHours);
+    return () => window.clearInterval(id);
+  }, [token]);
 
   const r = userProfile?.role;
   const isSuperAdmin = r === 'superadmin';

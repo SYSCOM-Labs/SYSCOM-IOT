@@ -22,6 +22,16 @@
   animation: modalIn 0.3s ease;
 }
 
+.device-actions-modal--downlink {
+  max-width: min(920px, 96vw);
+  width: min(920px, 96vw);
+  overflow-x: hidden;
+}
+
+.device-actions-modal--downlink .modal-body {
+  overflow-x: hidden;
+}
+
 @keyframes modalIn {
   from { opacity: 0; transform: translateY(20px); }
   to { opacity: 1; transform: translateY(0); }
@@ -88,23 +98,32 @@
   margin-bottom: 20px;
   max-height: 300px;
   overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 8px;
+}
+
+.device-actions-modal--downlink .downlink-list {
+  max-height: min(52vh, 520px);
 }
 
 .downlink-row {
   padding: 12px;
   border-radius: 12px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   background: rgba(255, 255, 255, 0.03);
   border: 1px solid var(--border-color);
+  min-width: 0;
 }
 
 .row-inputs {
-  flex: 1;
+  flex: 1 1 200px;
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
+  min-width: 0;
 }
 
 .row-inputs input {

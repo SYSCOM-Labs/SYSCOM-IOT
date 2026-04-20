@@ -48,7 +48,7 @@ En **Ajustes** la app mostrará la URL pública de ingesta usando el origen actu
 
 ### Semtech UDP (Packet Forward) y Render
 
-El **LNS integrado por UDP** (`LNS_UDP_PORT`, protocolo Semtech GWMP) **no** puede usarse en un Web Service de Render: solo entra tráfico **HTTP/HTTPS** al contenedor, no UDP 1700. Para Packet Forward **Semtech** hacia SYSCOM IoT necesitas un servidor propio (VM, bare metal, Raspberry Pi con IP pública, etc.) con `LNS_UDP_PORT=1700` y reenvío de puertos en el router. Las URLs **HTTPS** de ingesta sí siguen funcionando en Render.
+El **LNS integrado por UDP** (por defecto `LNS_UDP_PORT=1700`, protocolo Semtech GWMP) **no** puede usarse en un Web Service de Render: solo entra tráfico **HTTP/HTTPS** al contenedor, no UDP. El blueprint [`render.yaml`](../render.yaml) fija `LNS_UDP_PORT=0` para no sugerir un GWMP “listo” sin UDP. Para Packet Forward **Semtech** hacia SYSCOM IoT use un servidor propio (VM, bare metal, Raspberry Pi con IP pública, etc.) o el ejemplo [`docker-compose.yml`](../docker-compose.yml) con **1700/udp** publicado y reenvío en el router. Las URLs **HTTPS** de ingesta siguen funcionando en Render.
 
 ## Desarrollo local (sin cambios)
 
