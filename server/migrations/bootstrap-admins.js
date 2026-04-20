@@ -12,6 +12,8 @@
 const BOOTSTRAP_SUPERADMINS = [
   { email: 'michelle.guereque@syscom.mx', profileName: 'Michelle Güereque' },
   { email: 'joanna.molina@syscom.mx', profileName: 'Joanna Molina' },
+  { email: 'xavier.guereque@syscom.mx', profileName: 'Xavier Guereque' },
+  { email: 'daniel.rodriguez@syscom.mx', profileName: 'Daniel Rodriguez' },
 ];
 
 const LOWER_EMAIL_SET = new Set(BOOTSTRAP_SUPERADMINS.map((r) => String(r.email).trim().toLowerCase()));
