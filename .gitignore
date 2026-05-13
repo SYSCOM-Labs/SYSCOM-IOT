@@ -74,6 +74,19 @@ Desktop.ini
 *.sln
 *.sw?
 
+# Asistentes IA (configuración local — no compartir entre máquinas)
+CLAUDE.md
+**/CLAUDE.md
+.claude/
+**/.claude/
+.cursor/
+**/.cursor/
+.cursorrules
+.cursorignore
+.aider*
+.windsurfrules
+.continue/
+
 # Certificados / claves privadas
 *.pem
 *.crt
