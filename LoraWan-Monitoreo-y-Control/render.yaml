@@ -10,7 +10,8 @@ services:
     region: oregon
     # Incluir devDependencies: Vite está ahí y hace falta para `npm run build`.
     buildCommand: npm install --include=dev && npm run build
-    startCommand: npm start
+    # En desarrollo `npm start` levanta API + Vite; en producción usamos solo la API sirviendo dist/.
+    startCommand: npm run start:prod
     healthCheckPath: /api/setup/status
     envVars:
       - key: NODE_VERSION

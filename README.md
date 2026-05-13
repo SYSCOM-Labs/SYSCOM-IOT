@@ -21,24 +21,20 @@ La raíz incluye un `package.json` que **reenvía** los comandos a `LoraWan-Moni
 
 ```bash
 npm run install:app
-npm run dev
-```
-
-En **otra** terminal, la API:
-
-```bash
 npm start
 ```
+
+`npm start` arranca API (puerto 3001) y Vite dev (puerto 5173) en un solo proceso con logs prefijados; **Ctrl+C** detiene ambos.
 
 ### Desde la carpeta del subproyecto
 
 ```bash
 cd LoraWan-Monitoreo-y-Control
 npm install
-npm run dev
+npm start
 ```
 
-En otra terminal, desde la misma carpeta: `npm start` (puertos y `.env`: ver README del subproyecto).
+Puertos y variables `.env`: ver README del subproyecto.
 
 ## Requisitos
 

@@ -10,6 +10,7 @@
     "install:app": "npm install --prefix LoraWan-Monitoreo-y-Control",
     "dev": "npm run dev --prefix LoraWan-Monitoreo-y-Control",
     "start": "npm start --prefix LoraWan-Monitoreo-y-Control",
+    "start:api": "npm run start:api --prefix LoraWan-Monitoreo-y-Control",
     "start:prod": "npm run start:prod --prefix LoraWan-Monitoreo-y-Control",
     "build": "npm run build --prefix LoraWan-Monitoreo-y-Control",
     "production": "npm run production --prefix LoraWan-Monitoreo-y-Control",

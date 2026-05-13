@@ -27,27 +27,16 @@ npm install
 
 ## Desarrollo
 
-**Todo-en-uno:** no existe un script `npm` que levante **Vite y Express a la vez**; el flujo recomendado es **dos terminales**.
+**Todo-en-uno con `npm start`:** levanta backend (Express) y frontend (Vite con HMR) en el mismo proceso padre, con logs prefijados `[api]` / `[front]`. **Ctrl+C** detiene ambos a la vez.
 
 | Servicio | Comando | URL / puerto por defecto |
 |----------|---------|---------------------------|
-| Frontend (HMR) | `npm run dev` | `http://127.0.0.1:5173` (puerto en `vite.config.js`) |
-| API + estáticos si hay `dist/` | `npm start` | `http://127.0.0.1:3001` (`PORT`, por defecto **3001**). Escucha en `0.0.0.0`. |
+| API + Vite (recomendado) | `npm start` | API en `http://127.0.0.1:3001`, front en `http://127.0.0.1:5173` |
+| Solo frontend | `npm run dev` | `http://127.0.0.1:5173` |
+| Solo backend (modo legacy) | `npm run start:api` | `http://127.0.0.1:3001` |
 | Proxy Vite | (automático) | Peticiones del navegador a `/api` → `http://localhost:3001` |
 
-**Terminal 1 — frontend:**
-
-```bash
-npm run dev
-```
-
-**Terminal 2 — backend:**
-
-```bash
-npm start
-```
-
-`npm start` ejecuta `scripts/start-with-env.mjs`, que solo añade `--env-file=.env` si el archivo existe; **sin `.env` la API arranca con valores por defecto del código** (adecuado para máquinas nuevas). No fijéis `NODE_ENV=production` en desarrollo sin definir `JWT_SECRET` (el servidor sale con error en producción sin él).
+`npm start` ejecuta `scripts/start-dev.mjs`, que internamente arranca Vite y la API; **carga `--env-file=.env` solo si el archivo existe**, así máquinas nuevas funcionan con valores por defecto. No fijéis `NODE_ENV=production` en desarrollo sin definir `JWT_SECRET` (el servidor sale con error en producción sin él).
 
 **HTTPS y certificados:** la configuración actual de Vite usa **HTTP** en el puerto de desarrollo. Si personalizáis Vite/servidor con **TLS** (proxy corporativo, certificado autofirmado), el navegador puede bloquear o avisar hasta que confiéis en el emisor o importéis la CA; SSE y `EventSource` también exigen un contexto seguro coherente con el origen del API.
 
@@ -75,9 +64,9 @@ Listado completo y comentarios: [`.env.example`](./.env.example).
 
 ## Detener el servidor
 
-- En cada terminal donde corre `npm run dev` o `npm start`, pulsad **Ctrl+C** una vez y confirmad si el shell lo pide.
-- Si tenéis **dos procesos** (dev + API), detened **ambos**; si solo queda uno, el front seguirá sin datos o el proxy fallará.
-- Si el puerto **3001** (o el que uséis) queda ocupado por un proceso huérfano, cerrad ese proceso o cambiad `PORT` antes de volver a arrancar (mensajes de error del servidor sugieren comprobaciones en Windows con `netstat`).
+- Con `npm start` (modo todo-en-uno) basta un único **Ctrl+C** en la terminal del padre: el wrapper propaga `SIGTERM` a Vite y a la API, y sale con el código del primero en caer.
+- Si arrancáis API y frontend por separado (`npm run start:api` + `npm run dev`), detened ambas terminales.
+- Si el puerto **3001** o **5173** queda ocupado por un proceso huérfano, cerrad ese proceso o cambiad `PORT` antes de volver a arrancar (en Windows: `netstat -ano | findstr :3001`).
 
 ## Producción
 
@@ -146,9 +135,10 @@ Definidos en `package.json` (no hay otros gestores versionados en el repo).
 
 | Script | Descripción |
 |--------|-------------|
-| `npm start` | Arranca `server/server.js` con `node --experimental-sqlite` y `--env-file=.env` si existe. |
-| `npm run start:prod` | Igual que `start` pero fuerza `NODE_ENV=production` (`scripts/start-production.mjs`). |
-| `npm run dev` | Servidor de desarrollo Vite (HMR). |
+| `npm start` | Arranca API (`server/server.js`) **y** Vite dev en paralelo con logs prefijados (`scripts/start-dev.mjs`). |
+| `npm run start:api` | Solo API: `server/server.js` con `node --experimental-sqlite` y `--env-file=.env` si existe. |
+| `npm run start:prod` | Solo API con `NODE_ENV=production` (`scripts/start-production.mjs`); requiere `npm run build` previo para que Express sirva `dist/`. |
+| `npm run dev` | Solo Vite dev (HMR). |
 | `npm run build` | Compilación de producción del frontend a `dist/`. |
 | `npm run production` | `build` + `start:prod` (un solo flujo para compilar y servir en modo producción). |
 | `npm run preview` | Previsualiza el build con el servidor estático de Vite. |
