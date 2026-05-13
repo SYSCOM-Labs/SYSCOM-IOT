@@ -1,0 +1,23 @@
+{
+  "name": "syscom-iot-repo",
+  "private": true,
+  "license": "MIT",
+  "description": "Monorepo SYSCOM-IOT: los scripts npm delegan en LoraWan-Monitoreo-y-Control",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "scripts": {
+    "install:app": "npm install --prefix LoraWan-Monitoreo-y-Control",
+    "dev": "npm run dev --prefix LoraWan-Monitoreo-y-Control",
+    "start": "npm start --prefix LoraWan-Monitoreo-y-Control",
+    "start:prod": "npm run start:prod --prefix LoraWan-Monitoreo-y-Control",
+    "build": "npm run build --prefix LoraWan-Monitoreo-y-Control",
+    "production": "npm run production --prefix LoraWan-Monitoreo-y-Control",
+    "lint": "npm run lint --prefix LoraWan-Monitoreo-y-Control",
+    "preview": "npm run preview --prefix LoraWan-Monitoreo-y-Control",
+    "verify": "npm run verify --prefix LoraWan-Monitoreo-y-Control",
+    "test": "npm test --prefix LoraWan-Monitoreo-y-Control",
+    "simulate:lns": "npm run simulate:lns --prefix LoraWan-Monitoreo-y-Control",
+    "reset:bootstrap": "npm run reset:bootstrap --prefix LoraWan-Monitoreo-y-Control"
+  }
+}

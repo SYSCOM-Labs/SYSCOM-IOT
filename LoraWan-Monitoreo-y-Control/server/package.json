@@ -1,0 +1,6 @@
+{
+  "name": "syscom-iot-server",
+  "private": true,
+  "license": "MIT",
+  "type": "commonjs"
+}

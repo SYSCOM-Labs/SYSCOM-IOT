@@ -1,0 +1,173 @@
+.dashboard-widget-device-link {
+  cursor: pointer;
+  border-radius: 8px;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  transition: color 0.15s, background 0.15s;
+}
+
+.dashboard-widget-device-link:hover {
+  color: var(--primary-color);
+  background: var(--primary-light);
+}
+
+.dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xl);
+}
+
+/* Tarjetas de widgets como el mockup (blanco flotante, sin borde pesado) */
+.dashboard--pricing-ui .widget-container.card.glass {
+  background: #ffffff;
+  border: none;
+  box-shadow: var(--shadow-md);
+}
+
+.dashboard--pricing-ui .widget-container.card.glass:hover {
+  box-shadow: var(--shadow-lg);
+}
+
+body.theme-dark .dashboard--pricing-ui .widget-container.card.glass {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+}
+
+.dashboard-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-md);
+}
+
+.dashboard-tab {
+  border: 1px solid transparent;
+  transition: var(--transition);
+}
+
+.dashboard-tab.active.glass {
+  border-color: color-mix(in srgb, var(--primary-color) 25%, var(--border-color));
+  background: var(--primary-light) !important;
+  color: var(--primary-dark) !important;
+  font-weight: 600;
+}
+
+.device-selector {
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  font-weight: 500;
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.device-selector option {
+  background-color: var(--bg-card);
+  color: var(--text-primary);
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr));
+  grid-auto-rows: minmax(160px, auto);
+  gap: var(--spacing-lg);
+  margin-top: var(--spacing-md);
+  margin-bottom: var(--spacing-xl);
+}
+
+.widget-container {
+  display: flex;
+  flex-direction: column;
+  transition: var(--transition);
+}
+
+.widget-container:not(.editing):hover {
+  box-shadow: var(--shadow-md);
+}
+
+.add-widget-card {
+  border-width: 2px !important;
+  border-color: color-mix(in srgb, var(--primary-color) 35%, var(--border-color)) !important;
+  background: color-mix(in srgb, var(--primary-light) 40%, var(--bg-card)) !important;
+}
+
+/* Modal panel (añadir widget) */
+.dashboard .modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgb(15 23 42 / 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: var(--spacing-md);
+  backdrop-filter: blur(6px);
+}
+
+.dashboard .modal-content.glass {
+  width: 100%;
+  max-width: 520px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: var(--spacing-lg);
+  animation: dashboardModalIn 0.28s ease;
+}
+
+@keyframes dashboardModalIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.dashboard-style-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 10px;
+}
+
+.dashboard-style-btn {
+  min-height: 76px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.25;
+  padding: 10px 8px !important;
+}
+
+.resize-handle {
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 20px;
+  height: 20px;
+  cursor: se-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--accent-blue) 50%);
+  opacity: 0.5;
+  border-bottom-right-radius: 12px;
+}
+
+.resize-handle:hover, .resize-handle:active {
+  opacity: 1;
+}
+
+.grid-span-2 {
+  grid-column: span 2;
+}
+
+@media (max-width: 1024px) {
+  .grid-span-2 {
+    grid-column: span 1;
+  }
+}

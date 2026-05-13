@@ -1,0 +1,6 @@
+{
+  "sseTelemetry": "telemetry",
+  "sseLns": "lns",
+  "windowTelemetryCustom": "syscom-realtime-telemetry",
+  "windowLnsCustom": "syscom-realtime-lns"
+}

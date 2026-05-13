@@ -1,0 +1,57 @@
+.semicircle-gauge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+.semicircle-gauge--compact .semicircle-gauge__svg {
+  max-height: 140px;
+}
+
+.semicircle-gauge__meta {
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.semicircle-gauge__title {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.semicircle-gauge__sub {
+  font-size: 0.72rem;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.semicircle-gauge__svg {
+  width: 100%;
+  max-width: 280px;
+  height: auto;
+  display: block;
+}
+
+.semicircle-gauge__value-block {
+  margin-top: -8px;
+  text-align: center;
+}
+
+.semicircle-gauge__value {
+  font-size: 1.75rem;
+  font-weight: 800;
+  color: #0f172a;
+  letter-spacing: -0.02em;
+}
+
+.semicircle-gauge--compact .semicircle-gauge__value {
+  font-size: 1.35rem;
+}
+
+.semicircle-gauge__unit {
+  display: block;
+  font-size: 0.85rem;
+  color: #64748b;
+  font-weight: 600;
+  margin-top: 2px;
+}

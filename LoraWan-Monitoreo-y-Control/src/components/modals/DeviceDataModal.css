@@ -1,0 +1,855 @@
+.device-data-modal {
+  max-width: min(1040px, 96vw);
+  width: 96%;
+  max-height: min(92vh, 900px);
+  display: flex;
+  flex-direction: column;
+}
+
+.device-data-modal .modal-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.device-data-tabs {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 0.5rem;
+}
+
+.device-data-tab {
+  border: none;
+  background: transparent;
+  color: var(--text-muted, rgba(255, 255, 255, 0.55));
+  padding: 0.45rem 0.85rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: background 0.15s, color 0.15s;
+}
+
+.device-data-tab:hover {
+  color: var(--text-primary, #fff);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.device-data-tab--active {
+  color: var(--text-primary, #fff);
+  background: rgba(99, 140, 255, 0.2);
+}
+
+.device-data-panel {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 0.25rem;
+}
+
+.device-data-table-wrap {
+  border-radius: 10px;
+  overflow: auto;
+  max-height: min(42vh, 420px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.device-data-table-wrap .data-table {
+  margin: 0;
+}
+
+.device-data-table-wrap td {
+  vertical-align: top;
+  word-break: break-word;
+  max-width: min(52vw, 420px);
+}
+
+.device-data-value-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.device-data-json-block {
+  background: rgba(0, 0, 0, 0.28);
+  padding: 1rem;
+  border-radius: 10px;
+  max-height: min(36vh, 360px);
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.device-data-json-block pre {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.device-data-history-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.75rem;
+}
+
+.device-data-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.device-data-history-card {
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.03);
+  overflow: hidden;
+}
+
+.device-data-history-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.device-data-history-card__head:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.device-data-history-time {
+  font-weight: 600;
+  font-size: 0.88rem;
+  white-space: nowrap;
+}
+
+.device-data-history-chevron {
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.device-data-history-summary {
+  font-size: 0.8rem;
+  color: var(--text-muted, rgba(255, 255, 255, 0.6));
+  line-height: 1.45;
+  margin-top: 0.25rem;
+  word-break: break-word;
+}
+
+.device-data-history-body {
+  padding: 0 0.85rem 0.85rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.device-data-history-body pre {
+  margin: 0.75rem 0 0;
+  font-size: 0.75rem;
+  line-height: 1.45;
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.device-data-modal .spin {
+  animation: device-data-spin 0.85s linear infinite;
+}
+
+@keyframes device-data-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.device-data-muted {
+  color: var(--text-muted, rgba(255, 255, 255, 0.55));
+  font-size: 0.85rem;
+}
+
+.device-data-section-title {
+  margin: 0 0 0.65rem;
+  font-size: 1rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+/* ── Premium modal (glassmorphism, tabs, cards) ───────────────────── */
+.device-data-premium-overlay {
+  backdrop-filter: blur(10px);
+}
+
+.device-data-premium-shell {
+  max-width: min(1080px, 96vw);
+  width: 96%;
+  max-height: min(92vh, 900px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 8px;
+  padding: 0;
+  overflow: hidden;
+  background: linear-gradient(145deg, rgba(22, 28, 48, 0.92) 0%, rgba(10, 12, 22, 0.96) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow:
+    0 24px 80px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(18px);
+}
+
+.device-data-premium-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1.1rem 1.25rem 0.85rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.device-data-premium-title {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  position: relative;
+  color: var(--text-primary, #fff);
+}
+
+.device-data-premium-title__glow {
+  position: absolute;
+  left: -4px;
+  top: -6px;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: radial-gradient(circle, rgba(99, 140, 255, 0.45) 0%, transparent 70%);
+  filter: blur(8px);
+  pointer-events: none;
+}
+
+.device-data-premium-title h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.device-data-premium-sub {
+  margin: 0.2rem 0 0;
+  font-size: 0.82rem;
+  color: var(--text-muted, rgba(255, 255, 255, 0.55));
+}
+
+.device-data-premium-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.8em;
+}
+
+.device-data-premium-close {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-primary, #fff);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.device-data-premium-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.device-data-premium-snapshot-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  padding: 0.55rem 1.25rem;
+  font-size: 0.82rem;
+  background: linear-gradient(90deg, rgba(99, 140, 255, 0.18), rgba(56, 189, 248, 0.12));
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-primary, #fff);
+}
+
+.device-data-premium-snapshot-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.device-data-premium-snapshot-link {
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 8px;
+  padding: 0.3rem 0.65rem;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.device-data-premium-snapshot-link:hover {
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.device-data-premium-snapshot-clear {
+  margin-left: auto;
+  border: none;
+  border-radius: 8px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+}
+
+.device-data-premium-snapshot-clear:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.device-data-premium-tabs {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.65rem 1rem 0;
+  flex-wrap: wrap;
+}
+
+.device-data-premium-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.45rem 0.9rem;
+  font-size: 0.86rem;
+  font-weight: 500;
+  cursor: pointer;
+  color: var(--text-muted, rgba(255, 255, 255, 0.55));
+  background: transparent;
+  transition:
+    color 0.15s,
+    background 0.15s,
+    border-color 0.15s;
+}
+
+.device-data-premium-tab:hover {
+  color: var(--text-primary, #fff);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.device-data-premium-tab.is-active {
+  color: #fff;
+  background: rgba(99, 140, 255, 0.22);
+  border-color: rgba(99, 140, 255, 0.35);
+}
+
+.device-data-premium-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem 1.25rem 1.1rem;
+}
+
+.device-data-premium-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+.device-data-premium-card {
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+}
+
+.device-data-premium-card--violet {
+  border-color: rgba(167, 139, 250, 0.25);
+  background: linear-gradient(160deg, rgba(167, 139, 250, 0.12) 0%, rgba(255, 255, 255, 0.03) 100%);
+}
+
+.device-data-premium-card--cyan {
+  border-color: rgba(56, 189, 248, 0.28);
+  background: linear-gradient(160deg, rgba(56, 189, 248, 0.12) 0%, rgba(255, 255, 255, 0.03) 100%);
+}
+
+.device-data-premium-card--amber {
+  border-color: rgba(251, 191, 36, 0.28);
+  background: linear-gradient(160deg, rgba(251, 191, 36, 0.1) 0%, rgba(255, 255, 255, 0.03) 100%);
+}
+
+.device-data-premium-card__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 0.85rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.device-data-premium-card__head h4 {
+  margin: 0;
+  font-size: 0.82rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.device-data-premium-card__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.device-data-premium-card__body {
+  padding: 0.65rem 0.85rem 0.85rem;
+  max-height: min(38vh, 320px);
+  overflow: auto;
+}
+
+.device-data-premium-kv {
+  margin: 0;
+}
+
+.device-data-premium-kv__row {
+  display: grid;
+  grid-template-columns: minmax(0, 38%) 1fr;
+  gap: 0.35rem 0.65rem;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 0.8rem;
+}
+
+.device-data-premium-kv__row:last-child {
+  border-bottom: none;
+}
+
+.device-data-premium-kv dt {
+  margin: 0;
+  color: var(--text-muted);
+  font-weight: 500;
+  word-break: break-word;
+}
+
+.device-data-premium-kv dd {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+
+.device-data-premium-empty {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--text-muted, rgba(255, 255, 255, 0.5));
+}
+
+.device-data-premium-history .device-data-premium-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.device-data-premium-muted {
+  color: var(--text-muted, rgba(255, 255, 255, 0.55));
+  font-size: 0.85rem;
+}
+
+.device-data-premium-center {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 1rem 0;
+}
+
+.device-data-premium-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  font-size: 0.82rem;
+  padding: 0.4rem 0.85rem;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.device-data-premium-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.device-data-premium-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.device-data-premium-btn--ghost {
+  background: transparent;
+}
+
+.device-data-premium-alert {
+  padding: 0.6rem 0.85rem;
+  border-radius: 8px;
+  background: rgba(251, 191, 36, 0.12);
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  color: #fde68a;
+  font-size: 0.82rem;
+  margin-bottom: 0.75rem;
+}
+
+.device-data-premium-history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.device-data-premium-history-item {
+  width: 100%;
+  text-align: left;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 0.65rem 0.85rem;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  transition:
+    border-color 0.15s,
+    background 0.15s;
+}
+
+.device-data-premium-history-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(99, 140, 255, 0.35);
+}
+
+.device-data-premium-history-item.is-active {
+  border-color: rgba(99, 140, 255, 0.55);
+  background: rgba(99, 140, 255, 0.14);
+}
+
+.device-data-premium-history-time {
+  display: block;
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+.device-data-premium-history-hint {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: var(--text-muted, rgba(255, 255, 255, 0.5));
+}
+
+.device-data-premium-history-hint-strong {
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.device-data-premium-json {
+  margin: 0;
+  padding: 1rem;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 0.76rem;
+  line-height: 1.5;
+  max-height: min(52vh, 520px);
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: rgba(226, 232, 240, 0.95);
+}
+
+.device-data-premium-footer {
+  padding: 0.75rem 1.25rem 1rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  display: flex;
+  justify-content: flex-end;
+}
+
+.device-data-premium-body .spin {
+  animation: device-data-spin 0.85s linear infinite;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Tema oscuro: texto explícito en el modal premium (evita heredar mal de body).
+   ═══════════════════════════════════════════════════════════════════════════ */
+body.theme-dark .device-data-premium-shell {
+  color: var(--text-primary);
+}
+
+body.theme-dark .device-data-premium-card__body {
+  color: var(--text-primary);
+}
+
+body.theme-dark .device-data-premium-history-item {
+  color: var(--text-primary);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Tema claro: el shell premium dejaba fondo oscuro con --text-primary oscuro
+   (p. ej. columna Gestión ilegible). Alinear con tokens globales.
+   ═══════════════════════════════════════════════════════════════════════════ */
+body:not(.theme-dark) .device-data-premium-shell {
+  background: linear-gradient(145deg, #ffffff 0%, #f4f4f8 45%, #eceaf4 100%);
+  border-color: var(--border-color);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-primary);
+}
+
+body:not(.theme-dark) .device-data-premium-header {
+  border-bottom-color: var(--border-color);
+}
+
+body:not(.theme-dark) .device-data-premium-title__glow {
+  opacity: 0.35;
+}
+
+body:not(.theme-dark) .device-data-premium-close {
+  border-color: var(--border-color);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+body:not(.theme-dark) .device-data-premium-close:hover {
+  background: var(--bg-main);
+  border-color: rgb(109 40 217 / 0.25);
+}
+
+body:not(.theme-dark) .device-data-premium-snapshot-bar {
+  background: linear-gradient(90deg, rgb(109 40 217 / 0.08), rgb(8 145 178 / 0.06));
+  border-bottom-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+body:not(.theme-dark) .device-data-premium-snapshot-clear {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+}
+
+body:not(.theme-dark) .device-data-premium-snapshot-link {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border-color: var(--border-color);
+}
+
+body:not(.theme-dark) .device-data-premium-snapshot-link:hover {
+  background: var(--bg-hover);
+  border-color: rgb(109 40 217 / 0.35);
+}
+
+body:not(.theme-dark) .device-data-premium-snapshot-clear:hover {
+  background: var(--bg-hover);
+}
+
+body:not(.theme-dark) .device-data-premium-history-hint-strong {
+  color: var(--text-secondary);
+}
+
+body:not(.theme-dark) .device-data-premium-tab {
+  color: var(--text-secondary);
+}
+
+body:not(.theme-dark) .device-data-premium-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+body:not(.theme-dark) .device-data-premium-tab.is-active {
+  color: var(--text-primary);
+  background: rgb(109 40 217 / 0.12);
+  border-color: rgb(109 40 217 / 0.28);
+}
+
+body:not(.theme-dark) .device-data-premium-card {
+  border-color: var(--border-color);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
+}
+
+body:not(.theme-dark) .device-data-premium-card--violet {
+  border-color: rgb(109 40 217 / 0.22);
+  background: linear-gradient(160deg, rgb(109 40 217 / 0.06) 0%, var(--bg-card) 100%);
+}
+
+body:not(.theme-dark) .device-data-premium-card--cyan {
+  border-color: rgb(8 145 178 / 0.25);
+  background: linear-gradient(160deg, rgb(8 145 178 / 0.07) 0%, var(--bg-card) 100%);
+}
+
+body:not(.theme-dark) .device-data-premium-card--amber {
+  border-color: rgb(234 88 12 / 0.22);
+  background: linear-gradient(160deg, rgb(234 88 12 / 0.06) 0%, var(--bg-card) 100%);
+}
+
+body:not(.theme-dark) .device-data-premium-card__head {
+  border-bottom-color: var(--border-color);
+}
+
+body:not(.theme-dark) .device-data-premium-card__head h4 {
+  color: var(--text-secondary);
+}
+
+body:not(.theme-dark) .device-data-premium-card__icon {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+body:not(.theme-dark) .device-data-premium-kv__row {
+  border-bottom-color: var(--border-color);
+}
+
+body:not(.theme-dark) .device-data-premium-kv dt {
+  color: var(--text-secondary);
+}
+
+body:not(.theme-dark) .device-data-premium-kv dd {
+  color: var(--text-primary);
+}
+
+body:not(.theme-dark) .device-data-premium-empty,
+body:not(.theme-dark) .device-data-premium-muted {
+  color: var(--text-muted);
+}
+
+body:not(.theme-dark) .device-data-premium-btn {
+  border-color: var(--border-color);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+body:not(.theme-dark) .device-data-premium-btn:hover:not(:disabled) {
+  background: var(--bg-main);
+}
+
+body:not(.theme-dark) .device-data-premium-alert {
+  color: var(--text-primary);
+  background: rgb(234 88 12 / 0.1);
+  border-color: rgb(234 88 12 / 0.28);
+}
+
+body:not(.theme-dark) .device-data-premium-history-item {
+  border-color: var(--border-color);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+body:not(.theme-dark) .device-data-premium-history-item:hover {
+  background: var(--bg-main);
+  border-color: rgb(109 40 217 / 0.25);
+}
+
+body:not(.theme-dark) .device-data-premium-history-item.is-active {
+  border-color: rgb(109 40 217 / 0.45);
+  background: rgb(109 40 217 / 0.1);
+}
+
+body:not(.theme-dark) .device-data-premium-history-time {
+  color: var(--text-primary);
+}
+
+body:not(.theme-dark) .device-data-premium-history-hint {
+  color: var(--text-muted);
+}
+
+body:not(.theme-dark) .device-data-premium-json {
+  background: var(--bg-hover);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+body:not(.theme-dark) .device-data-premium-footer {
+  border-top-color: var(--border-color);
+}
+
+/* Tabs / historial del modal clásico (no premium) */
+body:not(.theme-dark) .device-data-tabs {
+  border-bottom-color: var(--border-color);
+}
+
+body:not(.theme-dark) .device-data-tab {
+  color: var(--text-secondary);
+}
+
+body:not(.theme-dark) .device-data-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+body:not(.theme-dark) .device-data-tab--active {
+  color: var(--text-primary);
+  background: rgb(109 40 217 / 0.12);
+}
+
+body:not(.theme-dark) .device-data-table-wrap {
+  border-color: var(--border-color);
+}
+
+body:not(.theme-dark) .device-data-json-block {
+  background: var(--bg-hover);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+body:not(.theme-dark) .device-data-json-block pre {
+  color: var(--text-primary);
+}
+
+body:not(.theme-dark) .device-data-history-card {
+  border-color: var(--border-color);
+  background: var(--bg-card);
+}
+
+body:not(.theme-dark) .device-data-history-card__head:hover {
+  background: var(--bg-hover);
+}
+
+body:not(.theme-dark) .device-data-history-body {
+  border-top-color: var(--border-color);
+}
+
+body:not(.theme-dark) .device-data-muted {
+  color: var(--text-muted);
+}

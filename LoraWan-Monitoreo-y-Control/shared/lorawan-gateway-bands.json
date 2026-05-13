@@ -1,0 +1,8 @@
+{
+  "bands": [
+    {
+      "value": "US902-928-FSB2",
+      "label": "US915 — canales 8–15 (125 kHz) y 65 (500 kHz), FSB 2"
+    }
+  ]
+}

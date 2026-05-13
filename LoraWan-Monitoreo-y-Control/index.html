@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/syscom-iot-logo.png" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>SYSCOM-IOT</title>
+  </head>
+  <body>
+    <script type="module">
+      if (import.meta.env.DEV) {
+        window.onerror = function (message, _source, _lineno, _colno, error) {
+          document.body.innerHTML =
+            '<div style="background: white; color: red; padding: 20px; z-index: 9999; position: absolute; top:0; left:0; width: 100vw; height: 100vh; overflow: auto;">' +
+            '<h1>Error</h1><p>' +
+            String(message) +
+            '</p><pre>' +
+            (error && error.stack ? String(error.stack) : '') +
+            '</pre></div>';
+        };
+      }
+    </script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

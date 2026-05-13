@@ -1,0 +1,36 @@
+# systemd unit para Syscom IoT en EC2 (Amazon Linux / systemd).
+# Copiar a: /etc/systemd/system/syscom-iot.service
+#   sudo cp deploy/ec2/syscom-iot.service /etc/systemd/system/
+# Ajustar User/Group y rutas si la app no está en /opt/syscom-iot/app
+#
+# Prerrequisitos:
+#   - node >= 20.19 en PATH del usuario del servicio (o cambiar ExecStart a ruta absoluta de node)
+#   - /opt/syscom-iot/.env con JWT_SECRET, NODE_ENV=production, SYSCOM_SQLITE_PATH, etc.
+#   - npm run build ejecutado en /opt/syscom-iot/app (carpeta dist/)
+#
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now syscom-iot
+
+[Unit]
+Description=Syscom IoT (Express API + Vite dist)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=syscom
+Group=syscom
+WorkingDirectory=/opt/syscom-iot/app
+
+# Una sola fuente: Node carga .env (formato dotenv; mismo archivo que en desarrollo)
+ExecStart=/usr/bin/node --experimental-sqlite --env-file=/opt/syscom-iot/.env /opt/syscom-iot/app/server/server.js
+
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+
+# Límites razonables para una VM pequeña
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,204 @@
+.vi-linear__meta,
+.vi-vertical__meta,
+.vi-battery__meta,
+.vi-compass__meta,
+.vi-numeric {
+  text-align: center;
+}
+
+.vi-linear__title,
+.vi-vertical__title,
+.vi-battery__title,
+.vi-compass__title,
+.vi-numeric__title {
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.vi-linear__sub,
+.vi-vertical__sub,
+.vi-battery__sub,
+.vi-compass__sub,
+.vi-numeric__sub {
+  font-size: 0.72rem;
+  color: #64748b;
+  margin-top: 2px;
+}
+
+.vi-numeric--dark .vi-numeric__sub,
+.vi-linear--dark .vi-linear__sub,
+.vi-vertical--dark .vi-vertical__sub,
+.vi-battery--dark .vi-battery__sub,
+.vi-compass--dark .vi-compass__sub,
+.vi-none--dark .vi-none__sub {
+  color: rgba(226, 232, 240, 0.55);
+}
+
+.vi-linear__track {
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+  margin: 10px 0 6px;
+}
+
+.vi-linear--dark .vi-linear__track {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.vi-linear__fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.35s ease;
+}
+
+.vi-linear__spark {
+  width: 100%;
+  height: 28px;
+  margin-top: 4px;
+  display: block;
+}
+
+.vi-linear--dark .vi-linear__spark polyline {
+  filter: drop-shadow(0 0 6px rgba(129, 140, 248, 0.35));
+}
+
+.vi-linear__val,
+.vi-vertical__val,
+.vi-battery__val,
+.vi-compass__val,
+.vi-numeric__val {
+  font-weight: 800;
+  font-size: 1.35rem;
+  letter-spacing: -0.02em;
+}
+
+.vi-numeric--dark .vi-numeric__val {
+  color: #f8fafc;
+}
+
+.vi-numeric--dark .vi-numeric__val span {
+  color: rgba(226, 232, 240, 0.7);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.vi-vertical__body {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.vi-vertical__track {
+  width: 18px;
+  height: 100px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.12);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.vi-vertical--dark .vi-vertical__track {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.vi-vertical__fill {
+  width: 100%;
+  border-radius: 0 0 6px 6px;
+  transition: height 0.35s ease;
+  min-height: 0;
+}
+
+.vi-vertical--compact .vi-vertical__track {
+  height: 72px;
+}
+
+.vi-battery__shell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  margin: 10px auto 6px;
+  max-width: 160px;
+}
+
+.vi-battery__inner {
+  flex: 1;
+  height: 28px;
+  border: 2px solid rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.vi-battery--dark .vi-battery__inner {
+  border-color: rgba(255, 255, 255, 0.25);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.vi-battery__level {
+  height: 100%;
+  transition: width 0.35s ease;
+}
+
+.vi-battery__tip {
+  width: 4px;
+  height: 12px;
+  margin-left: 2px;
+  border-radius: 0 3px 3px 0;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.vi-battery--dark .vi-battery__tip {
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.vi-compass__dial {
+  width: 100%;
+  max-width: 120px;
+  margin: 6px auto;
+  color: #64748b;
+}
+
+.vi-compass--dark .vi-compass__dial {
+  color: rgba(226, 232, 240, 0.65);
+}
+
+.vi-compass__svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.vi-compass--compact .vi-compass__dial {
+  max-width: 96px;
+}
+
+.vi-none__title {
+  font-weight: 700;
+  font-size: 0.85rem;
+}
+
+.vi-none__val {
+  font-size: 1.1rem;
+  font-weight: 700;
+  margin-top: 6px;
+}
+
+.vi-none--dark .vi-none__val {
+  color: #f8fafc;
+}
+
+.vi-none__unit {
+  margin-left: 6px;
+  opacity: 0.75;
+  font-size: 0.9rem;
+}
+
+.vi-numeric--compact .vi-numeric__val {
+  font-size: 1.15rem;
+}

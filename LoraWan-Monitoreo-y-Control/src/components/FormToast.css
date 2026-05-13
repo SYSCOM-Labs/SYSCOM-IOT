@@ -1,0 +1,52 @@
+.form-toast {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  line-height: 1.35;
+  margin-bottom: 0.75rem;
+  animation: form-toast-in 0.2s ease-out;
+}
+
+.form-toast span {
+  flex: 1;
+}
+
+.form-toast__icon {
+  flex-shrink: 0;
+}
+
+/** Toast global LNS / downlink: ~el doble de tamaño que el toast compacto de formularios. */
+.form-toast.form-toast--lg {
+  gap: 1rem;
+  padding: 1.3rem 1.75rem;
+  border-radius: 18px;
+  font-size: 1.8rem;
+  line-height: 1.35;
+  margin-bottom: 0;
+}
+
+.form-toast--success {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #34d399;
+}
+
+.form-toast--error {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #f87171;
+}
+
+@keyframes form-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
