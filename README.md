@@ -11,22 +11,7 @@ Repositorio de productos **SYSCOM** para soluciones **IoT** y **LoRaWAN**. Agrup
 
 ## Cómo empezar
 
-Todo el flujo detallado (variables de entorno, producción, guías LNS, despliegue, etc.) está en:
-
-**[LoraWan-Monitoreo-y-Control/README.md](./LoraWan-Monitoreo-y-Control/README.md)**
-
-### Desde la raíz del monorepo (recomendado)
-
-La raíz incluye un `package.json` que **reenvía** los comandos a `LoraWan-Monitoreo-y-Control`, así podéis trabajar sin `cd` a la subcarpeta:
-
-```bash
-npm run install:app
-npm start
-```
-
-`npm start` arranca API (puerto 3001) y Vite dev (puerto 5173) en un solo proceso con logs prefijados; **Ctrl+C** detiene ambos.
-
-### Desde la carpeta del subproyecto
+El subproyecto activo (`LoraWan-Monitoreo-y-Control/`) tiene su propio `package.json`, así que se trabaja **desde esa carpeta**:
 
 ```bash
 cd LoraWan-Monitoreo-y-Control
@@ -34,7 +19,9 @@ npm install
 npm start
 ```
 
-Puertos y variables `.env`: ver README del subproyecto.
+`npm start` arranca API (puerto 3001) y Vite dev (puerto 5173) en un solo proceso con logs prefijados; **Ctrl+C** detiene ambos.
+
+Todo el flujo detallado (variables de entorno, producción, guías LNS, despliegue, etc.) está en **[LoraWan-Monitoreo-y-Control/README.md](./LoraWan-Monitoreo-y-Control/README.md)**.
 
 ## Requisitos
 

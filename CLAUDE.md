@@ -4,16 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repo layout
 
-This is a multi-project repo. The root `package.json` is a thin wrapper that **forwards npm scripts** (`dev`, `start`, `build`, `lint`, `test`, etc.) to the active subproject `LoraWan-Monitoreo-y-Control` via `--prefix`. There is no other build orchestration at the root.
+This is a multi-project repo, but only one project is active. There is **no `package.json` at the root** — work from inside the subproject.
 
-- `LoraWan-Monitoreo-y-Control/` — active platform (React 19 + Vite 7 frontend, Express 4 backend, SQLite). All real code, tests, scripts, and docs live here.
+- `LoraWan-Monitoreo-y-Control/` — active platform (React 19 + Vite 7 frontend, Express 4 backend, SQLite). All real code, tests, scripts, and docs live here. `cd LoraWan-Monitoreo-y-Control` before running any npm command.
 - `LoraWan-Control-Agua/` — reserved placeholder, no code yet.
-
-You can run any script from the root (`npm run dev`) or from inside the subproject. Working from the subproject directory avoids a layer of indirection when debugging script behavior.
 
 ## Commands
 
-All commands below assume CWD is `LoraWan-Monitoreo-y-Control/` (or use `npm run <x>` from the repo root — they forward).
+All commands assume CWD is `LoraWan-Monitoreo-y-Control/`.
 
 ```bash
 # Setup
