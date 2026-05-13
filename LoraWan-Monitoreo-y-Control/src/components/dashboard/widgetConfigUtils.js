@@ -1285,6 +1285,11 @@ export function defaultWidgetConfig(sensor) {
           ? ''
           : pk,
       unit: sensor.unit || '',
+      /** Fórmula opcional: transforma el valor mostrado (p. ej. `(Valor) / 1000`). */
+      formulaEnabled: false,
+      formulaExpression: '',
+      /** Vacío = misma clave que `fieldKey`. */
+      formulaSourceKey: '',
       decimals: isMetricCircular ? 1 : isBarChart ? 1 : 2,
       ...(isMetricCircular ? { metricSubtitle: '', metricGradient: 'traffic' } : {}),
       ...(isStreamChart ? { historyRangePreset: 'live' } : {}),

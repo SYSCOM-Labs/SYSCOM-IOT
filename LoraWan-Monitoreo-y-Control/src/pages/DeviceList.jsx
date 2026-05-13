@@ -31,6 +31,7 @@ import {
   registerUserDevice,
   purgeDeviceFromSystem,
   assignDeviceToUser,
+  putDeviceBsdPreferences,
   saveDeviceDecodeConfig,
   renewDeviceLicense,
 } from '../services/api';
@@ -46,6 +47,7 @@ import { getLatestDeviceData, getUsers } from '../services/localAuth';
 import { applyStaleOfflineConnectStatus, isDeviceVisuallyOnline } from '../utils/deviceConnectionStatus';
 import { pushAppActivityLog } from '../utils/appActivityLog';
 import { SYSCOM_REALTIME_TELEMETRY } from '../constants/realtimeEvents';
+import { collectDeviceBsdBundle, deviceBsdBundleIsEmpty } from '../utils/deviceBsdPreferencesBundle';
 
 const EMPTY_CREATE = { devEUI: '', appEUI: '', appKey: '', displayName: '', tag: '' };
 
@@ -222,7 +224,7 @@ function mergeDeviceRowWithLatestTelemetry(dev, localUpdate) {
 }
 
 const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
-  const { credentials, token, user, isAdmin, isSuperAdmin, canCreateDevices } = useAuth();
+  const { credentials, token, user, userProfile, isAdmin, isSuperAdmin, canCreateDevices } = useAuth();
   const { t } = useLanguage();
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -669,6 +671,26 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
     }
     setSavingDevice(true);
     try {
+      const did = String(assignForDevice.deviceId || '').trim();
+      const uid = String((user && user.id) || (userProfile && userProfile.id) || '').trim();
+      if (did && uid) {
+        const bundle = collectDeviceBsdBundle(did);
+        if (!deviceBsdBundleIsEmpty(bundle)) {
+          try {
+            const resp = await putDeviceBsdPreferences(did, bundle);
+            const at = resp?.updatedAt != null ? String(resp.updatedAt) : '';
+            if (at) {
+              try {
+                localStorage.setItem(`sycom_bsd_remote_rev_${uid}_${did}`, at);
+              } catch {
+                /* ignore */
+              }
+            }
+          } catch (e) {
+            console.warn('[DeviceList] No se pudieron guardar preferencias BSD antes de asignar:', e?.message || e);
+          }
+        }
+      }
       await assignDeviceToUser(assignForDevice.deviceId, assignSelectedUser.email.trim().toLowerCase());
       setAssignForDevice(null);
       setAssignSelectedUser(null);

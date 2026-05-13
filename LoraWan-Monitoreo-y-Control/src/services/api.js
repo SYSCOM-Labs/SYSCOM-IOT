@@ -271,6 +271,23 @@ export const assignDeviceToUser = async (deviceId, assigneeEmail) => {
   return response.data;
 };
 
+export const fetchDeviceBsdPreferences = async (deviceId) => {
+  const response = await axios.get(
+    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/bsd-preferences`,
+    { headers: authHeaders() }
+  );
+  return response.data;
+};
+
+export const putDeviceBsdPreferences = async (deviceId, prefs) => {
+  const response = await axios.put(
+    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/bsd-preferences`,
+    prefs,
+    { headers: authHeaders() }
+  );
+  return response.data;
+};
+
 export const fetchDeviceDecodeConfig = async (deviceId) => {
   const response = await axios.get(
     `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/decode-config`,

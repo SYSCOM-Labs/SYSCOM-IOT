@@ -33,6 +33,7 @@ import {
   fetchDeviceProperties,
   fetchDeviceHistory,
   sendDownlink,
+  fetchDeviceBsdPreferences,
   SYSCOM_LNS_DOWNLINK_SENT_EVENT,
 } from '../../services/api';
 import { getLatestDeviceData, queryTelemetry } from '../../services/localAuth';
@@ -45,6 +46,8 @@ import {
 } from '../../utils/gatewayPayload';
 import { formatTelemetryChartTooltipValue, tryTelemetryDisplayLabel } from '../../utils/telemetryDisplayFormat';
 import { getTelemetryPropertyValue } from '../../utils/telemetryPropertyPath';
+import { transformWidgetNumeric } from '../../utils/widgetFormula';
+import { applyDeviceBsdBundle, deviceBsdBundleIsEmpty } from '../../utils/deviceBsdPreferencesBundle';
 import { applyStaleOfflineConnectStatus, isDeviceVisuallyOnline } from '../../utils/deviceConnectionStatus';
 import { SYSCOM_REALTIME_LNS, SYSCOM_REALTIME_TELEMETRY } from '../../constants/realtimeEvents';
 import { pushAppActivityLog } from '../../utils/appActivityLog';
@@ -96,6 +99,7 @@ import {
 import {
   applyBsdDragChainPushLayout,
   buildDefaultBsdGridLayout,
+  compactBsdGridLayoutTopLeft,
   clampLayoutItemsToModerateMins,
   computeBsdDashboardNormalizedLayout,
   buildModerateBsdGridTemplateForWidget,
@@ -106,6 +110,7 @@ import {
   placeNewBsdGridItem,
   readStoredBsdGridLayout,
   filterLayoutToAllowedDashboardItems,
+  bsdGridRectsOverlap,
 } from './bsdDashboardLayout';
 import { readDownlinksFromLocalStorage, getTelemetryLabelHintsForDevice } from '../../services/deviceTemplates';
 import BsdLeafletTrackingMap from './BsdLeafletTrackingMap';
@@ -668,6 +673,22 @@ function expandMergedDeviceTelemetryLive(raw) {
   return expandNestedGatewayTelemetry(base);
 }
 
+/** Clave de telemetría de entrada para la fórmula (si no se indica, la del campo principal). */
+function telemetryFieldKeyForFormula(cfg, defaultKey) {
+  const fs = cfg?.data?.formulaSourceKey != null ? String(cfg.data.formulaSourceKey).trim() : '';
+  return fs || String(defaultKey ?? '').trim();
+}
+
+/** Aplica la fórmula del widget solo si la serie corresponde a la clave de entrada (evita mezclar series multi-campo). */
+function pointValueAfterWidgetFormula(cfg, seriesFieldKey, numericVal) {
+  if (numericVal == null || !Number.isFinite(numericVal)) return numericVal;
+  const fk = String(seriesFieldKey ?? '').trim();
+  if (!fk) return numericVal;
+  if (telemetryFieldKeyForFormula(cfg, fk) !== fk) return numericVal;
+  const t = transformWidgetNumeric(cfg, numericVal);
+  return t != null && Number.isFinite(t) ? t : numericVal;
+}
+
 function computeMetricCircularUiForSlot(
   dk,
   widgetConfigs,
@@ -680,17 +701,21 @@ function computeMetricCircularUiForSlot(
   const cfg = widgetConfigs[key];
   const fkRaw = cfg?.data?.fieldKey;
   const fkStr = fkRaw != null ? String(fkRaw).trim() : '';
+  const readFk = telemetryFieldKeyForFormula(cfg, fkStr);
   const rawLiveScalar =
     telemetryLiveProps && typeof telemetryLiveProps === 'object' && !Array.isArray(telemetryLiveProps)
-      ? resolveTelemetryDisplaySource(telemetryLiveProps, fkStr)
+      ? resolveTelemetryDisplaySource(telemetryLiveProps, readFk)
       : undefined;
   const useLive =
-    Boolean(fkStr) &&
-    !fkStr.startsWith('__bsd_') &&
+    Boolean(readFk) &&
+    !readFk.startsWith('__bsd_') &&
     telemetryLiveProps &&
     typeof telemetryLiveProps === 'object' &&
     rawLiveScalar !== undefined;
-  const n = useLive ? parseNumeric(rawLiveScalar) : null;
+  const nParsed = useLive ? parseNumeric(rawLiveScalar) : null;
+  const n = transformWidgetNumeric(cfg, nParsed);
+  const formulaActive =
+    Boolean(cfg?.data?.formulaEnabled) && String(cfg?.data?.formulaExpression ?? '').trim() !== '';
 
   const decRaw = cfg?.data?.decimals;
   const dec =
@@ -730,7 +755,7 @@ function computeMetricCircularUiForSlot(
     const t = Math.min(1, Math.max(0, gaugeFillProgressT(n, lo, hi, inverseFill)));
     const rawLive = useLive ? rawLiveScalar : undefined;
     const friendly =
-      useLive && rawLive !== undefined
+      !formulaActive && useLive && rawLive !== undefined
         ? tryTelemetryDisplayLabel(liveDeviceModel, fkStr, rawLive, telemetryHintMap)
         : null;
     const centerMain = friendly || `${n.toFixed(dec)}${unit ? ` ${unit}` : ''}`.trim();
@@ -785,11 +810,12 @@ function computeTextWidgetUiForSlot(
   const cfg = widgetConfigs[key];
   const fkRaw = cfg?.data?.fieldKey;
   const fkStr = fkRaw != null ? String(fkRaw).trim() : '';
+  const readFk = telemetryFieldKeyForFormula(cfg, fkStr);
   const rawScalar =
     telemetryLiveProps && typeof telemetryLiveProps === 'object' && !Array.isArray(telemetryLiveProps)
-      ? resolveTextWidgetRawScalar(telemetryLiveProps, fkStr, cfg)
+      ? resolveTextWidgetRawScalar(telemetryLiveProps, readFk, cfg)
       : undefined;
-  const useLive = Boolean(fkStr) && !fkStr.startsWith('__bsd_') && rawScalar !== undefined;
+  const useLive = Boolean(readFk) && !readFk.startsWith('__bsd_') && rawScalar !== undefined;
   const raw = useLive ? rawScalar : undefined;
   const decRaw = cfg?.data?.decimals;
   const dec =
@@ -798,18 +824,23 @@ function computeTextWidgetUiForSlot(
       : 2;
   const unit = cfg?.data?.unit != null ? String(cfg.data.unit) : '';
   const lastAtLine = formatLastTelemetryUpdateLine(telemetryLiveProps?.lastUpdateTime);
+  const formulaActive =
+    Boolean(cfg?.data?.formulaEnabled) && String(cfg?.data?.formulaExpression ?? '').trim() !== '';
 
   if (raw === undefined || raw === null) {
     const hint = !fkStr || fkStr.startsWith('__bsd_') ? 'Configura el campo en edición' : 'Sin dato en vivo';
     return { display: '—', hint, lastAtLine };
   }
-  const friendly = tryTelemetryDisplayLabel(liveDeviceModel, fkStr, raw, telemetryHintMap);
+  const friendly = formulaActive
+    ? null
+    : tryTelemetryDisplayLabel(liveDeviceModel, fkStr, raw, telemetryHintMap);
   if (friendly != null && String(friendly).trim()) {
     return { display: String(friendly).trim(), hint: fkStr, lastAtLine };
   }
   const n = parseNumeric(raw);
   if (n !== null && Number.isFinite(n)) {
-    return { display: `${n.toFixed(dec)}${unit ? ` ${unit}` : ''}`.trim(), hint: fkStr, lastAtLine };
+    const nd = transformWidgetNumeric(cfg, n);
+    return { display: `${nd.toFixed(dec)}${unit ? ` ${unit}` : ''}`.trim(), hint: fkStr, lastAtLine };
   }
   if (typeof raw === 'boolean') return { display: raw ? 'Sí' : 'No', hint: fkStr, lastAtLine };
   if (typeof raw === 'object') {
@@ -1358,6 +1389,11 @@ function buildStreamSeriesPreparedFromRows(series, sharedRows, streamWidgetCfg =
   return series.map((meta) => {
     let points = telemetryValuePointsFromPreparsed(preparsed, meta.fieldKey, streamWidgetCfg);
     if (meta.valueMode === 'delta') points = applyDeltaHistoryPoints(points);
+    points = points.map((p) => {
+      if (!p || !Number.isFinite(p.val)) return p;
+      const nv = pointValueAfterWidgetFormula(streamWidgetCfg, meta.fieldKey, p.val);
+      return nv === p.val ? p : { ...p, val: nv };
+    });
     return { meta, points };
   });
 }
@@ -1366,9 +1402,14 @@ function buildStreamSeriesPreparedFromRows(series, sharedRows, streamWidgetCfg =
  * Añade la lectura en vivo al historial persistido para que Hora/Día/etc. reflejen el mismo valor
  * que el widget Texto (p. ej. pulsador Short/Long/Double como número).
  */
-function mergeLiveIntoStreamSeriesPrepared(seriesPrepared, streamTel, streamWidgetCfg = null) {
+/**
+ * @param {{ formulaOnLiveAppend?: boolean }} [mergeOpts] Si `formulaOnLiveAppend` es false (p. ej. gráfico de barras),
+ * no se aplica fórmula aquí: ese flujo transforma una sola vez antes de agregar por buckets.
+ */
+function mergeLiveIntoStreamSeriesPrepared(seriesPrepared, streamTel, streamWidgetCfg = null, mergeOpts = null) {
   if (!seriesPrepared.length) return seriesPrepared;
   if (!streamTel || typeof streamTel !== 'object' || Array.isArray(streamTel)) return seriesPrepared;
+  const formulaOnLiveAppend = mergeOpts?.formulaOnLiveAppend !== false;
   const tel = expandMergedDeviceTelemetryLive(streamTel);
   const tsBase = toHistoryEpochMs(streamTel.lastUpdateTime);
   const now = Date.now();
@@ -1378,8 +1419,11 @@ function mergeLiveIntoStreamSeriesPrepared(seriesPrepared, streamTel, streamWidg
     /** Pulsador: alinear con «ahora» si `lastUpdateTime` va rezagado respecto al payload (evita caer en un bucket viejo). */
     if (isLikelyButtonOrStatusFieldKey(fk)) tsMs = Math.max(tsMs, now);
     const raw = resolveTextWidgetRawScalar(tel, fk, streamWidgetCfg);
-    const val = parseNumeric(raw);
+    let val = parseNumeric(raw);
     if (val == null || !Number.isFinite(val)) return sp;
+    if (formulaOnLiveAppend && streamWidgetCfg) {
+      val = pointValueAfterWidgetFormula(streamWidgetCfg, fk, val);
+    }
     if (sp.meta?.valueMode === 'delta') {
       if (sp.points.length) return sp;
       return { ...sp, points: [{ ts: tsMs, val: 0 }] };
@@ -1405,7 +1449,8 @@ function mergeLiveIntoTelemetryPoints(points, fieldKey, telLive, barWidgetCfg = 
   const prepared = mergeLiveIntoStreamSeriesPrepared(
     [{ meta: { fieldKey }, points: Array.isArray(points) ? points : [] }],
     telLive,
-    barWidgetCfg
+    barWidgetCfg,
+    { formulaOnLiveAppend: false }
   );
   return prepared[0]?.points ?? points;
 }
@@ -1747,6 +1792,11 @@ function computeBarChartSeriesFromRows(rows, cfg, barCfg, fk, telSnapshot, now =
   points = mergeLivePulseBufferIntoPoints(points, livePulses, fromMs, toMs);
   points = dedupeBarChartLivePoints(points);
   points = collapseBarChartButtonBurstPoints(points, fk);
+  points = points.map((p) => {
+    if (!p || !Number.isFinite(p.val)) return p;
+    const nv = pointValueAfterWidgetFormula(barCfg, fk, p.val);
+    return nv === p.val ? p : { ...p, val: nv };
+  });
   let { labels, values, fullLabels, truncated } = buildBarChartBucketSeries(points, gran, op, fromMs, toMs, fk);
   let hasNumeric = values.some((v) => v != null && Number.isFinite(v));
 
@@ -1756,6 +1806,11 @@ function computeBarChartSeriesFromRows(rows, cfg, barCfg, fk, telSnapshot, now =
     liveOnly = mergeLivePulseBufferIntoPoints(liveOnly, livePulses, fromMs, toMs);
     liveOnly = dedupeBarChartLivePoints(liveOnly);
     liveOnly = collapseBarChartButtonBurstPoints(liveOnly, fk);
+    liveOnly = liveOnly.map((p) => {
+      if (!p || !Number.isFinite(p.val)) return p;
+      const nv = pointValueAfterWidgetFormula(barCfg, fk, p.val);
+      return nv === p.val ? p : { ...p, val: nv };
+    });
     if (liveOnly.length) {
       const reb = buildBarChartBucketSeries(liveOnly, gran, op, fromMs, toMs, fk);
       const rebNum = reb.values.some((v) => v != null && Number.isFinite(v));
@@ -1825,7 +1880,7 @@ function loadDownlinksFromStorage(deviceId) {
   if (!deviceId) return [];
   try {
     const list = readDownlinksFromLocalStorage(deviceId);
-    return Array.isArray(list) ? list.filter((d) => d && d.name && d.hex) : [];
+    return Array.isArray(list) ? list.filter((d) => d && String(d.hex || '').trim()) : [];
   } catch {
     return [];
   }
@@ -2411,10 +2466,14 @@ export default function BudgetSensorsDashboard({
     const did = variant === 'device' ? resolveDeviceDashboardStorageId(device) : null;
     const pid = undefined;
     const vis = loadDashboardVisibility(variant, did, pid);
-    return normalizeLayoutForPersistence(
-      mergeStoredBsdGridLayout(
-        readStoredBsdGridLayout(dashboardGridLayoutStorageKey(variant, did, pid)),
-        buildDefaultBsdGridLayout(variant, 0, vis)
+    return compactBsdGridLayoutTopLeft(
+      normalizeLayoutForPersistence(
+        clampLayoutItemsToModerateMins(
+          mergeStoredBsdGridLayout(
+            readStoredBsdGridLayout(dashboardGridLayoutStorageKey(variant, did, pid)),
+            buildDefaultBsdGridLayout(variant, 0, vis)
+          )
+        )
       )
     );
   });
@@ -2424,6 +2483,8 @@ export default function BudgetSensorsDashboard({
   const gridDragSnapshotRef = useRef(null);
   /** RGL emite `onLayoutChange` justo después de `onDragStop` con el layout sin intercambio; ignorar una vez. */
   const ignoreNextGridLayoutChangeFromDragRef = useRef(false);
+  /** Durante el arrastre no compactamos en `onLayoutChange` (RGL emite muchas veces; el reempaque al soltar lo hace `persistDashboardGridLayoutNow`). */
+  const gridRglDraggingRef = useRef(false);
 
   const innerRef = useRef(null);
   const gridWidthMeasureRef = useRef(null);
@@ -2456,7 +2517,8 @@ export default function BudgetSensorsDashboard({
 
   useEffect(() => {
     const stored = readStoredBsdGridLayout(dashboardGridLayoutKey);
-    const defaults = buildDefaultBsdGridLayout(variant, panelDevices.length, visibilityMap);
+    const vis = visibilityMapRef.current;
+    const defaults = buildDefaultBsdGridLayout(variant, panelDevices.length, vis);
     /** Unir disco + layout en vivo: evita perder celdas que aún no se escribieron en localStorage. */
     const hybridById = new Map((stored || []).map((it) => [String(it.i), it]));
     const live = normalizeLayoutForPersistence(gridLayoutLatestRef.current || []);
@@ -2473,13 +2535,27 @@ export default function BudgetSensorsDashboard({
      * acaba de quitar (p. ej. desincronía visibilidad vs. disco), y el widget «vuelve» al tablero aunque
      * el usuario lo haya quitado.
      */
-    const nextLayout =
+    const preCompact =
       defaults.length > 0 && filtered.length === 0
         ? normalizeLayoutForPersistence(mergeStoredBsdGridLayout([], defaults))
         : sizeSafe;
+    /** No reempacar todo el grid aquí: `compactBsdGridLayoutTopLeft` reordenaba celdas en cada sync (visibilidad, ancho, etc.) y los widgets «saltaban». */
+    const nextLayout = preCompact;
+    try {
+      const disk = normalizeLayoutForPersistence(readStoredBsdGridLayout(dashboardGridLayoutKey) || []);
+      if (!layoutsEqualStable(disk, nextLayout)) persistBsdGridLayoutDisk(nextLayout);
+    } catch {
+      /* ignore */
+    }
     setGridLayout((prev) => (layoutsEqualStable(prev, nextLayout) ? prev : nextLayout));
     gridLayoutLatestRef.current = nextLayout;
-  }, [dashboardGridLayoutKey, variant, panelDevices.length, visibilityLayoutSig, visibilityMap]);
+  }, [
+    dashboardGridLayoutKey,
+    variant,
+    panelDevices.length,
+    visibilityLayoutSig,
+    persistBsdGridLayoutDisk,
+  ]);
 
   /** Solo estado en vivo; localStorage en drag/resize stop y «Listo» (evita E/S en cada frame y ref desfasado). */
   const handleGridLayoutChange = useCallback(
@@ -2497,17 +2573,22 @@ export default function BudgetSensorsDashboard({
         visibilityMapRef.current
       );
       if (!normalized) return;
-      if (layoutsEqualStable(gridLayoutLatestRef.current, normalized)) return;
-      gridLayoutLatestRef.current = normalized;
-      setGridLayout(normalized);
-      persistBsdGridLayoutDisk(normalized);
+      /** Mantener x/y que entrega RGL: compactar aquí movía todo el tablero en cada `onLayoutChange` (resize, montaje, etc.). */
+      const out = normalized;
+      if (layoutsEqualStable(gridLayoutLatestRef.current, out)) return;
+      gridLayoutLatestRef.current = out;
+      setGridLayout(out);
+      if (!gridRglDraggingRef.current) {
+        persistBsdGridLayoutDisk(out);
+      }
     },
     [dashboardGridLayoutKey, dashboardLayoutLocked, persistBsdGridLayoutDisk, variant]
   );
 
   /** Escribe en localStorage el layout ya normalizado (misma geometría que RGL). */
+  /** @param {{ compact?: boolean }} [opts] Si `compact: true`, reempaqueta arriba-izquierda (solo cuando se pida explícitamente). */
   const persistDashboardGridLayoutNow = useCallback(
-    (layout) => {
+    (layout, opts) => {
       const normalized = computeBsdDashboardNormalizedLayout(
         layout,
         gridLayoutLatestRef.current,
@@ -2516,27 +2597,35 @@ export default function BudgetSensorsDashboard({
         visibilityMapRef.current
       );
       if (!normalized) return;
-      gridLayoutLatestRef.current = normalized;
-      setGridLayout(normalized);
-      persistBsdGridLayoutDisk(normalized);
+      const shouldPack = opts?.compact === true;
+      const packed = shouldPack ? compactBsdGridLayoutTopLeft(normalized) : normalized;
+      if (layoutsEqualStable(gridLayoutLatestRef.current, packed)) return;
+      gridLayoutLatestRef.current = packed;
+      setGridLayout(packed);
+      persistBsdGridLayoutDisk(packed);
     },
     [dashboardGridLayoutKey, persistBsdGridLayoutDisk, variant]
   );
 
   const handleGridDragStart = useCallback(() => {
+    gridRglDraggingRef.current = true;
     gridDragSnapshotRef.current = normalizeLayoutForPersistence(gridLayoutLatestRef.current);
   }, []);
 
   const handleGridDragStop = useCallback(
     (layout, oldItem, newItem) => {
-      const snap = gridDragSnapshotRef.current;
-      gridDragSnapshotRef.current = null;
-      const resolved = applyBsdDragChainPushLayout(snap, oldItem, newItem, layout);
-      if (resolved) {
-        ignoreNextGridLayoutChangeFromDragRef.current = true;
-        persistDashboardGridLayoutNow(resolved);
-      } else {
-        persistDashboardGridLayoutNow(layout);
+      try {
+        const snap = gridDragSnapshotRef.current;
+        gridDragSnapshotRef.current = null;
+        const resolved = applyBsdDragChainPushLayout(snap, oldItem, newItem, layout);
+        if (resolved) {
+          ignoreNextGridLayoutChangeFromDragRef.current = true;
+          persistDashboardGridLayoutNow(resolved, { compact: false });
+        } else {
+          persistDashboardGridLayoutNow(layout, { compact: false });
+        }
+      } finally {
+        gridRglDraggingRef.current = false;
       }
     },
     [persistDashboardGridLayoutNow]
@@ -2546,6 +2635,47 @@ export default function BudgetSensorsDashboard({
   const flushDashboardGridLayoutToStorage = useCallback(() => {
     persistDashboardGridLayoutNow(gridLayoutLatestRef.current);
   }, [persistDashboardGridLayoutNow]);
+
+  /** Sincroniza tablero BSD y downlinks desde el servidor (p. ej. tras asignar el equipo a otro usuario). */
+  useEffect(() => {
+    if (variant !== 'device' || !dashDeviceId || !token) return undefined;
+    const uid = String((user && user.id) || (userProfile && userProfile.id) || '').trim();
+    if (!uid) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await fetchDeviceBsdPreferences(dashDeviceId);
+        if (cancelled || !data || typeof data.prefs !== 'object') return;
+        const updatedAt = data.updatedAt != null ? String(data.updatedAt) : '';
+        if (!updatedAt) return;
+        const markerKey = `sycom_bsd_remote_rev_${uid}_${dashDeviceId}`;
+        try {
+          if (localStorage.getItem(markerKey) === updatedAt) return;
+        } catch {
+          /* ignore */
+        }
+        if (deviceBsdBundleIsEmpty(data.prefs)) return;
+        applyDeviceBsdBundle(dashDeviceId, data.prefs);
+        try {
+          localStorage.setItem(markerKey, updatedAt);
+        } catch {
+          /* ignore */
+        }
+        setWidgetConfigs(loadAllWidgetConfigs());
+        setVisibilityMap(loadDashboardVisibility('device', dashDeviceId));
+        const gk = dashboardGridLayoutStorageKey('device', dashDeviceId, undefined, undefined);
+        const nextGrid = normalizeLayoutForPersistence(readStoredBsdGridLayout(gk));
+        gridLayoutLatestRef.current = nextGrid;
+        setGridLayout(nextGrid);
+        setDownlinkList(loadDownlinksFromStorage(dashDeviceId));
+      } catch (e) {
+        console.warn('[BSD] preferencias servidor:', e?.message || e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [variant, dashDeviceId, token, user?.id, userProfile?.id]);
 
   useEffect(() => {
     if (!canEditDashboard) {
@@ -2571,17 +2701,19 @@ export default function BudgetSensorsDashboard({
     [widgetConfigs, configKeyForSensor]
   );
 
-  const getDisplayValue = useCallback(
-    (s) => {
-      const cfg = getWidgetConfig(s);
+  const getRawNumericForWidgetField = useCallback(
+    (s, cfg, fieldKey, allowAggregate) => {
       const pk = s.propertyKey;
-      const field = cfg?.data?.fieldKey || pk;
+      const field = fieldKey || pk;
       const sid = s.sourceDeviceId;
+      const aggField = cfg?.data?.fieldKey || pk;
       if (
+        allowAggregate &&
         cfg?.timeframe?.mode === 'interval' &&
         cfg.timeframe?.operation &&
         sid &&
-        sid !== 'demo'
+        sid !== 'demo' &&
+        String(field) === String(aggField)
       ) {
         const ak = `${sid}|${pk}`;
         const agg = aggregateByKey[ak];
@@ -2602,10 +2734,13 @@ export default function BudgetSensorsDashboard({
           if (alt != null) return alt;
         }
       }
-      return s.value;
+      if (String(field) === String(aggField)) {
+        const v = s.value;
+        return typeof v === 'number' && Number.isFinite(v) ? v : parseNumeric(v);
+      }
+      return null;
     },
     [
-      getWidgetConfig,
       aggregateByKey,
       telemetryLiveProps,
       variant,
@@ -2613,6 +2748,39 @@ export default function BudgetSensorsDashboard({
       controlDeviceId,
       panelTelemetryExpandedByDeviceId,
     ]
+  );
+
+  const getDisplayValue = useCallback(
+    (s) => {
+      const cfg = getWidgetConfig(s);
+      const pk = s.propertyKey;
+      const primaryField = cfg?.data?.fieldKey || pk;
+      const expr = String(cfg?.data?.formulaExpression ?? '').trim();
+      const formulaOn = Boolean(cfg?.data?.formulaEnabled) && expr !== '';
+      const formulaField = telemetryFieldKeyForFormula(cfg, primaryField);
+      const aggField = cfg?.data?.fieldKey || pk;
+      const allowAggFormula = String(formulaField) === String(aggField);
+
+      const rawPrimary = getRawNumericForWidgetField(s, cfg, primaryField, true);
+      if (!formulaOn) {
+        if (rawPrimary != null && Number.isFinite(rawPrimary)) return rawPrimary;
+        return s.value;
+      }
+
+      const rawForFormula = getRawNumericForWidgetField(s, cfg, formulaField, allowAggFormula);
+      const base =
+        rawForFormula != null && Number.isFinite(rawForFormula)
+          ? rawForFormula
+          : rawPrimary != null && Number.isFinite(rawPrimary)
+            ? rawPrimary
+            : parseNumeric(s.value) ?? s.value;
+
+      const numBase = typeof base === 'number' && Number.isFinite(base) ? base : parseNumeric(base);
+      const transformed = transformWidgetNumeric(cfg, numBase);
+      if (typeof transformed === 'number' && Number.isFinite(transformed)) return transformed;
+      return typeof numBase === 'number' && Number.isFinite(numBase) ? numBase : s.value;
+    },
+    [getWidgetConfig, getRawNumericForWidgetField]
   );
 
   const isVis = useCallback((id) => visibilityMap[id] !== false, [visibilityMap]);
@@ -2885,13 +3053,17 @@ export default function BudgetSensorsDashboard({
 
     const fkRaw = cfg?.data?.fieldKey;
     const fkStr = fkRaw != null ? String(fkRaw).trim() : '';
+    const readFk = telemetryFieldKeyForFormula(cfg, fkStr);
     const telProps = telemetryLivePropsForPanelWidget(DASH_WIDGET.SATISFACTION);
     const rawScalar =
       telProps && typeof telProps === 'object' && !Array.isArray(telProps)
-        ? resolveTelemetryDisplaySource(telProps, fkStr)
+        ? resolveTelemetryDisplaySource(telProps, readFk)
         : undefined;
-    const useLive = Boolean(fkStr) && !fkStr.startsWith('__bsd_') && rawScalar !== undefined;
-    const n = useLive ? parseNumeric(rawScalar) : null;
+    const useLive = Boolean(readFk) && !readFk.startsWith('__bsd_') && rawScalar !== undefined;
+    const nParsed = useLive ? parseNumeric(rawScalar) : null;
+    const n = transformWidgetNumeric(cfg, nParsed);
+    const formulaActive =
+      Boolean(cfg?.data?.formulaEnabled) && String(cfg?.data?.formulaExpression ?? '').trim() !== '';
     const lastAtLine = formatLastTelemetryUpdateLine(telProps?.lastUpdateTime);
 
     if (n !== null && Number.isFinite(n)) {
@@ -2907,7 +3079,7 @@ export default function BudgetSensorsDashboard({
       const rowModel = resolveLiveDeviceModelForPanelWidget(DASH_WIDGET.SATISFACTION);
       const rowHints = resolveTelemetryHintsForPanelWidget(DASH_WIDGET.SATISFACTION);
       const friendly =
-        useLive && rawLive !== undefined
+        !formulaActive && useLive && rawLive !== undefined
           ? tryTelemetryDisplayLabel(rowModel, fkStr, rawLive, rowHints)
           : null;
       const label = friendly || `${n.toFixed(dec)}${unit ? ` ${unit}` : ''}`.trim();
@@ -3355,6 +3527,7 @@ export default function BudgetSensorsDashboard({
         st.lastRaw[i] = raw;
         val = prev == null ? 0 : raw - prev;
       }
+      val = pointValueAfterWidgetFormula(chartCfg, fk, val);
       const tb = st.timeBuffers[i];
       const buf = st.buffers[i];
       if (tb.length && tb[tb.length - 1] === tickTs) {
@@ -3374,8 +3547,9 @@ export default function BudgetSensorsDashboard({
     const raw0 = parseNumeric(resolveTextWidgetRawScalar(tel, series[0].fieldKey, chartCfg));
     const b0 = st.buffers[0];
     if (series[0].valueMode !== 'delta' && raw0 != null && Number.isFinite(raw0)) {
-      lastStreamRef.current = raw0;
-      setStreamDisplay(raw0);
+      const d0 = pointValueAfterWidgetFormula(chartCfg, series[0].fieldKey, raw0);
+      lastStreamRef.current = d0;
+      setStreamDisplay(d0);
     } else if (b0.length) {
       lastStreamRef.current = b0[b0.length - 1];
       setStreamDisplay(b0[b0.length - 1]);
@@ -4545,9 +4719,10 @@ export default function BudgetSensorsDashboard({
           panelDevicesRef.current?.length ?? 0,
           visNext
         ) || normalizeLayoutForPersistence(without);
-      gridLayoutLatestRef.current = normalized;
-      setGridLayout(normalized);
-      persistBsdGridLayoutDisk(normalized);
+      const packed = compactBsdGridLayoutTopLeft(normalized);
+      gridLayoutLatestRef.current = packed;
+      setGridLayout(packed);
+      persistBsdGridLayoutDisk(packed);
 
       if (resetConfig) {
         try {
@@ -4606,7 +4781,18 @@ export default function BudgetSensorsDashboard({
       if (!slot) return;
       const cur = normalizeLayoutForPersistence(gridLayoutLatestRef.current || []);
       if (cur.some((it) => String(it.i) === String(wid))) return;
-      const piece = useAutoPlace ? placeNewBsdGridItem(cur, slot) : { ...slot };
+      let piece = useAutoPlace ? placeNewBsdGridItem(cur, slot) : { ...slot };
+      if (
+        !useAutoPlace &&
+        cur.some((it) =>
+          bsdGridRectsOverlap(
+            { x: piece.x, y: piece.y, w: piece.w, h: piece.h },
+            { x: it.x, y: it.y, w: it.w, h: it.h }
+          )
+        )
+      ) {
+        piece = placeNewBsdGridItem(cur, slot);
+      }
       const next = normalizeLayoutForPersistence([...cur, piece]);
       const clamped = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(next));
       gridLayoutLatestRef.current = clamped;
@@ -5339,16 +5525,8 @@ export default function BudgetSensorsDashboard({
         defaults.find((d) => String(d.i) === baseId) ||
         buildModerateBsdGridTemplateForWidget(newId);
       if (!tmpl) return;
-      let maxY = 0;
-      for (const it of cur) maxY = Math.max(maxY, (Number(it.y) || 0) + (Number(it.h) || 0));
-      const appended = {
-        ...tmpl,
-        i: newId,
-        y: maxY,
-        x: tmpl.x,
-        w: tmpl.w,
-        h: tmpl.h,
-      };
+      /** Misma lógica que la galería: a la derecha en la fila o siguiente fila, sin solape (no `y: maxY`). */
+      const appended = placeNewBsdGridItem(cur, { ...tmpl, i: newId });
       const next = normalizeLayoutForPersistence([...cur, appended]);
       const clamped = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(next));
       gridLayoutLatestRef.current = clamped;
@@ -5936,9 +6114,11 @@ export default function BudgetSensorsDashboard({
                     </div>
                   </div>
                   <div className="bsd-metric-circular">
+                    <div className="bsd-metric-circular__chart">
                     <svg
                       className="bsd-metric-circular__svg"
                       viewBox="0 0 240 152"
+                      preserveAspectRatio="xMidYMid meet"
                       width="100%"
                       aria-hidden
                     >
@@ -6055,12 +6235,13 @@ export default function BudgetSensorsDashboard({
                         </text>
                       ) : null}
                     </svg>
-                  </div>
+                    </div>
                   {ui?.lastAtLine ? (
                     <div className="bsd-metric-circular__lastat" style={wTitleStyle(slotId)}>
                       {ui.lastAtLine}
                     </div>
                   ) : null}
+                  </div>
                 </div>
               );
             })}
@@ -6428,8 +6609,9 @@ export default function BudgetSensorsDashboard({
            * de historial no se repetía → gráfico vacío en modo lectura.
            */
           return (
+            /** Clave estable: no incluir la firma de visibilidad para no remontar RGL en cada toggle (parpadeos / widgets que «desaparecen»). */
             <GridLayout
-              key={`bsd-dash-${dashboardGridLayoutKey}-${visibilityLayoutSig}`}
+              key={`bsd-dash-${dashboardGridLayoutKey}`}
               className="bsd-dash-grid-layout"
               width={gridWidth}
               layout={gridLayout}
@@ -6440,13 +6622,13 @@ export default function BudgetSensorsDashboard({
               onLayoutChange={handleGridLayoutChange}
               onDragStart={handleGridDragStart}
               onDragStop={handleGridDragStop}
-              onResizeStop={(layout) => persistDashboardGridLayoutNow(layout)}
+              onResizeStop={(layout) => persistDashboardGridLayoutNow(layout, { compact: false })}
               isDraggable={!dashboardLayoutLocked}
               isResizable={!dashboardLayoutLocked}
               draggableCancel=".bsd-widget-actions,.bsd-widget-edit-btn,.bsd-widget-remove-btn,.bsd-widget-menu-summary,.bsd-widget-menu-panel,.bsd-widget-gallery-overlay,.bsd-widget-gallery-modal,.bsd-widget-gallery-card,.bsd-widget-gallery-filters,.bsd-widget-gallery-search,input,textarea,select,option,button,.bsd-switch-track,.bsd-downlink-btn,.bsd-emergency-body,.sensor-card,.alert-item,.year-btn,.bsd-stream-preset,canvas,.bsd-map-iframe,.leaflet-container,.leaflet-pane,.bsd-tracking-map-leaflet,.bsd-panel-device-bar-inner label,.bsd-file-label"
               compactType={null}
-              preventCollision={false}
-              allowOverlap
+              preventCollision
+              allowOverlap={false}
               useCSSTransforms={false}
             >
               {gridBody}

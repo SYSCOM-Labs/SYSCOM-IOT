@@ -36,6 +36,11 @@ try {
     WHERE device_id NOT IN (SELECT DISTINCT device_id FROM user_devices);
   `);
 
+  db.exec(`
+    DELETE FROM device_bsd_preferences
+    WHERE device_id NOT IN (SELECT DISTINCT device_id FROM user_devices);
+  `);
+
   const countAfter = db.prepare('SELECT COUNT(*) as total FROM telemetry').get().total;
   console.log(`Registros de telemetría después: ${countAfter}`);
   console.log(`Eliminados: ${countBefore - countAfter} registros.`);

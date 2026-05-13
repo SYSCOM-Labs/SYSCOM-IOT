@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { X, Check, Image, MapPin, Route } from 'lucide-react';
 import ValueIndicator from './ValueIndicator';
 import { normalizeIndicatorType } from './valueIndicatorUtils';
@@ -28,6 +28,7 @@ import {
   applyHistoryGranularityPreset,
   normalizeBarChartGranularity,
   resolveTextWidgetRawScalar,
+  dashboardWidgetBaseId,
 } from './widgetConfigUtils';
 import { tryTelemetryDisplayLabel } from '../../utils/telemetryDisplayFormat';
 import { resolveMapCoords, openStreetMapEmbedUrl, toFloatCoord } from './mapWidgetCoords';
@@ -38,6 +39,7 @@ import {
 } from '../../utils/gatewayPayload';
 import './WidgetEditModal.css';
 import { useTheme } from '../../context/ThemeContext';
+import { applyWidgetFormula } from '../../utils/widgetFormula';
 
 const MODAL_TELEMETRY_IGNORE = new Set([...PROPERTY_INFER_IGNORE_SET]);
 
@@ -85,6 +87,7 @@ const TABS = [
   { id: 'data', label: 'Datos' },
   { id: 'appearance', label: 'Apariencia' },
   { id: 'gauge', label: 'Indicador' },
+  { id: 'formula', label: 'Fórmulas' },
 ];
 
 /** @param {'value' | 'simple' | 'metrics'} editScope */
@@ -624,6 +627,8 @@ export default function WidgetEditModal({
   const [fieldSearch, setFieldSearch] = useState('');
   /** Panel: incluir metadatos LoRaWAN (FCnt, DR…) en la lista de «Datos». */
   const [showLorawanMetaInPicker, setShowLorawanMetaInPicker] = useState(false);
+  /** Mensaje bajo «Prueba» en la pestaña Fórmulas. */
+  const [formulaProbeLine, setFormulaProbeLine] = useState('');
   const [draft, setDraft] = useState(() => {
     if (!sensor) {
       return mergeWidgetConfig(
@@ -769,42 +774,98 @@ export default function WidgetEditModal({
     return fk;
   }, [draft.data?.fieldKey, sensor, fixedDashWidgetId]);
 
+  /** Clave de telemetría de entrada para la fórmula (vista previa); si no hay fórmula activa, coincide con el campo principal. */
+  const previewNumericSourceKey = useMemo(() => {
+    const fe = Boolean(draft.data?.formulaEnabled);
+    const ex = String(draft.data?.formulaExpression ?? '').trim();
+    if (fe && ex) {
+      const fs = String(draft.data?.formulaSourceKey ?? '').trim();
+      return fs || previewTelemetryKey;
+    }
+    return previewTelemetryKey;
+  }, [
+    draft.data?.formulaEnabled,
+    draft.data?.formulaExpression,
+    draft.data?.formulaSourceKey,
+    previewTelemetryKey,
+  ]);
+
   const previewVisualKey = useMemo(() => {
     if (fixedDashWidgetId) return fixedDashWidgetId;
     return dashWidgetIdFromPropertyKey(sensor?.propertyKey) || String(sensor?.propertyKey || 'widget');
   }, [sensor, fixedDashWidgetId]);
 
-  /** Valor mostrado en la vista previa: en vivo si existe; si no, punto medio de la escala para ver colores/tipo. */
-  const previewValue = useMemo(() => {
-    const key = previewTelemetryKey;
+  useEffect(() => {
+    if (!open) setFormulaProbeLine('');
+  }, [open]);
+
+  useEffect(() => {
+    if (tab !== 'formula') setFormulaProbeLine('');
+  }, [tab]);
+
+  /** Número base para la fórmula (misma entrada que usa el tablero al evaluar). */
+  const previewFormulaBaseNumber = useMemo(() => {
+    const key = previewNumericSourceKey;
+    let base = null;
     if (previewLiveProps && key && previewLiveProps[key] !== undefined) {
-      const n = parseLiveNumber(previewLiveProps[key]);
-      if (n != null) return n;
+      base = parseLiveNumber(previewLiveProps[key]);
     }
-    const fromSensor = parseLiveNumber(sensor?.value);
-    if (fromSensor != null) return fromSensor;
-    const min = Number(draft.gauge?.scaleMin);
-    const max = Number(draft.gauge?.scaleMax);
-    const lo = Number.isFinite(min) ? min : 0;
-    const hi = Number.isFinite(max) && max > lo ? max : lo + 50;
-    return lo + (hi - lo) * 0.55;
+    if (base == null) {
+      const fromSensor = parseLiveNumber(sensor?.value);
+      if (fromSensor != null) base = fromSensor;
+    }
+    if (base == null) {
+      const min = Number(draft.gauge?.scaleMin);
+      const max = Number(draft.gauge?.scaleMax);
+      const lo = Number.isFinite(min) ? min : 0;
+      const hi = Number.isFinite(max) && max > lo ? max : lo + 50;
+      base = lo + (hi - lo) * 0.55;
+    }
+    return base;
   }, [
-    previewTelemetryKey,
+    previewNumericSourceKey,
+    previewLiveProps,
+    sensor?.value,
     draft.gauge?.scaleMin,
     draft.gauge?.scaleMax,
-    previewLiveProps,
-    sensor?.propertyKey,
-    sensor?.value,
   ]);
 
+  /** Valor mostrado en la vista previa: en vivo si existe; si no, punto medio de la escala para ver colores/tipo. */
+  const previewValue = useMemo(() => {
+    const base = previewFormulaBaseNumber;
+    const ex = String(draft.data?.formulaExpression ?? '').trim();
+    if (Boolean(draft.data?.formulaEnabled) && ex) {
+      const t = applyWidgetFormula(base, ex);
+      if (t != null && Number.isFinite(t)) return t;
+    }
+    return base;
+  }, [previewFormulaBaseNumber, draft.data?.formulaEnabled, draft.data?.formulaExpression]);
+
+  const runFormulaProbe = useCallback(() => {
+    const ex = String(draft.data?.formulaExpression ?? '').trim();
+    if (!ex) {
+      setFormulaProbeLine('Escribe una expresión en el campo «Expresión».');
+      return;
+    }
+    const base = previewFormulaBaseNumber;
+    const t = applyWidgetFormula(base, ex);
+    if (t == null || !Number.isFinite(t)) {
+      setFormulaProbeLine(
+        `No se pudo evaluar con entrada ≈ ${base}. Usa «(Valor)/10» o la forma corta «/10» (equivale a dividir el valor actual).`
+      );
+      return;
+    }
+    setFormulaProbeLine(`Entrada: ${base} → resultado que verá el widget: ${t}`);
+  }, [draft.data?.formulaExpression, previewFormulaBaseNumber]);
+
   const previewUsesLiveValue = useMemo(() => {
-    const key = previewTelemetryKey;
+    const key = previewNumericSourceKey;
     if (previewLiveProps && key && previewLiveProps[key] !== undefined) {
       const n = parseLiveNumber(previewLiveProps[key]);
       if (n != null) return true;
     }
     return parseLiveNumber(sensor?.value) != null;
-  }, [previewTelemetryKey, previewLiveProps, sensor?.propertyKey, sensor?.value]);
+  }, [previewNumericSourceKey, previewLiveProps, sensor?.propertyKey, sensor?.value]);
 
   const previewSubtitle = useMemo(() => {
     if (sensor?.sourceDeviceId === 'dashboard' && isDashboardFixedWidgetSensor(sensor)) {
@@ -837,6 +898,15 @@ export default function WidgetEditModal({
     return [...set].filter((k) => String(k).trim()).sort((a, b) => a.localeCompare(b));
   }, [effectiveAvailableDataFields, draft.data?.trackingTelemetryField]);
 
+  const formulaFieldOptions = useMemo(() => {
+    const set = new Set((effectiveAvailableDataFields || []).filter((k) => k && !String(k).startsWith('__bsd_')));
+    const fk = String(draft.data?.fieldKey ?? '').trim();
+    if (fk) set.add(fk);
+    const fs = String(draft.data?.formulaSourceKey ?? '').trim();
+    if (fs) set.add(fs);
+    return sortTelemetryPickerKeys([...set]);
+  }, [effectiveAvailableDataFields, draft.data?.fieldKey, draft.data?.formulaSourceKey]);
+
   const previewDashWidgetId = useMemo(() => {
     if (fixedDashWidgetId) return fixedDashWidgetId;
     return dashWidgetIdFromPropertyKey(sensor?.propertyKey);
@@ -866,6 +936,20 @@ export default function WidgetEditModal({
     showMapDataSection ||
     showTrackingMapDataSection;
 
+  /** Pestaña «Fórmulas» solo en widgets con valor numérico configurable (no cuadrícula multi-campo ni mapas/imagen). */
+  const hideFormulaTabForWidget = useMemo(() => {
+    if (!previewDashWidgetId) return false;
+    const base = dashboardWidgetBaseId(previewDashWidgetId);
+    const withFormula = new Set([
+      DASH_WIDGET.SATISFACTION,
+      DASH_WIDGET.METRIC_CIRCULAR,
+      DASH_WIDGET.TEXT,
+      DASH_WIDGET.STREAM,
+      DASH_WIDGET.BAR_CHART,
+    ]);
+    return !withFormula.has(base);
+  }, [previewDashWidgetId]);
+
   const showInverseGaugeOption = useMemo(() => {
     const circ = normalizeIndicatorType(draft.gauge?.indicatorType) === 'circular';
     return (
@@ -878,8 +962,9 @@ export default function WidgetEditModal({
   const visibleTabs = useMemo(() => {
     let tabs = tabsForScope(editScope);
     if (hideGaugeForWidget) tabs = tabs.filter((t) => t.id !== 'gauge');
+    if (hideFormulaTabForWidget) tabs = tabs.filter((t) => t.id !== 'formula');
     return tabs;
-  }, [editScope, hideGaugeForWidget]);
+  }, [editScope, hideGaugeForWidget, hideFormulaTabForWidget]);
 
   /** Panel Control: [Básicos] [Dispositivo ▼] [Datos] [Apariencia] […] según tipo de widget. */
   const panelToolbarTabs = useMemo(() => {
@@ -890,8 +975,14 @@ export default function WidgetEditModal({
     return { basics, rest };
   }, [showPanelDevicePicker, visibleTabs]);
 
-  /** Si la pestaña «Indicador» deja de existir, mostramos «Datos» sin setState en un effect (reglas React Compiler / eslint). */
-  const activeTab = tab === 'gauge' && hideGaugeForWidget ? 'data' : tab;
+  /** Si la pestaña «Indicador» o «Fórmulas» deja de existir, mostramos «Datos» sin setState en un effect. */
+  const formulaTabVisible = visibleTabs.some((t) => t.id === 'formula');
+  const activeTab =
+    tab === 'gauge' && hideGaugeForWidget
+      ? 'data'
+      : tab === 'formula' && !formulaTabVisible
+        ? 'data'
+        : tab;
 
   const downlinkSelectState = useMemo(() => {
     const dlList = Array.isArray(previewDownlinks) ? previewDownlinks : [];
@@ -2330,6 +2421,67 @@ export default function WidgetEditModal({
               <button type="button" className="widget-edit-add" onClick={addRangeRow}>
                 Añadir
               </button>
+            </div>
+          )}
+
+          {activeTab === 'formula' && editScope === 'value' && (
+            <div className="widget-edit-fields">
+              <p className="widget-edit-hint">
+                Usa el valor de telemetría como <strong>Valor</strong> o <strong>(Valor)</strong> en la expresión.
+                Operadores: <code>*</code> <code>/</code> <code>+</code> <code>-</code> y paréntesis; también{' '}
+                <code>×</code> y <code>÷</code>. Puede omitir «Valor» al inicio: <code>/10</code> equivale a{' '}
+                <code>(Valor)/10</code>. Ejemplos: <code>(Valor) / 1000</code>, <code>(127×10×5) / 1000</code>. Puede
+                terminar en <code>=</code>.
+              </p>
+              <label className="widget-edit-label widget-edit-label--inline widget-edit-lorawan-toggle">
+                <input
+                  type="checkbox"
+                  checked={Boolean(draft.data?.formulaEnabled)}
+                  onChange={(e) => update('data.formulaEnabled', e.target.checked)}
+                />
+                Activar fórmula sobre el valor mostrado
+              </label>
+              <label className="widget-edit-label">
+                Campo de entrada para la fórmula
+                <select
+                  className="widget-edit-input"
+                  value={draft.data?.formulaSourceKey ?? ''}
+                  onChange={(e) => update('data.formulaSourceKey', e.target.value)}
+                  disabled={!draft.data?.formulaEnabled}
+                >
+                  <option value="">Mismo que «Campo de datos»</option>
+                  {formulaFieldOptions.map((k) => (
+                    <option key={k} value={k}>
+                      {k}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="widget-edit-label">
+                Expresión
+                <textarea
+                  className="widget-edit-input widget-edit-formula-textarea"
+                  rows={3}
+                  placeholder="(Valor) / 1000  o  /10"
+                  value={draft.data?.formulaExpression ?? ''}
+                  onChange={(e) => update('data.formulaExpression', e.target.value)}
+                  disabled={!draft.data?.formulaEnabled}
+                  spellCheck={false}
+                />
+              </label>
+              <div className="widget-edit-formula-probe-row">
+                <button type="button" className="widget-edit-btn widget-edit-btn--secondary" onClick={runFormulaProbe}>
+                  Prueba
+                </button>
+                <span className="widget-edit-hint widget-edit-hint--inline">
+                  Calcula con la entrada actual (en vivo o de ejemplo) sin guardar.
+                </span>
+              </div>
+              {formulaProbeLine ? (
+                <p className="widget-edit-formula-probe-result" role="status">
+                  {formulaProbeLine}
+                </p>
+              ) : null}
             </div>
           )}
 

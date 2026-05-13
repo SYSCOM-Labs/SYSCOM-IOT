@@ -66,7 +66,14 @@ export const AuthProvider = ({ children }) => {
           const profile = await getMe();
           setUserProfile(profile);
         } catch (e) {
-          console.warn('Could not refresh profile:', e.message);
+          if (e?.status === 401) {
+            localLogout();
+            setToken(null);
+            setUser(null);
+            setUserProfile(null);
+          } else {
+            console.warn('Could not refresh profile:', e.message);
+          }
         }
       }
       setLoading(false);

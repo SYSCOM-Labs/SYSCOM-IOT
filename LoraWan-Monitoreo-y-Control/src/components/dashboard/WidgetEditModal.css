@@ -928,6 +928,37 @@
   margin-top: 8px;
 }
 
+.widget-edit-formula-textarea {
+  min-height: 4.5rem;
+  resize: vertical;
+  font-family: ui-monospace, 'Cascadia Code', 'Consolas', monospace;
+  line-height: 1.35;
+}
+
+.widget-edit-formula-probe-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin-top: 6px;
+}
+
+.widget-edit-hint--inline {
+  margin: 0;
+  flex: 1;
+  min-width: 180px;
+}
+
+.widget-edit-formula-probe-result {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  line-height: 1.4;
+  background: rgba(59, 130, 246, 0.12);
+  border: 1px solid rgba(59, 130, 246, 0.28);
+}
+
 .widget-edit-field-combo {
   display: flex;
   flex-direction: column;

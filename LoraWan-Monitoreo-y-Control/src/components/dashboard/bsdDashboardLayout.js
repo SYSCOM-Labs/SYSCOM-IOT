@@ -223,7 +223,10 @@ export function clampLayoutItemsToModerateMins(layout) {
 }
 
 /**
- * Inserta una celda nueva sin solaparse con las existentes (primera posición libre por filas).
+ * Inserta una celda nueva sin solaparse con las existentes.
+ * Orden de búsqueda: **por filas**, en cada fila de **izquierda a derecha**; la primera fila es la superior (y=0),
+ * luego y=1, etc., de modo que se ocupa el ancho disponible antes de pasar a la fila inferior (lectura occidental).
+ *
  * @param {BsdGridItem[] | null | undefined} layout
  * @param {BsdGridItem} slotTemplate debe incluir `i`, `w`, `h`, y opcionalmente `minW`/`minH`
  * @returns {BsdGridItem}
@@ -269,6 +272,45 @@ export function placeNewBsdGridItem(layout, slotTemplate) {
   }
   const maxBottom = Math.max(0, ...items.map((it) => (Math.round(Number(it.y)) || 0) + (Math.round(Number(it.h)) || 0)));
   return { ...base, x: 0, y: maxBottom };
+}
+
+/**
+ * Cierra huecos verticales y reubica celdas en orden de lectura (arriba→abajo, izquierda→derecha),
+ * usando la misma colocación que `placeNewBsdGridItem` para cada pieza.
+ *
+ * @param {BsdGridItem[] | null | undefined} layout
+ * @returns {BsdGridItem[]}
+ */
+export function compactBsdGridLayoutTopLeft(layout) {
+  const items = normalizeLayoutForPersistence(layout || []);
+  if (items.length === 0) return [];
+  const sorted = [...items].sort((a, b) => {
+    const dy = (Number(a.y) || 0) - (Number(b.y) || 0);
+    if (dy !== 0) return dy;
+    const dx = (Number(a.x) || 0) - (Number(b.x) || 0);
+    if (dx !== 0) return dx;
+    return String(a.i).localeCompare(String(b.i));
+  });
+  const placed = [];
+  for (const it of sorted) {
+    const w = Math.round(Number(it.w)) || 1;
+    const h = Math.round(Number(it.h)) || 1;
+    const slot = placeNewBsdGridItem(placed, {
+      i: String(it.i),
+      w,
+      h,
+      ...(it.minW != null && Number.isFinite(Number(it.minW)) ? { minW: Math.round(Number(it.minW)) } : {}),
+      ...(it.minH != null && Number.isFinite(Number(it.minH)) ? { minH: Math.round(Number(it.minH)) } : {}),
+    });
+    placed.push({
+      ...it,
+      x: slot.x,
+      y: slot.y,
+      w: slot.w,
+      h: slot.h,
+    });
+  }
+  return normalizeLayoutForPersistence(placed);
 }
 
 /**
@@ -430,21 +472,86 @@ export function bsdGridRectsOverlap(a, b) {
 }
 
 /**
- * Vector de empuje (una celda de rejilla por paso) **opuesto** al arrastre dominante.
- * Arrastro a la derecha → empujar bloques a la izquierda (-1,0), etc.
+ * Un solo paso ortogonal en la rejilla hacia la posición deseada (±1 en el eje dominante).
+ * @returns {{ dx: number; dy: number }}
  */
-function bsdPushDeltaOppositeDrag(oldItem, newItem) {
-  const ox = Math.round(Number(oldItem.x)) || 0;
-  const oy = Math.round(Number(oldItem.y)) || 0;
-  const nx = Math.round(Number(newItem.x)) || 0;
-  const ny = Math.round(Number(newItem.y)) || 0;
+function bsdDragDominantUnitStep(ox, oy, nx, ny) {
   const dx = nx - ox;
   const dy = ny - oy;
   if (dx === 0 && dy === 0) return { dx: 0, dy: 0 };
   if (Math.abs(dx) >= Math.abs(dy)) {
-    return dx > 0 ? { dx: -1, dy: 0 } : { dx: 1, dy: 0 };
+    if (dx > 0) return { dx: 1, dy: 0 };
+    if (dx < 0) return { dx: -1, dy: 0 };
+    if (dy > 0) return { dx: 0, dy: 1 };
+    if (dy < 0) return { dx: 0, dy: -1 };
+    return { dx: 0, dy: 0 };
   }
-  return dy > 0 ? { dx: 0, dy: -1 } : { dx: 0, dy: 1 };
+  if (dy > 0) return { dx: 0, dy: 1 };
+  if (dy < 0) return { dx: 0, dy: -1 };
+  if (dx > 0) return { dx: 1, dy: 0 };
+  if (dx < 0) return { dx: -1, dy: 0 };
+  return { dx: 0, dy: 0 };
+}
+
+function bsdVerticalRangeOverlap(a, b) {
+  return !(a.y + a.h <= b.y || b.y + b.h <= a.y);
+}
+
+function bsdHorizontalRangeOverlap(a, b) {
+  return !(a.x + a.w <= b.x || b.x + b.w <= a.x);
+}
+
+/**
+ * Vecino que comparte borde con `rect` en la dirección indicada (misma regla de “un hueco”).
+ * @param {'R'|'L'|'D'|'U'} dir
+ */
+function bsdFindTouchingNeighbor(items, excludeId, rect, dir) {
+  const ex = Math.round(Number(rect.x)) || 0;
+  const ey = Math.round(Number(rect.y)) || 0;
+  const ew = Math.round(Number(rect.w)) || 1;
+  const eh = Math.round(Number(rect.h)) || 1;
+  /** @type {BsdGridItem[]} */
+  const hits = [];
+  for (const o of items) {
+    if (!o || o.i === excludeId) continue;
+    const ox = Math.round(Number(o.x)) || 0;
+    const oy = Math.round(Number(o.y)) || 0;
+    const ow = Math.round(Number(o.w)) || 1;
+    const oh = Math.round(Number(o.h)) || 1;
+    if (dir === 'R' && ox === ex + ew && bsdVerticalRangeOverlap({ x: ex, y: ey, w: ew, h: eh }, o)) hits.push(o);
+    if (dir === 'L' && ox + ow === ex && bsdVerticalRangeOverlap({ x: ex, y: ey, w: ew, h: eh }, o)) hits.push(o);
+    if (dir === 'D' && oy === ey + eh && bsdHorizontalRangeOverlap({ x: ex, y: ey, w: ew, h: eh }, o)) hits.push(o);
+    if (dir === 'U' && oy + oh === ey && bsdHorizontalRangeOverlap({ x: ex, y: ey, w: ew, h: eh }, o)) hits.push(o);
+  }
+  if (hits.length === 0) return null;
+  if (hits.length === 1) return hits[0];
+  /** Varios apilados en el mismo borde: el más cercano al centro vertical (o horizontal) del arrastrado */
+  const my = ey + eh / 2;
+  const mx = ex + ew / 2;
+  hits.sort((a, b) => {
+    const acy = (Math.round(Number(a.y)) || 0) + (Math.round(Number(a.h)) || 1) / 2;
+    const bcy = (Math.round(Number(b.y)) || 0) + (Math.round(Number(b.h)) || 1) / 2;
+    const acx = (Math.round(Number(a.x)) || 0) + (Math.round(Number(a.w)) || 1) / 2;
+    const bcx = (Math.round(Number(b.x)) || 0) + (Math.round(Number(b.w)) || 1) / 2;
+    if (dir === 'R' || dir === 'L') {
+      return Math.abs(acy - my) - Math.abs(bcy - my);
+    }
+    return Math.abs(acx - mx) - Math.abs(bcx - mx);
+  });
+  return hits[0];
+}
+
+function bsdApplySnapPositions(items, snap) {
+  if (!Array.isArray(snap) || !snap.length) return;
+  const m = new Map(snap.map((s) => [String(s.i), s]));
+  for (const it of items) {
+    const s = m.get(String(it.i));
+    if (!s) continue;
+    it.x = Math.round(Number(s.x)) || 0;
+    it.y = Math.round(Number(s.y)) || 0;
+    it.w = Math.round(Number(s.w)) || 1;
+    it.h = Math.round(Number(s.h)) || 1;
+  }
 }
 
 function bsdClampGridItem(it, cols) {
@@ -466,73 +573,28 @@ function bsdAnyPairOverlaps(list) {
 }
 
 /**
- * @param {BsdGridItem[]} list
- * @param {string} movedId
- */
-function bsdFirstOverlapPair(list, movedId) {
-  const pairs = [];
-  for (let i = 0; i < list.length; i += 1) {
-    for (let j = i + 1; j < list.length; j += 1) {
-      const a = list[i];
-      const b = list[j];
-      if (bsdGridRectsOverlap(a, b)) pairs.push([a, b]);
-    }
-  }
-  if (!pairs.length) return null;
-  pairs.sort((pa, pb) => {
-    const aInv = pa[0].i === movedId || pa[1].i === movedId ? 0 : 1;
-    const bInv = pb[0].i === movedId || pb[1].i === movedId ? 0 : 1;
-    if (aInv !== bInv) return aInv - bInv;
-    return 0;
-  });
-  return pairs[0];
-}
-
-/**
- * @param {BsdGridItem} p
- * @param {BsdGridItem} q
- * @param {string} movedId
- * @param {{ dx: number; dy: number }} push
- */
-function bsdPickMoverInOverlapPair(p, q, movedId, push) {
-  if (p.i === movedId) return q;
-  if (q.i === movedId) return p;
-  if (push.dx < 0) return p.x > q.x ? p : q;
-  if (push.dx > 0) return p.x < q.x ? p : q;
-  if (push.dy < 0) return p.y > q.y ? p : q;
-  return p.y < q.y ? p : q;
-}
-
-/**
- * Coloca el arrastrado en la celda de destino; si hay solape, **recorre** los bloqueados
- * un paso de rejilla en la dirección opuesta al arrastre (cadena), sin mover el resto.
- * Si no se puede eliminar el solape (límite de rejilla), revierte al layout previo al intento
- * con el arrastrado en su posición original.
+ * Arrastre en **un solo paso** de rejilla (±1 en el eje dominante del gesto):
+ * - Si hay un vecino que comparte borde en esa dirección y el mismo tamaño → **intercambian** posiciones.
+ * - Si no hay vecino y la casilla destino está libre → el widget se **desplaza** un paso.
+ * - En cualquier otro caso → se **revierte** al layout del inicio del arrastre (`snap`).
  *
- * @param {BsdGridItem[] | null | undefined} _dragSnapshot reservado (p. ej. futuras reglas); no usado
+ * La colocación al **añadir** widgets sigue en `placeNewBsdGridItem` (fila superior, izquierda a derecha,
+ * siguiente fila debajo si no cabe).
+ *
+ * @param {BsdGridItem[] | null | undefined} snap layout al `onDragStart` (obligatorio para revertir bien)
  * @param {{ i?: unknown; x?: unknown; y?: unknown; w?: unknown; h?: unknown } | null} oldItem
  * @param {{ i?: unknown; x?: unknown; y?: unknown; w?: unknown; h?: unknown } | null} newItem
  * @param {BsdGridItem[] | null | undefined} layoutFromRgl layout que entrega RGL al soltar
  * @param {number} [cols]
- * @returns {BsdGridItem[] | null} layout resuelto, o null si no hacía falta tocar nada
+ * @returns {BsdGridItem[] | null} layout normalizado, o null si no hubo cambio respecto a RGL
  */
-export function applyBsdDragChainPushLayout(_dragSnapshot, oldItem, newItem, layoutFromRgl, cols = 12) {
+export function applyBsdDragChainPushLayout(snap, oldItem, newItem, layoutFromRgl, cols = 12) {
   if (!Array.isArray(layoutFromRgl) || !layoutFromRgl.length || !oldItem || !newItem) return null;
 
   const movedId = String(newItem.i ?? '');
   if (!movedId) return null;
 
-  const nx = Math.round(Number(newItem.x)) || 0;
-  const ny = Math.round(Number(newItem.y)) || 0;
-  const nw = Math.round(Number(newItem.w)) || 1;
-  const nh = Math.round(Number(newItem.h)) || 1;
-  const ox = Math.round(Number(oldItem.x)) || 0;
-  const oy = Math.round(Number(oldItem.y)) || 0;
-  const ow = Math.round(Number(oldItem.w)) || nw;
-  const oh = Math.round(Number(oldItem.h)) || nh;
-
-  const push = bsdPushDeltaOppositeDrag(oldItem, newItem);
-  if (push.dx === 0 && push.dy === 0) return null;
+  const snapNorm = Array.isArray(snap) && snap.length ? normalizeLayoutForPersistence(snap) : null;
 
   /** @type {BsdGridItem[]} */
   const items = layoutFromRgl
@@ -549,63 +611,78 @@ export function applyBsdDragChainPushLayout(_dragSnapshot, oldItem, newItem, lay
       };
     });
 
-  const beforeTryMap = new Map(
-    items.map((it) => [it.i, { x: it.x, y: it.y, w: it.w, h: it.h }])
-  );
-
   const moved = items.find((it) => it.i === movedId);
   if (!moved) return null;
 
-  moved.x = nx;
-  moved.y = ny;
+  const ox = Math.round(Number(oldItem.x)) || 0;
+  const oy = Math.round(Number(oldItem.y)) || 0;
+  const nxp = Math.round(Number(newItem.x)) || 0;
+  const nyp = Math.round(Number(newItem.y)) || 0;
+  const nw = Math.round(Number(newItem.w)) || Math.round(Number(moved.w)) || 1;
+  const nh = Math.round(Number(newItem.h)) || Math.round(Number(moved.h)) || 1;
   moved.w = nw;
   moved.h = nh;
-  for (const it of items) bsdClampGridItem(it, cols);
 
-  if (!bsdAnyPairOverlaps(items)) return null;
-
-  let stagnant = 0;
-  const maxIter = 1200;
-  for (let iter = 0; iter < maxIter; iter += 1) {
-    if (!bsdAnyPairOverlaps(items)) {
+  const step = bsdDragDominantUnitStep(ox, oy, nxp, nyp);
+  if (step.dx === 0 && step.dy === 0) {
+    if (nxp === ox && nyp === oy) return null;
+    if (snapNorm) {
+      bsdApplySnapPositions(items, snapNorm);
+      for (const it of items) bsdClampGridItem(it, cols);
       return normalizeLayoutForPersistence(items);
     }
-    const pair = bsdFirstOverlapPair(items, movedId);
-    if (!pair) break;
-    const [p, q] = pair;
-    const mover = bsdPickMoverInOverlapPair(p, q, movedId, push);
-    const bx = mover.x;
-    const by = mover.y;
-    mover.x += push.dx;
-    mover.y += push.dy;
-    bsdClampGridItem(mover, cols);
-    if (mover.x === bx && mover.y === by) {
-      stagnant += 1;
-      if (stagnant > 24) break;
-    } else {
-      stagnant = 0;
+    moved.x = ox;
+    moved.y = oy;
+    for (const it of items) bsdClampGridItem(it, cols);
+    return normalizeLayoutForPersistence(items);
+  }
+
+  /** @type {'R'|'L'|'D'|'U'} */
+  let dir = 'R';
+  if (step.dx > 0) dir = 'R';
+  else if (step.dx < 0) dir = 'L';
+  else if (step.dy > 0) dir = 'D';
+  else dir = 'U';
+
+  const rect = { x: ox, y: oy, w: nw, h: nh };
+  const neighbor = bsdFindTouchingNeighbor(items, movedId, rect, dir);
+
+  if (neighbor) {
+    const sameSize =
+      Math.round(Number(neighbor.w)) === nw && Math.round(Number(neighbor.h)) === nh;
+    if (sameSize) {
+      const oxO = neighbor.x;
+      const oyO = neighbor.y;
+      neighbor.x = ox;
+      neighbor.y = oy;
+      moved.x = oxO;
+      moved.y = oyO;
+      for (const it of items) bsdClampGridItem(it, cols);
+      if (!bsdAnyPairOverlaps(items)) {
+        return normalizeLayoutForPersistence(items);
+      }
+      neighbor.x = oxO;
+      neighbor.y = oyO;
+      moved.x = ox;
+      moved.y = oy;
     }
   }
 
+  const candX = ox + step.dx;
+  const candY = oy + step.dy;
+  moved.x = candX;
+  moved.y = candY;
+  for (const it of items) bsdClampGridItem(it, cols);
   if (!bsdAnyPairOverlaps(items)) {
     return normalizeLayoutForPersistence(items);
   }
 
-  for (const it of items) {
-    const b = beforeTryMap.get(it.i);
-    if (b) {
-      it.x = b.x;
-      it.y = b.y;
-      it.w = b.w;
-      it.h = b.h;
-    }
-  }
-  const mv = items.find((it) => it.i === movedId);
-  if (mv) {
-    mv.x = ox;
-    mv.y = oy;
-    mv.w = ow;
-    mv.h = oh;
+  moved.x = ox;
+  moved.y = oy;
+  if (snapNorm) {
+    bsdApplySnapPositions(items, snapNorm);
+    for (const it of items) bsdClampGridItem(it, cols);
+    return normalizeLayoutForPersistence(items);
   }
   for (const it of items) bsdClampGridItem(it, cols);
   return normalizeLayoutForPersistence(items);

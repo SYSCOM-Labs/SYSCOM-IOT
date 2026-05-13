@@ -350,8 +350,30 @@ body.theme-dark .bsd-panel-widgets-canvas {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   overflow: hidden;
+}
+
+.bsd-dash-grid-layout .react-grid-item > .widget > .bsd-metric-circular .bsd-metric-circular__chart,
+.bsd-dash-static-cell > .widget > .bsd-metric-circular .bsd-metric-circular__chart {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bsd-dash-grid-layout .react-grid-item > .widget > .bsd-metric-circular .bsd-metric-circular__svg,
+.bsd-dash-static-cell > .widget > .bsd-metric-circular .bsd-metric-circular__svg {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  height: auto;
+  max-height: 100%;
+  aspect-ratio: 240 / 152;
+  flex: 0 1 auto;
+  min-height: 0;
 }
 
 @supports (width: 1cqh) {
@@ -447,9 +469,24 @@ body.theme-dark .bsd-panel-widgets-canvas {
 .bsd-dash-static-cell .bsd-sensor-grid-shell .sensor-card {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  align-items: stretch;
+  justify-content: flex-start;
   min-height: 0;
+  container-type: size;
+  container-name: sensor-card;
+}
+
+.bsd-dash-grid-layout .bsd-sensor-grid-shell .sensor-card .value-indicator--circular,
+.bsd-dash-static-cell .bsd-sensor-grid-shell .sensor-card .value-indicator--circular {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+}
+
+.bsd-dash-grid-layout .bsd-sensor-grid-shell .sensor-card .sensor-status,
+.bsd-dash-static-cell .bsd-sensor-grid-shell .sensor-card .sensor-status {
+  flex: 0 0 auto;
+  margin-top: auto;
 }
 
 .bsd-dash-grid-layout .react-grid-item > .widget.bsd-control-widget > .bsd-control-hint,
@@ -1122,11 +1159,29 @@ body.theme-dark .bsd-root .bsd-circular-gauge__value {
   width: min(100%, clamp(180px, 48vmin, 400px));
   max-width: 100%;
   margin: 4px auto 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-height: 0;
+}
+
+.bsd-root .bsd-metric-circular__chart {
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .bsd-root .bsd-metric-circular__svg {
   width: 100%;
+  max-width: 100%;
   height: auto;
+  max-height: 100%;
+  aspect-ratio: 240 / 152;
+  flex: 0 1 auto;
+  min-height: 0;
   display: block;
   filter: drop-shadow(0 10px 22px rgba(15, 23, 42, 0.12));
 }
@@ -1245,6 +1300,7 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
 }
 
 .bsd-root .bsd-metric-circular__lastat {
+  flex: 0 0 auto;
   font-size: 0.68rem;
   font-weight: 600;
   text-align: center;
@@ -2169,10 +2225,6 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
 
 .bsd-root .sensor-card .semicircle-gauge__svg text {
   fill: rgba(226, 232, 240, 0.7);
-}
-
-.bsd-root .sensor-card .semicircle-gauge--compact .semicircle-gauge__svg {
-  max-height: 108px;
 }
 
 .bsd-root .sensor-card:hover {

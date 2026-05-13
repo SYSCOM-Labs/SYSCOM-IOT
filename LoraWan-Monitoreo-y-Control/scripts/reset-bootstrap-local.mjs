@@ -48,6 +48,7 @@ const DELETE_ORDER = [
   'downlink_log',
   'automation_rules',
   'device_dashboard',
+  'device_bsd_preferences',
   'device_labels',
   'telemetry',
   'lorawan_gateways',

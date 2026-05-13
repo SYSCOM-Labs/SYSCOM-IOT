@@ -66,21 +66,23 @@ export default function ValueIndicator({
 
   if (kind === 'circular') {
     return (
-      <SemicircleGauge
-        value={clamped}
-        unit={unit}
-        decimals={d}
-        scaleMin={min}
-        scaleMax={max}
-        ranges={ranges}
-        title={title}
-        titleColor={titleColor}
-        subtitleColor={subColor}
-        subtitle={subtitle}
-        compact={compact}
-        centerLabel={textVal || undefined}
-        inverseFill={inverseFill}
-      />
+      <div className="value-indicator value-indicator--circular">
+        <SemicircleGauge
+          value={clamped}
+          unit={unit}
+          decimals={d}
+          scaleMin={min}
+          scaleMax={max}
+          ranges={ranges}
+          title={title}
+          titleColor={titleColor}
+          subtitleColor={subColor}
+          subtitle={subtitle}
+          compact={compact}
+          centerLabel={textVal || undefined}
+          inverseFill={inverseFill}
+        />
+      </div>
     );
   }
 

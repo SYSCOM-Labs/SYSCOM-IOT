@@ -98,7 +98,13 @@ export default function SemicircleGauge({
           )}
         </div>
       )}
-      <svg viewBox="0 0 200 120" className="semicircle-gauge__svg" aria-hidden>
+      <div className="semicircle-gauge__chart">
+        <svg
+          viewBox="0 0 200 124"
+          preserveAspectRatio="xMidYMid meet"
+          className="semicircle-gauge__svg"
+          aria-hidden
+        >
         <path
           d={fullArcD}
           fill="none"
@@ -146,7 +152,8 @@ export default function SemicircleGauge({
             </g>
           );
         })}
-      </svg>
+        </svg>
+      </div>
       <div className="semicircle-gauge__value-block">
         <span className="semicircle-gauge__value">{centerText}</span>
         {unit && !useCustomCenter ? <span className="semicircle-gauge__unit">{unit}</span> : null}

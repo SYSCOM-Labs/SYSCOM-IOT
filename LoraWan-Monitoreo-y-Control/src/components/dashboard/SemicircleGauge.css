@@ -2,55 +2,89 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   width: 100%;
-}
-
-.semicircle-gauge--compact .semicircle-gauge__svg {
-  max-height: 140px;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  box-sizing: border-box;
 }
 
 .semicircle-gauge__meta {
+  flex: 0 0 auto;
   text-align: center;
   margin-bottom: 4px;
+  max-width: 100%;
+  padding: 0 4px;
 }
 
 .semicircle-gauge__title {
   font-weight: 700;
-  font-size: 0.95rem;
+  font-size: clamp(0.72rem, 2.8cqi + 0.55rem, 0.95rem);
+  line-height: 1.2;
+  word-break: break-word;
 }
 
 .semicircle-gauge__sub {
-  font-size: 0.72rem;
+  font-size: clamp(0.62rem, 2cqi + 0.45rem, 0.72rem);
   color: #64748b;
   margin-top: 2px;
 }
 
-.semicircle-gauge__svg {
+/**
+ * Área flexible: el SVG escala para caber en el alto disponible sin recortar el arco
+ * (el contenedor padre debe tener altura definida / flex + min-height: 0).
+ */
+.semicircle-gauge__chart {
+  flex: 1 1 0;
+  min-height: 0;
   width: 100%;
-  max-width: 280px;
-  height: auto;
+  max-width: min(280px, 100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.semicircle-gauge__svg {
   display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  max-height: 100%;
+  aspect-ratio: 200 / 124;
+  flex: 0 1 auto;
+  min-height: 0;
+}
+
+.semicircle-gauge--compact .semicircle-gauge__chart {
+  max-width: min(260px, 100%);
 }
 
 .semicircle-gauge__value-block {
-  margin-top: -8px;
+  flex: 0 0 auto;
+  margin-top: 2px;
   text-align: center;
+  max-width: 100%;
+  padding: 0 6px 2px;
 }
 
 .semicircle-gauge__value {
-  font-size: 1.75rem;
+  font-size: clamp(0.95rem, 4.5cqh + 0.5rem, 1.75rem);
   font-weight: 800;
   color: #0f172a;
   letter-spacing: -0.02em;
+  line-height: 1.15;
+  word-break: break-word;
 }
 
 .semicircle-gauge--compact .semicircle-gauge__value {
-  font-size: 1.35rem;
+  font-size: clamp(0.85rem, 4cqh + 0.45rem, 1.35rem);
 }
 
 .semicircle-gauge__unit {
   display: block;
-  font-size: 0.85rem;
+  font-size: clamp(0.68rem, 2.5cqi + 0.4rem, 0.85rem);
   color: #64748b;
   font-weight: 600;
   margin-top: 2px;

@@ -2525,6 +2525,11 @@ app.post('/api/devices/assign', authMiddleware, (req, res) => {
   }
   store.ensureDeviceLicenseIfMissing(did);
   store.upsertDeviceLabel(assignee.id, did, row.displayName);
+  try {
+    store.propagateDeviceBsdPreferencesToUser(actor.id, assignee.id, did);
+  } catch (e) {
+    console.warn('[devices/assign] BSD prefs:', e.message || e);
+  }
   res.status(prevA ? 200 : 201).json({ ok: true, userDevice: row });
 });
 
@@ -3030,6 +3035,45 @@ function handleDashboardWidgetsSave(req, res) {
 app.put('/api/devices/:deviceId/dashboard-widgets', authMiddleware, staffOnlyMiddleware, handleDashboardWidgetsSave);
 /** Mismo cuerpo que PUT; por si el proxy o el cliente no envían PUT correctamente. */
 app.post('/api/devices/:deviceId/dashboard-widgets', authMiddleware, staffOnlyMiddleware, handleDashboardWidgetsSave);
+
+function normalizeDeviceBsdPreferencesBody(body) {
+  if (!body || typeof body !== 'object') return { error: 'Cuerpo inválido' };
+  const out = {};
+  if (body.valueWidgets && typeof body.valueWidgets === 'object') out.valueWidgets = body.valueWidgets;
+  if (Array.isArray(body.gridLayout)) out.gridLayout = body.gridLayout;
+  if (body.visibility && typeof body.visibility === 'object') out.visibility = body.visibility;
+  if (Array.isArray(body.downlinks)) out.downlinks = body.downlinks;
+  const json = JSON.stringify(out);
+  if (json.length > 900000) return { error: 'Preferencias demasiado grandes (máx. ~900 KB)' };
+  return { ok: true, prefs: out };
+}
+
+app.get('/api/devices/:deviceId/bsd-preferences', authMiddleware, deviceAssignmentMiddleware, (req, res) => {
+  try {
+    const { prefs, updatedAt } = store.getDeviceBsdPreferencesWithPeerFallback(
+      req.user.id,
+      req.params.deviceId
+    );
+    res.json({ status: 'Success', prefs, updatedAt });
+  } catch (e) {
+    console.error('[bsd-preferences GET]', e);
+    res.status(500).json({ error: e.message || 'Error al leer preferencias' });
+  }
+});
+
+app.put('/api/devices/:deviceId/bsd-preferences', authMiddleware, deviceAssignmentMiddleware, (req, res) => {
+  try {
+    if (!assertDeviceAssignedToUser(req, res, req.params.deviceId)) return;
+    const r = normalizeDeviceBsdPreferencesBody(req.body || {});
+    if (r.error) return res.status(400).json({ error: r.error });
+    store.setDeviceBsdPreferences(req.user.id, req.params.deviceId, r.prefs);
+    const { prefs, updatedAt } = store.getDeviceBsdPreferences(req.user.id, req.params.deviceId);
+    res.json({ status: 'Success', prefs, updatedAt });
+  } catch (e) {
+    console.error('[bsd-preferences PUT]', e);
+    res.status(400).json({ error: e.message || 'Error al guardar preferencias' });
+  }
+});
 
 app.get('/api/devices/:deviceId/properties/history', authMiddleware, deviceAssignmentMiddleware, (req, res) => {
   const { startTime, endTime, pageSize } = req.query;

@@ -434,6 +434,15 @@ class Store {
         );
       `);
       this._backfillDeviceLicenses();
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS device_bsd_preferences (
+          user_id TEXT NOT NULL,
+          device_id TEXT NOT NULL,
+          prefs_json TEXT NOT NULL DEFAULT '{}',
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (user_id, device_id)
+        );
+      `);
     } catch (e) {
       console.warn('[Syscom] Migración device schema:', e.message);
     }
@@ -989,6 +998,22 @@ class Store {
       udDeleteAllForDevice: this.db.prepare('DELETE FROM user_devices WHERE device_id = ?'),
       labelsDeleteByDevice: this.db.prepare('DELETE FROM device_labels WHERE device_id = ?'),
       ddDeleteByDevice: this.db.prepare('DELETE FROM device_dashboard WHERE device_id = ?'),
+      bsdPrefGet: this.db.prepare(
+        'SELECT prefs_json, updated_at FROM device_bsd_preferences WHERE user_id = ? AND device_id = ?'
+      ),
+      bsdPrefUpsert: this.db.prepare(`
+        INSERT OR REPLACE INTO device_bsd_preferences (user_id, device_id, prefs_json, updated_at)
+        VALUES (?, ?, ?, ?)
+      `),
+      bsdPrefDeleteByDevice: this.db.prepare('DELETE FROM device_bsd_preferences WHERE device_id = ?'),
+      bsdPrefDeleteUserDevice: this.db.prepare(
+        'DELETE FROM device_bsd_preferences WHERE user_id = ? AND device_id = ?'
+      ),
+      bsdPrefDeleteNonSuperForDevice: this.db.prepare(`
+        DELETE FROM device_bsd_preferences
+        WHERE device_id = ?
+        AND user_id IN (SELECT id FROM users WHERE COALESCE(role, '') != 'superadmin')
+      `),
       licGet: this.db.prepare(
         'SELECT device_id, started_at, expires_at, updated_at FROM device_license WHERE device_id = ?'
       ),
@@ -2457,7 +2482,14 @@ class Store {
   }
 
   deleteUserDevice(userId, deviceId) {
-    this.st.udDelete.run(userId, String(deviceId));
+    const uid = String(userId);
+    const did = String(deviceId);
+    this.st.udDelete.run(uid, did);
+    try {
+      this.st.bsdPrefDeleteUserDevice.run(uid, did);
+    } catch {
+      /* tabla puede no existir en DB muy antigua */
+    }
   }
 
   /** Elimina el dispositivo de toda la base (telemetría, asignaciones, etiquetas, dashboards). */
@@ -2469,6 +2501,11 @@ class Store {
       this.st.udDeleteAllForDevice.run(did);
       this.st.labelsDeleteByDevice.run(did);
       this.st.ddDeleteByDevice.run(did);
+      try {
+        this.st.bsdPrefDeleteByDevice.run(did);
+      } catch {
+        /* ignore */
+      }
       this.st.decodeDelete.run(did);
       this.st.licDelete.run(did);
       this.db.exec('COMMIT');
@@ -2565,6 +2602,11 @@ class Store {
     const did = String(deviceId);
     this.st.labelsDeleteNonSuperForDevice.run(did);
     this.st.ddDeleteNonSuperForDevice.run(did);
+    try {
+      this.st.bsdPrefDeleteNonSuperForDevice.run(did);
+    } catch {
+      /* ignore */
+    }
     this.st.udDeleteNonSuperForDevice.run(did);
   }
 
@@ -2772,6 +2814,103 @@ class Store {
     const now = new Date().toISOString();
     const json = JSON.stringify(Array.isArray(widgets) ? widgets : []);
     this.st.ddUpsert.run(userId, String(deviceId), json, now);
+  }
+
+  /**
+   * Preferencias BSD (tablero por dispositivo, downlinks, etc.) por usuario y equipo.
+   * @returns {{ prefs: Record<string, unknown>, updatedAt: string } | null}
+   */
+  getDeviceBsdPreferences(userId, deviceId) {
+    try {
+      const row = this.st.bsdPrefGet.get(String(userId), String(deviceId));
+      if (!row || !row.prefs_json) return { prefs: {}, updatedAt: '' };
+      let prefs = {};
+      try {
+        prefs = JSON.parse(row.prefs_json) || {};
+      } catch {
+        prefs = {};
+      }
+      if (!prefs || typeof prefs !== 'object') prefs = {};
+      return { prefs, updatedAt: String(row.updated_at || '') };
+    } catch {
+      return { prefs: {}, updatedAt: '' };
+    }
+  }
+
+  /** Misma heurística que `deviceBsdBundleIsEmpty` en el cliente (widgets, rejilla, downlinks HEX, visibilidad). */
+  deviceBsdPrefsBundleIsEmpty(prefs) {
+    if (!prefs || typeof prefs !== 'object') return true;
+    const vw = prefs.valueWidgets;
+    const nVw = vw && typeof vw === 'object' ? Object.keys(vw).length : 0;
+    const gl = prefs.gridLayout;
+    const nGl = Array.isArray(gl) ? gl.length : 0;
+    const dl = prefs.downlinks;
+    const nDl = Array.isArray(dl) ? dl.filter((r) => r && String(r.hex || '').trim()).length : 0;
+    const vis = prefs.visibility;
+    const visKeys =
+      vis && typeof vis === 'object' ? Object.keys(vis).filter((k) => vis[k] === false) : [];
+    return nVw === 0 && nGl === 0 && nDl === 0 && visKeys.length === 0;
+  }
+
+  /**
+   * GET perezoso: si este usuario aún no tiene BSD persistido para el equipo, copia desde
+   * cualquier otro asignado con JSON no vacío (p. ej. falló el PUT antes de `/assign`).
+   */
+  getDeviceBsdPreferencesWithPeerFallback(userId, deviceId) {
+    const uid = String(userId);
+    const did = String(deviceId);
+    let cur = this.getDeviceBsdPreferences(uid, did);
+    if (!this.deviceBsdPrefsBundleIsEmpty(cur.prefs)) return cur;
+    this.propagateDeviceBsdPreferencesToUser('', uid, did);
+    cur = this.getDeviceBsdPreferences(uid, did);
+    return cur;
+  }
+
+  setDeviceBsdPreferences(userId, deviceId, prefsObj) {
+    const now = new Date().toISOString();
+    const o = prefsObj && typeof prefsObj === 'object' ? prefsObj : {};
+    const json = JSON.stringify(o);
+    if (json.length > 900000) {
+      throw new Error('Preferencias demasiado grandes');
+    }
+    this.st.bsdPrefUpsert.run(String(userId), String(deviceId), json, now);
+  }
+
+  /** Tras asignar el equipo a otro usuario: copia el JSON del actor al asignatario (primera asignación). */
+  copyDeviceBsdPreferencesOnAssign(fromUserId, toUserId, deviceId) {
+    const from = String(fromUserId);
+    const to = String(toUserId);
+    const did = String(deviceId);
+    const row = this.st.bsdPrefGet.get(from, did);
+    if (!row || !row.prefs_json) return false;
+    const raw = String(row.prefs_json).trim();
+    if (!raw || raw === '{}') return false;
+    const now = new Date().toISOString();
+    this.st.bsdPrefUpsert.run(to, did, raw, now);
+    return true;
+  }
+
+  /**
+   * Copia preferencias BSD al asignatario: primero desde `actorUserId`, si no hay datos en servidor
+   * intenta cualquier otro usuario que aún tenga el dispositivo asignado (p. ej. superadmin asigna sin tablero propio).
+   * Si `actorUserId` es cadena vacía, solo se consideran otros asignados (útil en GET perezoso).
+   */
+  propagateDeviceBsdPreferencesToUser(actorUserId, assigneeUserId, deviceId) {
+    const to = String(assigneeUserId);
+    const did = String(deviceId);
+    const tried = new Set();
+    const tryFrom = (from) => {
+      const f = String(from);
+      if (!f || tried.has(f)) return false;
+      tried.add(f);
+      return this.copyDeviceBsdPreferencesOnAssign(f, to, did);
+    };
+    if (tryFrom(actorUserId)) return true;
+    const others = this.listUserIdsAssignedToDevice(did).filter((id) => String(id) !== to);
+    for (const uid of others) {
+      if (tryFrom(uid)) return true;
+    }
+    return false;
   }
 
   runRetentionPruneNow() {

@@ -6,6 +6,20 @@
   text-align: center;
 }
 
+/** Contenedor de rejilla / modal: permite escalar tipografía y gauge con el tamaño asignado */
+.value-indicator--circular {
+  container-type: size;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  overflow: hidden;
+}
+
 .vi-linear__title,
 .vi-vertical__title,
 .vi-battery__title,
