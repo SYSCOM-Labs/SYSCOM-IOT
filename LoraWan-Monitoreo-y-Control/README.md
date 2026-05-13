@@ -19,24 +19,81 @@ No hay otros runtimes obligatorios en este subproyecto (sin Dockerfile ni compos
 
 ## Instalación
 
-Desde **esta carpeta** (`LoraWan-Monitoreo-y-Control`, donde está `package.json`); si entráis desde la raíz del monorepo SYSCOM-IOT, usad antes `cd LoraWan-Monitoreo-y-Control`.
+Desde **esta carpeta** (`LoraWan-Monitoreo-y-Control`, donde vive `package.json`):
 
 ```bash
 npm install
 ```
 
+Esto crea `node_modules/` (~380 paquetes, incluido Vite, Express, lora-packet, etc.) y deja todo listo para `npm start`. No hay paso adicional: las dependencias del frontend y del backend conviven en el mismo `node_modules`.
+
+### Si `npm install` falla con `ETIMEDOUT`
+
+Algunos ISPs en México (Infinitum/Telmex y similares) tienen peering roto hacia el rango de Cloudflare donde reside `registry.npmjs.org` (`104.16.x.x`): DNS resuelve, pero el handshake TCP/443 no se completa y caen los `.tgz`. El síntoma típico:
+
+```
+npm error code ETIMEDOUT
+npm error network request to https://registry.npmjs.org/...failed
+```
+
+Opciones, de menor a mayor invasividad:
+
+1. **Mirror para una sola instalación** (recomendado como primer intento):
+
+   ```bash
+   npm install --registry=https://registry.npmmirror.com
+   ```
+
+   `registry.npmmirror.com` es el espejo público de npm mantenido por Alibaba: paquetes idénticos al registry oficial, otra IP, no toca tu configuración global.
+
+2. **Tethering del celular** y reintentar `npm install` normal — si la red corporativa/WiFi es la causa, suele resolver al cambiar de ISP.
+
+3. **Mirror persistente solo para este proyecto** (si lo anterior funciona y quieres dejarlo fijo):
+
+   ```bash
+   echo 'registry=https://registry.npmmirror.com' > .npmrc
+   ```
+
+   El archivo `.npmrc` queda local a esta carpeta. **No lo commiteéis** si llegáis a añadir tokens (`//registry.example.com/:_authToken=…`).
+
+4. **VPN**, cambio de DNS o reportar al ISP — solo si nada de lo anterior funciona.
+
 ## Desarrollo
 
 **Todo-en-uno con `npm start`:** levanta backend (Express) y frontend (Vite con HMR) en el mismo proceso padre, con logs prefijados `[api]` / `[front]`. **Ctrl+C** detiene ambos a la vez.
+
+```bash
+npm start
+```
+
+Lo que veréis al arrancar (orden no garantizado, suele ir Vite primero):
+
+```
+[front]   VITE v7.x  ready in 250 ms
+[front]   ➜  Local:   http://127.0.0.1:5173/
+[api]   🚀 Syscom IoT API escuchando en http://0.0.0.0:3001
+```
+
+Abrid **http://127.0.0.1:5173** en el navegador. En una instalación nueva con la SQLite vacía, la app llama a `GET /api/setup/status`, detecta `needsSetup: true` y muestra el asistente para crear el **primer superadministrador** en vez del login. Tras crearlo, el siguiente arranque irá directo a la pantalla de login.
 
 | Servicio | Comando | URL / puerto por defecto |
 |----------|---------|---------------------------|
 | API + Vite (recomendado) | `npm start` | API en `http://127.0.0.1:3001`, front en `http://127.0.0.1:5173` |
 | Solo frontend | `npm run dev` | `http://127.0.0.1:5173` |
-| Solo backend (modo legacy) | `npm run start:api` | `http://127.0.0.1:3001` |
+| Solo backend | `npm run start:api` | `http://127.0.0.1:3001` |
 | Proxy Vite | (automático) | Peticiones del navegador a `/api` → `http://localhost:3001` |
 
-`npm start` ejecuta `scripts/start-dev.mjs`, que internamente arranca Vite y la API; **carga `--env-file=.env` solo si el archivo existe**, así máquinas nuevas funcionan con valores por defecto. No fijéis `NODE_ENV=production` en desarrollo sin definir `JWT_SECRET` (el servidor sale con error en producción sin él).
+### Detalles del wrapper `npm start`
+
+`scripts/start-dev.mjs`:
+
+- Lanza dos hijos con `child_process.spawn`: `node --experimental-sqlite [--env-file=.env] server/server.js` y `node node_modules/vite/bin/vite.js`.
+- Prefija cada línea de stdout/stderr con `[api]` (cyan) o `[front]` (magenta) para que sean distinguibles.
+- Carga `--env-file=.env` **solo si el archivo existe**, así máquinas nuevas arrancan con valores por defecto del código.
+- Propaga `SIGINT` (Ctrl+C) y `SIGTERM` a ambos hijos. Si uno cae por su cuenta, baja al otro y sale con el código del primero en caer.
+- Sin dependencias adicionales (todo es `node:child_process` y `node:fs`).
+
+No fijéis `NODE_ENV=production` en desarrollo sin definir `JWT_SECRET` (el servidor sale con error en producción sin él).
 
 **HTTPS y certificados:** la configuración actual de Vite usa **HTTP** en el puerto de desarrollo. Si personalizáis Vite/servidor con **TLS** (proxy corporativo, certificado autofirmado), el navegador puede bloquear o avisar hasta que confiéis en el emisor o importéis la CA; SSE y `EventSource` también exigen un contexto seguro coherente con el origen del API.
 

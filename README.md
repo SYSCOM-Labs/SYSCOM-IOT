@@ -19,7 +19,13 @@ npm install
 npm start
 ```
 
-`npm start` arranca API (puerto 3001) y Vite dev (puerto 5173) en un solo proceso con logs prefijados; **Ctrl+C** detiene ambos.
+- `npm install` descarga ~380 paquetes en `node_modules/`. Si falla con `ETIMEDOUT` contra `registry.npmjs.org` (peering roto en algunos ISPs mexicanos hacia Cloudflare), reintenta con el espejo público de Alibaba:
+
+  ```bash
+  npm install --registry=https://registry.npmmirror.com
+  ```
+
+- `npm start` arranca API (puerto 3001) y Vite dev (puerto 5173) en un solo proceso con logs prefijados `[api]`/`[front]`; **Ctrl+C** detiene ambos. La UI vive en **http://127.0.0.1:5173**; al primer arranque, con la SQLite vacía, aparece el asistente para crear el primer superadministrador.
 
 Todo el flujo detallado (variables de entorno, producción, guías LNS, despliegue, etc.) está en **[LoraWan-Monitoreo-y-Control/README.md](./LoraWan-Monitoreo-y-Control/README.md)**.
 
