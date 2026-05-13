@@ -59,4 +59,15 @@ Desktop.ini
 
 # Debug / misc
 *.pem
+*.crt
+*.cer
+*.key
+*.p12
+*.pfx
 .turbo
+
+# Dump legacy de la base de datos (contiene hashes, ingest tokens y client secrets)
+server/db.json
+
+# Volcado de árbol generado en Windows (`tree /F > estructura.txt`)
+estructura.txt

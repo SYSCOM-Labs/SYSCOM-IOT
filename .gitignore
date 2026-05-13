@@ -21,6 +21,12 @@ build/
 # Config local OpenRouter / Anthropic (secretos solo en .env o copia local)
 **/server/OPENROUTER/settings.json
 
+# Dump legacy de la base de datos (contiene hashes, ingest tokens y client secrets)
+**/server/db.json
+
+# Volcado de árbol generado en Windows (`tree /F > estructura.txt`)
+**/estructura.txt
+
 # Logs
 logs/
 *.log
@@ -68,5 +74,10 @@ Desktop.ini
 *.sln
 *.sw?
 
-# Certificados / misc
+# Certificados / claves privadas
 *.pem
+*.crt
+*.cer
+*.key
+*.p12
+*.pfx
