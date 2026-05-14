@@ -124,7 +124,7 @@ function LoginNetwork({ pointCount }) {
 }
 
 const Login = () => {
-  const { loginWithEmail, loginAsUser, needsSetup, setNeedsSetup } = useAuth();
+  const { loginWithEmail, needsSetup, setNeedsSetup } = useAuth();
   const { t } = useLanguage();
   const [customLogo, setCustomLogo] = useState(() => localStorage.getItem(LOGO_STORAGE_KEY) || null);
 
@@ -229,15 +229,11 @@ const Login = () => {
         setError('No hay una cuenta registrada con ese correo. Verifica el texto o solicita acceso a un administrador.');
         return;
       }
-      if (r.accountKind === 'staff') {
-        await loginWithEmail(norm, password);
-      } else {
-        await loginAsUser(norm, password);
-      }
+      await loginWithEmail(norm, password);
     } catch (err) {
       if (err.code === 'auth/is-admin') {
         setError(
-          'Este correo corresponde a un administrador. Use el acceso de administrador con la contraseña correcta.'
+          'Esta cuenta de super administrador no puede usar el acceso restringido. Use el inicio de sesión principal.'
         );
       } else if (err.message?.includes('incorrectos')) {
         setError('Correo o contraseña incorrectos.');

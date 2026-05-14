@@ -18,6 +18,7 @@ const {
   flattenTelemetryProps,
   isMeaningfulTelemetryMergeValue,
 } = require(path.join(__dirname, 'lib', 'telemetryPayloadUtils.js'));
+const navPerm = require('./navPermissions');
 
 const DATA_DIR = path.join(__dirname, 'data');
 const DEFAULT_SQLITE = path.join(DATA_DIR, 'syscom.db');
@@ -307,6 +308,7 @@ function rowToUser(row) {
     createdAt: row.created_at,
     milesightUgGateway,
     mustChangePassword: Number(row.must_change_password) === 1,
+    navPermissionsJson: row.nav_permissions_json != null ? String(row.nav_permissions_json) : null,
   };
 }
 
@@ -343,6 +345,7 @@ class Store {
     this._migrateDeviceSchema();
     this._migrateLnsSchema();
     this._migrateServerSettings();
+    this._migrateNavPermissions();
     this._prepareStatements();
     this._migrateRoles();
     this._pruneCounter = 0;
@@ -441,6 +444,23 @@ class Store {
           prefs_json TEXT NOT NULL DEFAULT '{}',
           updated_at TEXT NOT NULL,
           PRIMARY KEY (user_id, device_id)
+        );
+      `);
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS user_panel_bsd_preferences (
+          user_id TEXT NOT NULL,
+          segment TEXT NOT NULL DEFAULT '',
+          panel_id TEXT NOT NULL DEFAULT 'main',
+          prefs_json TEXT NOT NULL DEFAULT '{}',
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (user_id, segment, panel_id)
+        );
+      `);
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS device_shared_presets (
+          device_id TEXT PRIMARY KEY,
+          body_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL
         );
       `);
     } catch (e) {
@@ -650,10 +670,35 @@ class Store {
   }
 
   _migrateRoles() {
+    /** `admin` y `viewer` se normalizan en `_migrateNavPermissions` tras rellenar permisos. */
+  }
+
+  _migrateNavPermissions() {
     try {
-      this.db.exec(`UPDATE users SET role = 'user' WHERE role = 'viewer'`);
+      const cols = this.db.prepare('PRAGMA table_info(users)').all();
+      const names = new Set(cols.map((c) => c.name));
+      if (!names.has('nav_permissions_json')) {
+        this.db.exec('ALTER TABLE users ADD COLUMN nav_permissions_json TEXT');
+      }
     } catch (e) {
-      console.warn('[Syscom] Migración de roles:', e.message);
+      console.warn('[store] nav_permissions_json column:', e.message);
+    }
+    try {
+      const rows = this.db.prepare('SELECT id, role, nav_permissions_json FROM users').all();
+      const upd = this.db.prepare('UPDATE users SET nav_permissions_json = ? WHERE id = ?');
+      for (const r of rows) {
+        const raw = r.nav_permissions_json != null ? String(r.nav_permissions_json).trim() : '';
+        if (raw !== '' && raw !== '{}') continue;
+        const role = r.role != null ? String(r.role) : 'user';
+        let obj;
+        if (role === 'superadmin') obj = navPerm.allNavTrue();
+        else if (role === 'admin') obj = navPerm.defaultNavLegacyAdmin();
+        else obj = navPerm.defaultNavLegacyUser();
+        upd.run(navPerm.navToJson(obj), r.id);
+      }
+      this.db.exec(`UPDATE users SET role = 'user' WHERE role = 'admin' OR role = 'viewer'`);
+    } catch (e) {
+      console.warn('[store] _migrateNavPermissions:', e.message);
     }
   }
 
@@ -664,13 +709,13 @@ class Store {
       usersByCreator: this.db.prepare('SELECT * FROM users WHERE created_by = ?'),
       allUsers: this.db.prepare('SELECT * FROM users'),
       insertUser: prepareBare(this.db, `
-        INSERT INTO users (id, email, password, role, profile_name, created_by, created_by_email, ingest_token, created_at, milesight_ug_json, must_change_password)
-        VALUES (@id, @email, @password, @role, @profile_name, @created_by, @created_by_email, @ingest_token, @created_at, @milesight_ug_json, @must_change_password)
+        INSERT INTO users (id, email, password, role, profile_name, created_by, created_by_email, ingest_token, created_at, milesight_ug_json, must_change_password, nav_permissions_json)
+        VALUES (@id, @email, @password, @role, @profile_name, @created_by, @created_by_email, @ingest_token, @created_at, @milesight_ug_json, @must_change_password, @nav_permissions_json)
       `),
       updateUserFull: prepareBare(this.db, `
         UPDATE users SET email=@email, password=@password, role=@role, profile_name=@profile_name,
           created_by=@created_by, created_by_email=@created_by_email, ingest_token=@ingest_token, created_at=@created_at, milesight_ug_json=@milesight_ug_json,
-          must_change_password=@must_change_password
+          must_change_password=@must_change_password, nav_permissions_json=@nav_permissions_json
         WHERE id=@id
       `),
       deleteUser: this.db.prepare('DELETE FROM users WHERE id = ?'),
@@ -946,6 +991,13 @@ class Store {
           updated_at = excluded.updated_at
       `),
       decodeDelete: this.db.prepare('DELETE FROM device_decode_config WHERE device_id = ?'),
+      dspGet: this.db.prepare('SELECT body_json, updated_at FROM device_shared_presets WHERE device_id = ?'),
+      dspUpsert: this.db.prepare(`
+        INSERT INTO device_shared_presets (device_id, body_json, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(device_id) DO UPDATE SET body_json = excluded.body_json, updated_at = excluded.updated_at
+      `),
+      dspDelete: this.db.prepare('DELETE FROM device_shared_presets WHERE device_id = ?'),
       udDelete: this.db.prepare('DELETE FROM user_devices WHERE user_id = ? AND device_id = ?'),
       udUserIdsForDevice: this.db.prepare(
         'SELECT DISTINCT user_id FROM user_devices WHERE device_id = ?'
@@ -1014,6 +1066,13 @@ class Store {
         WHERE device_id = ?
         AND user_id IN (SELECT id FROM users WHERE COALESCE(role, '') != 'superadmin')
       `),
+      panelBsdPrefGet: this.db.prepare(
+        'SELECT prefs_json, updated_at FROM user_panel_bsd_preferences WHERE user_id = ? AND segment = ? AND panel_id = ?'
+      ),
+      panelBsdPrefUpsert: this.db.prepare(`
+        INSERT OR REPLACE INTO user_panel_bsd_preferences (user_id, segment, panel_id, prefs_json, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+      `),
       licGet: this.db.prepare(
         'SELECT device_id, started_at, expires_at, updated_at FROM device_license WHERE device_id = ?'
       ),
@@ -1071,6 +1130,92 @@ class Store {
     this.st.serverSettingUpsert.run(String(key), String(value != null ? value : ''), iso);
   }
 
+  /** Catálogo de plantillas compartido (superadmin publica; resto solo lectura). */
+  getDeviceTemplatesCatalog() {
+    const raw = this.getServerSetting('device_templates_catalog_v1');
+    if (!raw || !String(raw).trim()) {
+      return { templates: [], defaultTemplateId: null, updatedAt: null };
+    }
+    try {
+      const o = JSON.parse(String(raw));
+      const templates = Array.isArray(o.templates) ? o.templates : [];
+      const defaultTemplateId =
+        o.defaultTemplateId != null && String(o.defaultTemplateId).trim()
+          ? String(o.defaultTemplateId).trim()
+          : null;
+      const updatedAt = o.updatedAt != null ? String(o.updatedAt) : null;
+      return { templates, defaultTemplateId, updatedAt };
+    } catch {
+      return { templates: [], defaultTemplateId: null, updatedAt: null };
+    }
+  }
+
+  setDeviceTemplatesCatalog(doc) {
+    const templates = Array.isArray(doc.templates) ? doc.templates : [];
+    const defaultTemplateId =
+      doc.defaultTemplateId != null && String(doc.defaultTemplateId).trim()
+        ? String(doc.defaultTemplateId).trim()
+        : null;
+    const updatedAt = new Date().toISOString();
+    this.setServerSetting('device_templates_catalog_v1', JSON.stringify({ templates, defaultTemplateId, updatedAt }));
+  }
+
+  getDeviceSharedPresetsParsed(deviceId) {
+    const did = String(deviceId || '').trim();
+    if (!did) return null;
+    try {
+      const row = this.st.dspGet.get(did);
+      if (!row || row.body_json == null || String(row.body_json).trim() === '') return null;
+      const o = JSON.parse(String(row.body_json));
+      return o && typeof o === 'object' ? o : null;
+    } catch {
+      return null;
+    }
+  }
+
+  getDeviceSharedPresetsMap(deviceIds) {
+    const out = {};
+    const uniq = [...new Set((deviceIds || []).map((id) => String(id || '').trim()).filter(Boolean))];
+    for (const did of uniq) {
+      const o = this.getDeviceSharedPresetsParsed(did);
+      if (!o) continue;
+      out[did] = o;
+    }
+    return out;
+  }
+
+  setDeviceSharedPresetsParsed(deviceId, bodyObj) {
+    const did = String(deviceId || '').trim();
+    if (!did) return;
+    const iso = new Date().toISOString();
+    const payload = JSON.stringify(bodyObj && typeof bodyObj === 'object' ? bodyObj : {});
+    this.st.dspUpsert.run(did, payload, iso);
+  }
+
+  /** `device_id` cuyos presets compartidos referencian esta plantilla del catálogo. */
+  listDeviceIdsWithCatalogTemplate(templateId) {
+    const tid = String(templateId || '').trim();
+    if (!tid) return [];
+    let rows;
+    try {
+      rows = this.db.prepare('SELECT device_id, body_json FROM device_shared_presets').all();
+    } catch {
+      return [];
+    }
+    const out = [];
+    for (const r of rows || []) {
+      try {
+        const o = JSON.parse(String(r.body_json || '{}'));
+        if (o && String(o.catalogTemplateId || '').trim() === tid) {
+          out.push(String(r.device_id));
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    return out;
+  }
+
   getUserByEmail(email) {
     return rowToUser(this.st.userByEmail.get(email));
   }
@@ -1086,6 +1231,44 @@ class Store {
     const cid = String(createdBy ?? '').trim();
     if (!cid) return [];
     return this.st.usersByCreator.all(cid).map(rowToUser);
+  }
+
+  /** Todos los descendientes de `rootUserId` (hijos, nietos, …) por `created_by`. */
+  listUsersInSubtree(rootUserId) {
+    const root = String(rootUserId ?? '').trim();
+    if (!root) return [];
+    const all = this.st.allUsers.all().map(rowToUser);
+    const byParent = new Map();
+    for (const u of all) {
+      const p = u.createdBy != null ? String(u.createdBy).trim() : '';
+      if (!p) continue;
+      if (!byParent.has(p)) byParent.set(p, []);
+      byParent.get(p).push(u);
+    }
+    const out = [];
+    const stack = [...(byParent.get(root) || [])];
+    while (stack.length) {
+      const u = stack.pop();
+      out.push(u);
+      const kids = byParent.get(u.id) || [];
+      for (const c of kids) stack.push(c);
+    }
+    return out;
+  }
+
+  /** `descendantId` está en la cadena de `created_by` bajo `ancestorId`. */
+  isUserDescendantOf(ancestorId, descendantId) {
+    const a = String(ancestorId ?? '').trim();
+    const d = String(descendantId ?? '').trim();
+    if (!a || !d || a === d) return false;
+    let cur = this.getUserById(d);
+    for (let i = 0; i < 256 && cur; i++) {
+      const p = cur.createdBy != null ? String(cur.createdBy).trim() : '';
+      if (!p) return false;
+      if (p === a) return true;
+      cur = this.getUserById(p);
+    }
+    return false;
   }
 
   lnsGetGatewayByEui(userId, gatewayEui) {
@@ -1110,6 +1293,13 @@ class Store {
   }
 
   insertUser(user) {
+    let navJson =
+      user.navPermissionsJson != null && String(user.navPermissionsJson).trim() !== ''
+        ? String(user.navPermissionsJson)
+        : navPerm.navToJson(navPerm.effectiveNavForUser({ role: user.role, navPermissionsJson: null }));
+    if (user.role === 'superadmin') {
+      navJson = navPerm.navToJson(navPerm.allNavTrue());
+    }
     this.st.insertUser.run({
       id: user.id,
       email: user.email,
@@ -1122,10 +1312,30 @@ class Store {
       created_at: user.createdAt || new Date().toISOString(),
       milesight_ug_json: user.milesightUgGateway ? JSON.stringify(user.milesightUgGateway) : null,
       must_change_password: user.mustChangePassword ? 1 : 0,
+      nav_permissions_json: navJson,
     });
   }
 
   updateUserRecord(user) {
+    const existing = this.getUserById(user.id);
+    const role =
+      user.role !== undefined && user.role != null && String(user.role).trim() !== ''
+        ? String(user.role)
+        : existing?.role != null
+          ? String(existing.role)
+          : '';
+    let navOut;
+    if (Object.prototype.hasOwnProperty.call(user, 'navPermissionsJson')) {
+      navOut =
+        user.navPermissionsJson != null && String(user.navPermissionsJson).trim() !== ''
+          ? String(user.navPermissionsJson)
+          : null;
+    } else {
+      navOut = existing?.navPermissionsJson ?? null;
+    }
+    if (role === 'superadmin') {
+      navOut = navPerm.navToJson(navPerm.allNavTrue());
+    }
     this.st.updateUserFull.run({
       id: user.id,
       email: user.email,
@@ -1138,6 +1348,7 @@ class Store {
       created_at: user.createdAt || null,
       milesight_ug_json: user.milesightUgGateway ? JSON.stringify(user.milesightUgGateway) : null,
       must_change_password: user.mustChangePassword ? 1 : 0,
+      nav_permissions_json: navOut,
     });
   }
 
@@ -2507,6 +2718,11 @@ class Store {
         /* ignore */
       }
       this.st.decodeDelete.run(did);
+      try {
+        this.st.dspDelete.run(did);
+      } catch {
+        /* tabla puede no existir en DB muy antigua */
+      }
       this.st.licDelete.run(did);
       this.db.exec('COMMIT');
     } catch (e) {
@@ -2816,6 +3032,81 @@ class Store {
     this.st.ddUpsert.run(userId, String(deviceId), json, now);
   }
 
+  /** Tras asignar equipo: copia `widgets_json` del origen al destino si hay tablero no vacío. */
+  copyDeviceDashboardWidgetsOnAssign(fromUserId, toUserId, deviceId) {
+    const from = String(fromUserId);
+    const to = String(toUserId);
+    const did = String(deviceId);
+    if (!from || !to || !did) return false;
+    const row = this.st.ddGet.get(from, did);
+    if (!row || row.widgets_json == null) return false;
+    const raw = String(row.widgets_json).trim();
+    if (!raw || raw === '[]') return false;
+    let arr;
+    try {
+      arr = JSON.parse(raw);
+    } catch {
+      return false;
+    }
+    if (!Array.isArray(arr) || arr.length === 0) return false;
+    const now = new Date().toISOString();
+    this.st.ddUpsert.run(to, did, raw, now);
+    return true;
+  }
+
+  /**
+   * Copia tablero (widgets JSON clásico) al asignatario: primero desde el actor, luego desde cualquier
+   * otra cuenta con el mismo `device_id` (p. ej. superadmin asigna sin fila propia).
+   */
+  propagateDeviceDashboardWidgetsToUser(actorUserId, assigneeUserId, deviceId) {
+    const to = String(assigneeUserId);
+    const did = String(deviceId);
+    const tried = new Set();
+    const tryFrom = (from) => {
+      const f = String(from);
+      if (!f || tried.has(f)) return false;
+      tried.add(f);
+      return this.copyDeviceDashboardWidgetsOnAssign(f, to, did);
+    };
+    if (tryFrom(actorUserId)) return true;
+    const others = this.listUserIdsAssignedToDevice(did).filter((id) => String(id) !== to);
+    for (const uid of others) {
+      if (tryFrom(uid)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * GET perezoso: si no hay fila o está vacía, intenta copiar desde otra cuenta con el mismo equipo.
+   */
+  getDeviceDashboardWidgetsWithPeerFallback(userId, deviceId) {
+    const uid = String(userId);
+    const did = String(deviceId);
+    let w = this.getDeviceDashboardWidgets(uid, did);
+    if (Array.isArray(w) && w.length > 0) return w;
+    this.propagateDeviceDashboardWidgetsToUser('', uid, did);
+    return this.getDeviceDashboardWidgets(uid, did);
+  }
+
+  /**
+   * Misma definición de tablero para todas las cuentas que tienen el dispositivo (admin/superadmin).
+   * @param {string | null | undefined} fallbackUserId Si no hay asignaciones, persiste solo en esta cuenta.
+   */
+  setDeviceDashboardWidgetsForAllAssignees(deviceId, widgets, fallbackUserId = null) {
+    const did = String(deviceId || '').trim();
+    if (!did) return 0;
+    const json = JSON.stringify(Array.isArray(widgets) ? widgets : []);
+    const now = new Date().toISOString();
+    let uids = this.listUserIdsAssignedToDevice(did);
+    if (!uids.length && fallbackUserId != null && String(fallbackUserId).trim()) {
+      uids = [String(fallbackUserId).trim()];
+    }
+    for (const uid of uids) {
+      this.st.ddUpsert.run(uid, did, json, now);
+    }
+    return uids.length;
+  }
+
   /**
    * Preferencias BSD (tablero por dispositivo, downlinks, etc.) por usuario y equipo.
    * @returns {{ prefs: Record<string, unknown>, updatedAt: string } | null}
@@ -2874,6 +3165,68 @@ class Store {
       throw new Error('Preferencias demasiado grandes');
     }
     this.st.bsdPrefUpsert.run(String(userId), String(deviceId), json, now);
+  }
+
+  /**
+   * Preferencias BSD del panel de control (por usuario, segmento de cuenta y pestaña de panel).
+   * @returns {{ prefs: Record<string, unknown>, updatedAt: string }}
+   */
+  getUserPanelBsdPreferences(userId, segment, panelId) {
+    try {
+      const uid = String(userId || '').trim();
+      const seg = segment != null ? String(segment) : '';
+      const pid = panelId != null && String(panelId).trim() ? String(panelId).trim() : 'main';
+      if (!uid) return { prefs: {}, updatedAt: '' };
+      const row = this.st.panelBsdPrefGet.get(uid, seg, pid);
+      if (!row || !row.prefs_json) return { prefs: {}, updatedAt: String(row?.updated_at || '') };
+      let prefs = {};
+      try {
+        prefs = JSON.parse(row.prefs_json) || {};
+      } catch {
+        prefs = {};
+      }
+      if (!prefs || typeof prefs !== 'object') prefs = {};
+      return { prefs, updatedAt: String(row.updated_at || '') };
+    } catch {
+      return { prefs: {}, updatedAt: '' };
+    }
+  }
+
+  setUserPanelBsdPreferences(userId, segment, panelId, prefsObj) {
+    const uid = String(userId || '').trim();
+    const seg = segment != null ? String(segment) : '';
+    const pid = panelId != null && String(panelId).trim() ? String(panelId).trim() : 'main';
+    if (!uid) throw new Error('Usuario inválido');
+    const now = new Date().toISOString();
+    const o = prefsObj && typeof prefsObj === 'object' ? prefsObj : {};
+    const json = JSON.stringify(o);
+    if (json.length > 900000) {
+      throw new Error('Preferencias demasiado grandes');
+    }
+    this.st.panelBsdPrefUpsert.run(uid, seg, pid, json, now);
+  }
+
+  /**
+   * Mismas preferencias BSD (widgets valor, rejilla, visibilidad, downlinks) para todas las cuentas con el equipo.
+   * @param {string | null | undefined} fallbackUserId Si no hay asignaciones, persiste solo en esta cuenta.
+   */
+  setDeviceBsdPreferencesForAllAssignees(deviceId, prefsObj, fallbackUserId = null) {
+    const did = String(deviceId || '').trim();
+    if (!did) return 0;
+    const o = prefsObj && typeof prefsObj === 'object' ? prefsObj : {};
+    const json = JSON.stringify(o);
+    if (json.length > 900000) {
+      throw new Error('Preferencias demasiado grandes');
+    }
+    const now = new Date().toISOString();
+    let uids = this.listUserIdsAssignedToDevice(did);
+    if (!uids.length && fallbackUserId != null && String(fallbackUserId).trim()) {
+      uids = [String(fallbackUserId).trim()];
+    }
+    for (const uid of uids) {
+      this.st.bsdPrefUpsert.run(uid, did, json, now);
+    }
+    return uids.length;
   }
 
   /** Tras asignar el equipo a otro usuario: copia el JSON del actor al asignatario (primera asignación). */

@@ -1,4 +1,4 @@
-import React, { createContext, useState, useContext, useEffect, useCallback } from 'react';
+import React, { createContext, useState, useContext, useEffect, useCallback, useMemo } from 'react';
 import {
   localLogin,
   localLogout,
@@ -9,6 +9,8 @@ import {
   completeFirstPassword as submitFirstPassword,
   refreshSession,
   applySessionToken,
+  startImpersonationSession,
+  stopImpersonationSession,
 } from '../services/localAuth';
 
 const AuthContext = createContext(null);
@@ -120,14 +122,90 @@ export const AuthProvider = ({ children }) => {
   /** Tras F5, `userProfile` puede llegar un tick después; el JWT en `user` ya trae `role`. */
   const r = userProfile?.role ?? user?.role;
   const isSuperAdmin = r === 'superadmin';
-  /** Personal con panel de gestión (super admin o admin). */
-  const isAdmin = r === 'superadmin' || r === 'admin';
+
+  const nav = useMemo(() => {
+    const a = userProfile?.nav;
+    const b = user?.nav;
+    const fromProfile = a && typeof a === 'object' ? a : {};
+    const fromUser = b && typeof b === 'object' ? b : {};
+    return { ...fromUser, ...fromProfile };
+  }, [userProfile?.nav, user?.nav]);
+
+  const hasNavPage = useCallback(
+    (pageId) => {
+      if (isSuperAdmin) return true;
+      return Boolean(nav[String(pageId)]);
+    },
+    [isSuperAdmin, nav]
+  );
+
+  /** Compat: algún módulo de gestión (menús «admin» heredados). */
+  const isAdmin =
+    isSuperAdmin ||
+    ['Users', 'Gateway', 'Automations', 'Settings', 'Templates'].some((k) => Boolean(nav[k]));
   /** Cuenta solo lectura / dispositivos asignados (incluye legado `viewer`). */
   const isViewer = r === 'user' || r === 'viewer';
-  /** Super admin o admin: pueden editar widgets del panel y del dashboard por dispositivo. */
-  const canEditDashboard = isAdmin;
+  /** Edición de widgets: módulo Dispositivos o superadmin. */
+  const canEditDashboard = isSuperAdmin || Boolean(nav.Devices);
   /** Solo super admin: alta de dispositivos en el sistema. */
   const canCreateDevices = isSuperAdmin;
+
+  const isImpersonating = Boolean(
+    userProfile?.impersonation?.actorId || user?.impersonatorId
+  );
+
+  const enterImpersonation = useCallback(async (targetUserId) => {
+    const data = await startImpersonationSession(targetUserId);
+    applySessionToken(data.token);
+    setToken(data.token);
+    const lu = getLocalUser();
+    setUser(lu);
+    try {
+      const profile = await getMe();
+      setUserProfile(profile);
+    } catch {
+      setUserProfile({ ...data.user, impersonation: data.impersonation });
+    }
+  }, []);
+
+  const exitImpersonation = useCallback(async () => {
+    const data = await stopImpersonationSession();
+    const tok = data?.token;
+    if (!tok || typeof tok !== 'string') {
+      throw new Error('El servidor no devolvió una sesión válida. Intente de nuevo o cierre sesión.');
+    }
+    applySessionToken(tok);
+    setToken(tok);
+    let lu = getLocalUser();
+    if (!lu && data.user && typeof data.user === 'object') {
+      lu = {
+        id: data.user.id,
+        email: data.user.email,
+        role: data.user.role,
+        profileName: data.user.profileName,
+        mustChangePassword: Boolean(data.user.mustChangePassword),
+        avatarUrl: data.user.avatarUrl,
+        nav: data.user.nav && typeof data.user.nav === 'object' ? data.user.nav : {},
+      };
+    }
+    if (!lu) {
+      throw new Error('No se pudo aplicar la sesión restaurada. Cierre sesión e inicie de nuevo.');
+    }
+    setUser(lu);
+    const prof = {
+      ...(data.user && typeof data.user === 'object' ? data.user : lu),
+      impersonation: data.impersonation != null ? data.impersonation : null,
+    };
+    setUserProfile(prof);
+    try {
+      const profile = await getMe();
+      setUserProfile(profile);
+      const lu2 = getLocalUser();
+      if (lu2) setUser(lu2);
+    } catch {
+      /* mantener prof si /me falla */
+    }
+  }, []);
 
   const adoptSessionToken = useCallback(async (newToken) => {
     applySessionToken(newToken);
@@ -159,11 +237,11 @@ export const AuthProvider = ({ children }) => {
 
   const loginAsUser = async (email, password) => {
     const data = await localLogin(email, password);
-    if (data.user.role === 'admin' || data.user.role === 'superadmin') {
+    if (data.user.role === 'superadmin') {
       localLogout();
       setToken(null);
       throw Object.assign(
-        new Error('Este correo es de administrador. Use el acceso de Administrador (no el de Usuario).'),
+        new Error('Las cuentas de super administrador deben iniciar sesión por el acceso principal.'),
         { code: 'auth/is-admin' }
       );
     }
@@ -224,9 +302,13 @@ export const AuthProvider = ({ children }) => {
         loading,
         isAdmin,
         isSuperAdmin,
+        hasNavPage,
         isViewer,
         canEditDashboard,
         canCreateDevices,
+        isImpersonating,
+        enterImpersonation,
+        exitImpersonation,
         needsSetup,
         setNeedsSetup,
         loginWithEmail,

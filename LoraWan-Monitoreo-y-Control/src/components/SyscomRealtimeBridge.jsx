@@ -11,12 +11,10 @@ import sseContract from '../../shared/realtime-sse-contract.json';
  * Downlinks de reglas: servidor (`server/automation-runner.js`). Email/webhook: cliente tras SSE (EmailJS).
  */
 export default function SyscomRealtimeBridge() {
-  const { token, user, userProfile, credentials, isAdmin } = useAuth();
+  const { token, user, userProfile, credentials, hasNavPage, isSuperAdmin } = useAuth();
   const esRef = useRef(null);
   const retryMsRef = useRef(2000);
-  const isStaff = Boolean(
-    isAdmin || user?.role === 'superadmin' || user?.role === 'admin'
-  );
+  const isStaff = Boolean(isSuperAdmin || hasNavPage('Automations'));
   const automationCtxRef = useRef({
     credentials,
     token,

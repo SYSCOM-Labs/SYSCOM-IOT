@@ -44,19 +44,11 @@ const PAGE_HEADINGS = {
   },
 };
 
+import { NAV_PAGE_IDS } from './config/navConfig';
+
 const LAST_PAGE_STORAGE_KEY = 'syscom_iot_last_page';
 
-const ALL_NAV_PAGE_IDS = new Set([
-  'Dashboard',
-  'Devices',
-  'History',
-  'Gateway',
-  'Automations',
-  'SpecialReport',
-  'Settings',
-  'Templates',
-  'Users',
-]);
+const ALL_NAV_PAGE_IDS = new Set(NAV_PAGE_IDS);
 
 function readLastPageFromStorage() {
   try {
@@ -77,14 +69,15 @@ function writeLastPageToStorage(pageId) {
   }
 }
 
-/** Páginas del menú permitidas según rol (debe coincidir con Sidebar). */
-function resolvePageForRole(pageId, isAdmin, isSuperAdmin) {
+/** Páginas permitidas según `nav` del usuario (y plantillas solo rol superadmin). */
+function resolvePageForRole(pageId, hasNavPage, isSuperAdmin) {
   const id = typeof pageId === 'string' && ALL_NAV_PAGE_IDS.has(pageId) ? pageId : 'Dashboard';
-  const allowed = new Set(['Dashboard', 'Devices', 'History', 'SpecialReport']);
-  if (isAdmin) {
-    ['Gateway', 'Automations', 'Settings', 'Users'].forEach((p) => allowed.add(p));
+  const allowed = new Set();
+  for (const p of ALL_NAV_PAGE_IDS) {
+    if (hasNavPage(p)) allowed.add(p);
   }
   if (isSuperAdmin) allowed.add('Templates');
+  if (!allowed.has('Dashboard')) allowed.add('Dashboard');
   return allowed.has(id) ? id : 'Dashboard';
 }
 
@@ -174,13 +167,52 @@ function LicenseExpiryBanner({ userId }) {
   );
 }
 
+function ImpersonationSupportBanner({ isImpersonating, targetEmail, targetDisplayName, onExit, exitBusy }) {
+  if (!isImpersonating) return null;
+  const trimmedName = targetDisplayName && String(targetDisplayName).trim();
+  const email = targetEmail && String(targetEmail).trim();
+  const who =
+    trimmedName ||
+    (email ? email.split('@')[0] || email : '') ||
+    'Usuario';
+  return (
+    <div className="syscom-impersonation-banner" role="status" aria-live="polite">
+      <div className="syscom-impersonation-banner__inner">
+        <div className="syscom-impersonation-banner__spacer" aria-hidden />
+        <div className="syscom-impersonation-banner__center">
+          <span className="syscom-impersonation-banner__kicker">Viendo la cuenta de</span>
+          <span className="syscom-impersonation-banner__name">{who}</span>
+        </div>
+        <button
+          type="button"
+          className="syscom-impersonation-banner__btn"
+          disabled={exitBusy}
+          onClick={() => void onExit()}
+        >
+          {exitBusy ? 'Restaurando…' : 'Volver a mi cuenta'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function App() {
-  const { user, userProfile, token, loading, isAdmin, isSuperAdmin, logout } = useAuth();
+  const {
+    user,
+    userProfile,
+    token,
+    loading,
+    hasNavPage,
+    isSuperAdmin,
+    logout,
+    isImpersonating,
+    exitImpersonation,
+  } = useAuth();
   const barAvatarOverride = useBarAvatarOverride();
 
   const roleLabel = (role) => {
     if (role === 'superadmin') return 'Super administrador';
-    if (role === 'admin') return 'Administrador';
+    if (role === 'admin') return 'Usuario'; /* legado migrado */
     if (role === 'user' || role === 'viewer') return 'Usuario';
     return 'Usuario';
   };
@@ -192,6 +224,7 @@ function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [userPopoverOpen, setUserPopoverOpen] = useState(false);
   const [devicesSearchQuery, setDevicesSearchQuery] = useState('');
+  const [impersonationExitBusy, setImpersonationExitBusy] = useState(false);
   /** Tras login o F5: reaplicar `localStorage` cuando el rol ya es fiable (evita pisar con Dashboard). */
   const sessionRouteSyncedRef = useRef(false);
 
@@ -206,18 +239,18 @@ function App() {
       const stored = readLastPageFromStorage();
       const candidate =
         typeof stored === 'string' && ALL_NAV_PAGE_IDS.has(stored) ? stored : 'Dashboard';
-      const next = resolvePageForRole(candidate, isAdmin, isSuperAdmin);
+      const next = resolvePageForRole(candidate, hasNavPage, isSuperAdmin);
       setCurrentPage(next);
       writeLastPageToStorage(next);
       return;
     }
-    setCurrentPage((prev) => resolvePageForRole(prev, isAdmin, isSuperAdmin));
-  }, [loading, user, isAdmin, isSuperAdmin]);
+    setCurrentPage((prev) => resolvePageForRole(prev, hasNavPage, isSuperAdmin));
+  }, [loading, user, hasNavPage, isSuperAdmin]);
 
   useEffect(() => {
     if (loading || !user) return;
-    writeLastPageToStorage(resolvePageForRole(currentPage, isAdmin, isSuperAdmin));
-  }, [currentPage, loading, user, isAdmin, isSuperAdmin]);
+    writeLastPageToStorage(resolvePageForRole(currentPage, hasNavPage, isSuperAdmin));
+  }, [currentPage, loading, user, hasNavPage, isSuperAdmin]);
 
   if (loading) {
     return <div className="loading-screen loading-screen--premium">{t('common.loading')}</div>;
@@ -227,13 +260,15 @@ function App() {
     return <Login />;
   }
 
-  const mustChangePassword = Boolean(userProfile?.mustChangePassword ?? user?.mustChangePassword);
+  const supportView = Boolean(userProfile?.impersonation?.actorId || user?.impersonatorId);
+  const mustChangePassword =
+    Boolean(userProfile?.mustChangePassword ?? user?.mustChangePassword) && !supportView;
   if (mustChangePassword) {
     return <FirstPasswordChange />;
   }
 
   const navigate = (page) => {
-    const next = resolvePageForRole(page, isAdmin, isSuperAdmin);
+    const next = resolvePageForRole(page, hasNavPage, isSuperAdmin);
     setCurrentPage(next);
     writeLastPageToStorage(next);
     setSidebarOpen(false);
@@ -347,6 +382,23 @@ function App() {
           </div>
           </div>
         </header>
+        <ImpersonationSupportBanner
+          isImpersonating={isImpersonating}
+          targetEmail={user?.email}
+          targetDisplayName={userProfile?.profileName ?? user?.profileName}
+          exitBusy={impersonationExitBusy}
+          onExit={async () => {
+            if (impersonationExitBusy) return;
+            setImpersonationExitBusy(true);
+            try {
+              await exitImpersonation();
+            } catch (e) {
+              window.alert(e?.message || 'No se pudo volver a su cuenta');
+            } finally {
+              setImpersonationExitBusy(false);
+            }
+          }}
+        />
         <LicenseExpiryBanner userId={user?.id} />
         <SyscomRealtimeBridge />
         <LnsDownlinkToastBridge />
@@ -359,11 +411,11 @@ function App() {
           {currentPage === 'History'      && <HistoryPage />}
           {currentPage === 'SpecialReport'&& <SpecialReport />}
           {/* Admin-only pages */}
-          {currentPage === 'Automations'  && (isAdmin ? <AutomationsPage /> : <AccessDenied />)}
-          {currentPage === 'Settings'     && (isAdmin ? <SettingsPage />    : <AccessDenied />)}
-          {currentPage === 'Users'        && (isAdmin ? <UserManagement />  : <AccessDenied />)}
+          {currentPage === 'Automations'  && (hasNavPage('Automations') ? <AutomationsPage /> : <AccessDenied />)}
+          {currentPage === 'Settings'     && (hasNavPage('Settings') ? <SettingsPage />    : <AccessDenied />)}
+          {currentPage === 'Users'        && (hasNavPage('Users') ? <UserManagement onAfterEnterSupport={() => navigate('Dashboard')} />  : <AccessDenied />)}
           {currentPage === 'Templates'   && (isSuperAdmin ? <TemplatesPage /> : <AccessDenied />)}
-          {currentPage === 'Gateway'      && (isAdmin ? <GatewaysPage /> : <AccessDenied />)}
+          {currentPage === 'Gateway'      && (hasNavPage('Gateway') ? <GatewaysPage /> : <AccessDenied />)}
         </div>
       </main>
     </div>

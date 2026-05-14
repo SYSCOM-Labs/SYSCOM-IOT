@@ -1,4 +1,5 @@
 import { getApiBase, getPublicServerOrigin } from '../config/apiBase';
+import { clearPrimedDeviceSharedPresets } from './deviceTemplates';
 
 // Local auth service — replaces Firebase Auth + Firestore
 
@@ -96,6 +97,7 @@ export const checkEmailRegistered = async (email) => {
 
 export const localLogout = () => {
   removeToken();
+  clearPrimedDeviceSharedPresets();
 };
 
 export const getMe = async () => {
@@ -167,14 +169,44 @@ export const getLocalUser = () => {
   if (!token) return null;
   const payload = decodeJwtPayload(token);
   if (!payload || payload.id == null) return null;
-  return {
+  const out = {
     id: payload.id,
     email: payload.email,
     role: payload.role,
     profileName: payload.profileName,
     mustChangePassword: Boolean(payload.mustChangePassword),
     avatarUrl: payload.avatarUrl,
+    nav: payload.nav && typeof payload.nav === 'object' ? payload.nav : {},
   };
+  const imp = payload.impersonatorId != null && String(payload.impersonatorId).trim();
+  if (imp) out.impersonatorId = imp;
+  return out;
+};
+
+/** Solo superadmin (sesión real): devuelve JWT del destino con `impersonatorId` en el payload. */
+export const startImpersonationSession = async (targetUserId) => {
+  const id = String(targetUserId || '').trim();
+  if (!id) throw new Error('Usuario destino requerido');
+  const data = await handle(
+    await fetch(`${API}/auth/impersonate/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      headers: headers(),
+    })
+  );
+  if (data.token) setToken(data.token);
+  return data;
+};
+
+/** Vuelve al JWT del superadmin que abrió el modo soporte. */
+export const stopImpersonationSession = async () => {
+  const data = await handle(
+    await fetch(`${API}/auth/impersonate/stop`, {
+      method: 'POST',
+      headers: headers(),
+    })
+  );
+  if (data.token) setToken(data.token);
+  return data;
 };
 
 // ── User management ────────────────────────────────────────

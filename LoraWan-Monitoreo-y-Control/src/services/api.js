@@ -288,6 +288,29 @@ export const putDeviceBsdPreferences = async (deviceId, prefs) => {
   return response.data;
 };
 
+export const fetchPanelBsdPreferences = async (segment, panelId) => {
+  const params = new URLSearchParams();
+  params.set('panelId', panelId != null && String(panelId).trim() ? String(panelId).trim() : 'main');
+  params.set('segment', segment != null ? String(segment) : '');
+  const response = await axios.get(`${SERVER_API}/me/panel-bsd-preferences?${params.toString()}`, {
+    headers: authHeaders(),
+  });
+  return response.data;
+};
+
+export const putPanelBsdPreferences = async (segment, panelId, prefs) => {
+  const response = await axios.put(
+    `${SERVER_API}/me/panel-bsd-preferences`,
+    {
+      ...(prefs && typeof prefs === 'object' ? prefs : {}),
+      segment: segment != null ? String(segment) : '',
+      panelId: panelId != null && String(panelId).trim() ? String(panelId).trim() : 'main',
+    },
+    { headers: authHeaders() }
+  );
+  return response.data;
+};
+
 export const fetchDeviceDecodeConfig = async (deviceId) => {
   const response = await axios.get(
     `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/decode-config`,
@@ -439,6 +462,43 @@ export const sendDownlink = async (deviceId, hex, _credentials, _token, opts = {
     throw new Error(serviceResp.data?.errMsg || 'Service call failed');
   }
   return serviceResp.data;
+};
+
+/** Catálogo global de plantillas (lectura: cualquier usuario autenticado; escritura: solo superadmin vía PUT). */
+export const fetchDeviceTemplatesCatalog = async () => {
+  const response = await axios.get(`${SERVER_API}/device-templates`, { headers: authHeaders() });
+  return response.data;
+};
+
+export const putDeviceTemplatesCatalog = async (body) => {
+  const response = await axios.put(`${SERVER_API}/device-templates`, body, { headers: authHeaders() });
+  return response.data;
+};
+
+/** Dispositivos con presets compartidos que referencian una plantilla del catálogo (requiere permiso Dispositivos). */
+export const fetchAssignedDeviceIdsForTemplate = async (templateId) => {
+  const q = encodeURIComponent(String(templateId || '').trim());
+  const response = await axios.get(`${SERVER_API}/device-templates/assigned-device-ids?templateId=${q}`, {
+    headers: authHeaders(),
+  });
+  return response.data;
+};
+
+export const fetchDeviceDownlinkPresets = async (deviceId) => {
+  const response = await axios.get(
+    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/downlink-presets`,
+    { headers: authHeaders() }
+  );
+  return response.data;
+};
+
+export const putDeviceDownlinkPresets = async (deviceId, presets) => {
+  const response = await axios.put(
+    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/downlink-presets`,
+    presets,
+    { headers: authHeaders() }
+  );
+  return response.data;
 };
 
 /** Borra sesión OTAA del LNS integrado para este deviceId (requiere JWT). Útil si el servidor rechaza uplinks (MIC inválido). */

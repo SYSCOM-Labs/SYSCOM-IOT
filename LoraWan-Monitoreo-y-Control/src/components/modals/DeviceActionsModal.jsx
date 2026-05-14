@@ -1,13 +1,63 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import './DeviceActionsModal.css';
 import { X, Send, Save, Trash2, Plus } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { fetchDeviceTsl } from '../../services/api';
+import { fetchDeviceTsl, putDeviceDownlinkPresets } from '../../services/api';
 import { getTemplateCommandsForModel } from '../../constants/downlinkTemplates';
-import { readDownlinksFromLocalStorage, downlinksLocalStorageKey } from '../../services/deviceTemplates';
+import {
+  readDownlinksFromLocalStorage,
+  downlinksLocalStorageKey,
+  getStoredTemplateIdForDevice,
+  getDeviceTemplateById,
+  normalizeTelemetryLabelHints,
+  primeDeviceSharedPresetsFromDeviceRows,
+} from '../../services/deviceTemplates';
 
 const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
   const { credentials, token } = useAuth();
+  const downlinkServerTimerRef = useRef(null);
+
+  const persistDownlinksToServer = useCallback(async (deviceId) => {
+    if (!deviceId) return;
+    try {
+      const raw = readDownlinksFromLocalStorage(deviceId);
+      const useful = (Array.isArray(raw) ? raw : []).filter(
+        (d) => String(d?.name || '').trim() && String(d?.hex || '').trim()
+      );
+      const tid = getStoredTemplateIdForDevice(deviceId);
+      const tpl = tid ? getDeviceTemplateById(tid) : null;
+      const telemetryLabels = tpl ? normalizeTelemetryLabelHints(tpl.telemetryLabels) : {};
+      await putDeviceDownlinkPresets(deviceId, {
+        downlinks: useful,
+        catalogTemplateId: tid || null,
+        telemetryLabels,
+      });
+      primeDeviceSharedPresetsFromDeviceRows([
+        {
+          deviceId,
+          deviceSharedPresets: {
+            downlinks: useful,
+            catalogTemplateId: tid || null,
+            telemetryLabels,
+          },
+        },
+      ]);
+    } catch (e) {
+      console.warn('[DeviceActionsModal] presets servidor:', e?.message || e);
+    }
+  }, []);
+
+  const scheduleDownlinksServerSave = useCallback(
+    (deviceId) => {
+      if (!deviceId) return;
+      if (downlinkServerTimerRef.current) clearTimeout(downlinkServerTimerRef.current);
+      downlinkServerTimerRef.current = setTimeout(() => {
+        downlinkServerTimerRef.current = null;
+        persistDownlinksToServer(deviceId);
+      }, 650);
+    },
+    [persistDownlinksToServer]
+  );
   const [name, setName] = useState(device?.name || '');
   const [tag, setTag] = useState(device?.tag != null ? String(device.tag) : '');
   const [downlinks, setDownlinks] = useState(() => {
@@ -71,10 +121,11 @@ const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
       const normalized = merged.length > 0 ? merged : [{ name: '', hex: '' }];
       localStorage.setItem(storageKey, JSON.stringify(normalized));
       setDownlinks(normalized);
+      scheduleDownlinksServerSave(device.deviceId);
     };
 
     if (type === 'downlink') seedAutoCommands();
-  }, [type, device?.deviceId, device?.model, credentials, token]);
+  }, [type, device?.deviceId, device?.model, credentials, token, scheduleDownlinksServerSave]);
 
   const handleEdit = (e) => {
     e.preventDefault();
@@ -84,7 +135,10 @@ const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
   };
 
   const addDownlinkRow = () => {
-    setDownlinks([...downlinks, { name: '', hex: '' }]);
+    const next = [...downlinks, { name: '', hex: '' }];
+    setDownlinks(next);
+    localStorage.setItem(downlinksLocalStorageKey(device?.deviceId), JSON.stringify(next));
+    scheduleDownlinksServerSave(device?.deviceId);
   };
 
   const updateDownlinkRow = (index, field, value) => {
@@ -92,12 +146,14 @@ const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
     newDownlinks[index][field] = value;
     setDownlinks(newDownlinks);
     localStorage.setItem(downlinksLocalStorageKey(device?.deviceId), JSON.stringify(newDownlinks));
+    scheduleDownlinksServerSave(device?.deviceId);
   };
 
   const removeDownlinkRow = (index) => {
     const newDownlinks = downlinks.filter((_, i) => i !== index);
     setDownlinks(newDownlinks);
     localStorage.setItem(downlinksLocalStorageKey(device?.deviceId), JSON.stringify(newDownlinks));
+    scheduleDownlinksServerSave(device?.deviceId);
   };
 
   return (

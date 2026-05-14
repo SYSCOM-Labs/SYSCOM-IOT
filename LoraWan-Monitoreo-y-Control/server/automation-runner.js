@@ -6,7 +6,7 @@
 
 const { resolveAutomationDownlinkHex } = require('./automation-downlink-resolve');
 
-/** @type {null | { store: object, tryLnsAppDownlinkEnqueue: Function, appendDownlinkLog: Function, insertUiEventWithStream: Function, buildLnsDownlinkApiSuccessBody: Function, isStaffRole: Function }} */
+/** @type {null | { store: object, tryLnsAppDownlinkEnqueue: Function, appendDownlinkLog: Function, insertUiEventWithStream: Function, buildLnsDownlinkApiSuccessBody: Function, canRunAutomationsForUser: Function }} */
 let _ctx = null;
 
 /** @type {Record<string, number>} */
@@ -326,9 +326,9 @@ function executeDownlinkAction(userId, action) {
  */
 function runRulesForUser(userId, deviceProperties, opts = {}) {
   const scheduleTickOnly = opts.scheduleTickOnly === true;
-  const { store, isStaffRole } = _ctx;
+  const { store, canRunAutomationsForUser } = _ctx;
   const user = store.getUserById(userId);
-  if (!user || !isStaffRole(user.role)) return;
+  if (!user || !canRunAutomationsForUser(user)) return;
 
   let rules;
   try {
@@ -461,7 +461,7 @@ function startAutomationScheduleTicker() {
   const tick = () => {
     if (String(process.env.SYSCOM_SERVER_AUTOMATIONS || '1').trim() === '0') return;
     if (!_ctx) return;
-    const { store, isStaffRole } = _ctx;
+    const { store, canRunAutomationsForUser } = _ctx;
     let users;
     try {
       users = store.allUsersSanitized();
@@ -470,7 +470,7 @@ function startAutomationScheduleTicker() {
       return;
     }
     for (const u of users) {
-      if (!u || !isStaffRole(u.role)) continue;
+      if (!u || !canRunAutomationsForUser(u)) continue;
       const uid = String(u.id);
       try {
         const map = buildDevicePropertiesMapForUser(store, uid, '', {});

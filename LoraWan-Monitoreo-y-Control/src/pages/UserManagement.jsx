@@ -1,8 +1,27 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { getUsers, createUser, updateUser, deleteUser, getServerOrigin, getUserDevices } from '../services/localAuth';
 import { validatePasswordStrength, PASSWORD_POLICY_HINT } from '../utils/passwordPolicy';
-import { Users, Plus, Trash2, Shield, Eye, X, Loader, AlertCircle, CheckCircle2, Edit2, KeyRound, Save, Database, Play, UserPlus } from 'lucide-react';
+import {
+  Users,
+  Plus,
+  Trash2,
+  Shield,
+  Eye,
+  X,
+  Loader,
+  AlertCircle,
+  CheckCircle2,
+  Edit2,
+  KeyRound,
+  Save,
+  Database,
+  Play,
+  UserPlus,
+  LogIn,
+  Mail,
+} from 'lucide-react';
+import { NAV_MODULE_DEFS } from '../config/navConfig';
 import './DeviceList.css';
 import '../styles/premiumPageShell.css';
 import './UserManagement.css';
@@ -13,6 +32,7 @@ const EMPTY_FORM = {
   confirmPassword: '',
   role: 'user',
   profileName: '',
+  navPick: {},
 };
 
 function normalizeRole(r) {
@@ -21,55 +41,126 @@ function normalizeRole(r) {
   return 'user';
 }
 
-const CREATE_ROLES = [
-  {
-    id: 'admin',
-    name: 'Administrador',
-    desc: 'Edita dashboards (panel y dispositivos), asigna equipos y gestiona su jerarquía; no da de alta dispositivos nuevos',
-    icon: 'admin',
-  },
-  { id: 'user', name: 'Usuario', desc: 'Ve telemetría y dashboards sin editar el tablero', icon: 'user' },
-];
+function defaultNavPickForNew(hasNavPage) {
+  const pick = {};
+  for (const { id } of NAV_MODULE_DEFS) {
+    if (id === 'Templates') {
+      pick[id] = false;
+      continue;
+    }
+    if (['Dashboard', 'Devices', 'History', 'SpecialReport'].includes(id)) {
+      pick[id] = hasNavPage(id);
+    } else {
+      pick[id] = false;
+    }
+  }
+  return pick;
+}
 
-const CREATE_ROLES_SUPER = [
-  { id: 'superadmin', name: 'Super administrador', desc: 'Control total: alta de dispositivos, borrado definitivo y cuentas de cualquier rol', icon: 'super' },
-  ...CREATE_ROLES,
+function mergeNavFromUser(u) {
+  const n = u && u.nav && typeof u.nav === 'object' ? u.nav : {};
+  const pick = {};
+  for (const { id } of NAV_MODULE_DEFS) {
+    pick[id] = Boolean(n[id]);
+  }
+  return pick;
+}
+
+/**
+ * Orden en profundidad: superadmin ve bosques por raíz global; el resto ve su cuenta y descendientes.
+ * @param {object[]} users
+ * @param {string} currentUserId
+ * @param {boolean} isSuperAdmin
+ * @returns {{ u: object, depth: number }[]}
+ */
+function flattenUserTree(users, currentUserId, isSuperAdmin) {
+  const list = Array.isArray(users) ? users : [];
+  const byId = new Map(list.map((x) => [String(x.id), x]));
+  const kids = new Map();
+  for (const u of list) {
+    const rawP = u.createdBy != null ? String(u.createdBy) : '';
+    const pid = rawP && byId.has(rawP) ? rawP : '';
+    if (!kids.has(pid)) kids.set(pid, []);
+    kids.get(pid).push(u);
+  }
+  for (const arr of kids.values()) {
+    arr.sort((a, b) => String(a.email).localeCompare(String(b.email), 'es'));
+  }
+  const roots = [];
+  if (isSuperAdmin) {
+    for (const u of list) {
+      const rawP = u.createdBy != null ? String(u.createdBy) : '';
+      if (!rawP || !byId.has(rawP)) roots.push(u);
+    }
+    roots.sort((a, b) => String(a.email).localeCompare(String(b.email), 'es'));
+  } else {
+    const me = byId.get(String(currentUserId || ''));
+    if (me) roots.push(me);
+    else {
+      for (const u of list) {
+        const rawP = u.createdBy != null ? String(u.createdBy) : '';
+        if (!rawP || !byId.has(rawP)) roots.push(u);
+      }
+      roots.sort((a, b) => String(a.email).localeCompare(String(b.email), 'es'));
+    }
+  }
+  const rows = [];
+  const walk = (node, depth) => {
+    rows.push({ u: node, depth });
+    for (const c of kids.get(String(node.id)) || []) walk(c, depth + 1);
+  };
+  for (const r of roots) walk(r, 0);
+  return rows;
+}
+
+function canOfferNavModule(isSuperAdmin, hasNavPage, moduleId) {
+  if (moduleId === 'Templates') return isSuperAdmin;
+  return hasNavPage(moduleId);
+}
+
+function NavModulePicker({ value, onChange, hasNavPage, isSuperAdmin, disabled }) {
+  return (
+    <div className="um-nav-grid um-nav-grid--list" role="group" aria-label="Módulos del menú">
+      {NAV_MODULE_DEFS.map(({ id, label }) => {
+        if (!canOfferNavModule(isSuperAdmin, hasNavPage, id)) return null;
+        return (
+          <label key={id} className={`um-nav-tile glass ${value[id] ? 'um-nav-tile--on' : ''}`}>
+            <input
+              type="checkbox"
+              checked={Boolean(value[id])}
+              disabled={disabled}
+              onChange={(e) => onChange({ ...value, [id]: e.target.checked })}
+            />
+            <span className="um-nav-tile-label">{label}</span>
+          </label>
+        );
+      })}
+    </div>
+  );
+}
+
+const CREATE_ROLE_OPTIONS_SUPER = [
+  {
+    id: 'user',
+    name: 'Usuario',
+    desc: 'Permisos según los módulos marcados; puede delegar solo lo que tenga asignado.',
+    icon: 'user',
+  },
+  {
+    id: 'superadmin',
+    name: 'Super administrador',
+    desc: 'Control total: dispositivos, plantillas y todas las cuentas.',
+    icon: 'super',
+  },
 ];
 
 const SUPER_EDIT_ROLES = [
   { id: 'superadmin', name: 'Super admin', desc: 'Control total del sistema', icon: 'super' },
-  { id: 'admin', name: 'Administrador', desc: 'Gestiona su jerarquía', icon: 'admin' },
-  { id: 'user', name: 'Usuario', desc: 'Solo asignados', icon: 'user' },
+  { id: 'user', name: 'Usuario', desc: 'Permisos por módulos', icon: 'user' },
 ];
 
-/** Vista previa al crear: qué puede hacer cada rol. */
-const PERMISSION_ROWS = {
-  user: [
-    { ok: true, label: 'Solo dispositivos que un admin o super admin le hayan asignado; ver telemetría y dashboards en lectura' },
-    { ok: true, label: 'Historial y reportes especiales' },
-    { ok: false, label: 'Editar widgets del panel o del dashboard del dispositivo' },
-    { ok: false, label: 'Registrar dispositivos nuevos en el sistema' },
-    { ok: false, label: 'Gestionar usuarios' },
-  ],
-  admin: [
-    { ok: true, label: 'Ver solo dispositivos asignados a su cuenta (p. ej. por super admin); editar sus dashboards' },
-    { ok: true, label: 'Editar dashboards del panel y de cada dispositivo asignado (widgets, datos, disposición)' },
-    { ok: true, label: 'Downlinks, automatizaciones y ajustes (según integración)' },
-    { ok: true, label: 'Asignar dispositivos y crear administradores/usuarios de su jerarquía' },
-    { ok: false, label: 'Registrar dispositivos nuevos en el sistema (solo super admin)' },
-    { ok: false, label: 'Eliminar dispositivos de la base de datos por completo (solo super admin)' },
-  ],
-  superadmin: [
-    { ok: true, label: 'Listado global de dispositivos y asignaciones (no limitado a user_devices propios)' },
-    { ok: true, label: 'Registrar dispositivos nuevos y asignarlos a cualquier cuenta' },
-    { ok: true, label: 'Editar dashboards (igual que admin)' },
-    { ok: true, label: 'Eliminar dispositivos de forma definitiva de la base de datos' },
-    { ok: true, label: 'Crear cuentas super admin, admin y usuario' },
-  ],
-};
-
-const UserManagement = () => {
-  const { user, isAdmin, isSuperAdmin } = useAuth();
+const UserManagement = ({ onAfterEnterSupport }) => {
+  const { user, hasNavPage, isSuperAdmin, enterImpersonation } = useAuth();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
@@ -82,6 +173,9 @@ const UserManagement = () => {
   const [confirmNewPass, setConfirmNewPass] = useState('');
   /** @type {null | { user: object, devices: object[], loading: boolean, error: string|null }} */
   const [devicesModal, setDevicesModal] = useState(null);
+  /** Confirmación visual antes de entrar en modo soporte (sustituye `window.confirm`). */
+  const [supportTarget, setSupportTarget] = useState(null);
+  const [supportBusy, setSupportBusy] = useState(false);
 
   const showToast = (type, msg) => {
     setToast({ type, msg });
@@ -105,8 +199,47 @@ const UserManagement = () => {
     loadUsers();
   }, [user]);
 
+  useEffect(() => {
+    if (!supportTarget) return;
+    const onKey = (e) => {
+      if (e.key === 'Escape' && !supportBusy) setSupportTarget(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [supportTarget, supportBusy]);
+
+  const requestEnterSupport = (u) => {
+    if (!isSuperAdmin || !u || u.id === user?.id || u.role === 'superadmin') return;
+    setSupportTarget(u);
+  };
+
+  const closeSupportConfirm = () => {
+    if (supportBusy) return;
+    setSupportTarget(null);
+  };
+
+  const confirmEnterSupport = async () => {
+    const u = supportTarget;
+    if (!u || supportBusy) return;
+    setSupportBusy(true);
+    try {
+      await enterImpersonation(u.id);
+      setSupportTarget(null);
+      if (typeof onAfterEnterSupport === 'function') onAfterEnterSupport();
+    } catch (e) {
+      showToast('error', e.message || 'No se pudo iniciar el modo soporte');
+    } finally {
+      setSupportBusy(false);
+    }
+  };
+
+  const treeRows = useMemo(
+    () => flattenUserTree(users, user?.id, isSuperAdmin),
+    [users, user?.id, isSuperAdmin]
+  );
+
   const openCreate = () => {
-    setForm(EMPTY_FORM);
+    setForm({ ...EMPTY_FORM, navPick: defaultNavPickForNew(hasNavPage) });
     setModal('create');
   };
 
@@ -118,6 +251,7 @@ const UserManagement = () => {
       confirmPassword: '',
       role: normalizeRole(u.role),
       profileName: u.profileName || '',
+      navPick: mergeNavFromUser(u),
     });
     setModal('edit');
   };
@@ -168,17 +302,17 @@ const UserManagement = () => {
     }
     setSaving(true);
     try {
-      const rolePayload =
-        isSuperAdmin && form.role === 'superadmin'
-          ? 'superadmin'
-          : form.role === 'admin'
-            ? 'admin'
-            : 'user';
+      const rolePayload = isSuperAdmin && form.role === 'superadmin' ? 'superadmin' : 'user';
+      const navPermissions = {};
+      for (const { id } of NAV_MODULE_DEFS) {
+        if (form.navPick[id]) navPermissions[id] = true;
+      }
       await createUser({
         email: form.email,
         password: form.password,
         role: rolePayload,
         profileName: form.profileName,
+        navPermissions,
       });
       showToast('success', `Usuario "${form.email}" creado correctamente.`);
       closeModal();
@@ -197,7 +331,16 @@ const UserManagement = () => {
     setSaving(true);
     try {
       const updates = { profileName: form.profileName, email: form.email };
-      if (isSuperAdmin) updates.role = form.role;
+      if (isSuperAdmin) {
+        updates.role = form.role === 'superadmin' ? 'superadmin' : 'user';
+      }
+      if (activeUser.role !== 'superadmin') {
+        const navPermissions = {};
+        for (const { id } of NAV_MODULE_DEFS) {
+          if (form.navPick[id]) navPermissions[id] = true;
+        }
+        updates.navPermissions = navPermissions;
+      }
       await updateUser(activeUser.id, updates);
       showToast('success', 'Usuario actualizado correctamente.');
       closeModal();
@@ -262,14 +405,14 @@ const UserManagement = () => {
 
   const origin = getServerOrigin();
 
-  if (!isAdmin) {
+  if (!hasNavPage('Users')) {
     return (
       <div className="device-list-page device-list-page--premium premium-shell">
         <div className="table-container glass card premium-access-denied-card">
           <div className="um-no-access">
             <AlertCircle size={48} />
             <h2>Acceso restringido</h2>
-            <p>Solo los administradores pueden gestionar usuarios.</p>
+            <p>No tiene permiso para gestionar usuarios.</p>
           </div>
         </div>
       </div>
@@ -291,6 +434,12 @@ const UserManagement = () => {
             <Users size={26} className="premium-hero-title-icon" aria-hidden />
             <span className="premium-hero-title-text">Gestión de Usuarios ({users.length})</span>
           </h1>
+          {isSuperAdmin && (
+            <p className="um-support-hint device-page-header-sub">
+              Como super administrador puede usar el icono de acceso o hacer clic en una fila (fuera de los botones) para
+              abrir la confirmación y ver la plataforma como ese usuario (modo soporte).
+            </p>
+          )}
         </div>
         <button type="button" className="btn btn-primary device-create-top-btn" onClick={openCreate}>
           <Plus size={18} /> Nuevo Usuario
@@ -328,10 +477,29 @@ const UserManagement = () => {
                 </tr>
               </thead>
               <tbody>
-                {users.map((u) => (
-                  <tr key={u.id}>
+                {treeRows.map(({ u, depth }) => {
+                  const supportEligible =
+                    isSuperAdmin && u.id !== user?.id && u.role !== 'superadmin';
+                  return (
+                  <tr
+                    key={u.id}
+                    className={supportEligible ? 'um-row--support-eligible' : undefined}
+                    title={
+                      supportEligible
+                        ? 'Clic fuera de los botones para abrir la confirmación de modo soporte'
+                        : undefined
+                    }
+                    onClick={(e) => {
+                      if (!supportEligible) return;
+                      if (e.target.closest('button, a, input')) return;
+                      void requestEnterSupport(u);
+                    }}
+                  >
                     <td>
-                      <div className="um-user-email-cell">
+                      <div
+                        className="um-user-email-cell"
+                        style={{ paddingLeft: depth ? `${depth * 1.1}rem` : undefined, borderLeft: depth ? '2px solid var(--border-subtle, rgba(255,255,255,0.12))' : undefined }}
+                      >
                         <span className="um-user-email-primary">{u.email}</span>
                       </div>
                     </td>
@@ -346,7 +514,7 @@ const UserManagement = () => {
                           </>
                         ) : u.role === 'admin' ? (
                           <>
-                            <Shield size={12} /> Admin
+                            <Eye size={12} /> Usuario
                           </>
                         ) : (
                           <>
@@ -364,6 +532,16 @@ const UserManagement = () => {
                     <td className="device-actions-col">
                       <div className="actions">
                         <div className="device-row-actions-icons" role="group" aria-label={`Acciones de ${u.email}`}>
+                          {supportEligible && (
+                            <button
+                              type="button"
+                              className="device-action-pill device-action-pill--support"
+                              title="Modo soporte: ver la plataforma como este usuario"
+                              onClick={() => void requestEnterSupport(u)}
+                            >
+                              <LogIn size={18} strokeWidth={2} />
+                            </button>
+                          )}
                           <button type="button" className="device-action-pill" title="Editar usuario" onClick={() => openEdit(u)}>
                             <Edit2 size={18} strokeWidth={2} />
                           </button>
@@ -389,7 +567,8 @@ const UserManagement = () => {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           )}
@@ -411,27 +590,52 @@ const UserManagement = () => {
               </button>
             </div>
             <form onSubmit={handleCreate} className="um-form">
-              <div className="form-group">
-                <label>Tipo de acceso</label>
-                <div className="role-selector">
-                  {(isSuperAdmin ? CREATE_ROLES_SUPER : CREATE_ROLES).map((opt) => (
-                    <div
-                      key={opt.id}
-                      className={`role-option ${form.role === opt.id ? 'active' : ''}`}
-                      onClick={() => setForm({ ...form, role: opt.id })}
-                      onKeyDown={(e) => e.key === 'Enter' && setForm({ ...form, role: opt.id })}
-                      role="button"
-                      tabIndex={0}
-                    >
-                      {opt.icon === 'super' ? <Shield size={20} /> : opt.icon === 'admin' ? <Shield size={20} /> : <Eye size={20} />}
-                      <div>
-                        <div className="role-name">{opt.name}</div>
-                        <div className="role-desc">{opt.desc}</div>
+              <div className="um-modal-body-scroll">
+              {isSuperAdmin ? (
+                <div className="form-group">
+                  <label>Tipo de cuenta</label>
+                  <div className="role-selector">
+                    {CREATE_ROLE_OPTIONS_SUPER.map((opt) => (
+                      <div
+                        key={opt.id}
+                        className={`role-option ${form.role === opt.id ? 'active' : ''}`}
+                        onClick={() => setForm({ ...form, role: opt.id })}
+                        onKeyDown={(e) => e.key === 'Enter' && setForm({ ...form, role: opt.id })}
+                        role="button"
+                        tabIndex={0}
+                      >
+                        {opt.icon === 'super' ? <Shield size={20} /> : <Eye size={20} />}
+                        <div>
+                          <div className="role-name">{opt.name}</div>
+                          <div className="role-desc">{opt.desc}</div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <p className="um-modal-hint" style={{ marginBottom: '1rem' }}>
+                  Se creará una cuenta de <strong>usuario</strong>. Solo podrá activar los módulos que usted tenga en su
+                  cuenta.
+                </p>
+              )}
+
+              {!(isSuperAdmin && form.role === 'superadmin') && (
+                <div className="form-group">
+                  <label>Módulos visibles en el menú</label>
+                  <p className="um-modal-hint" style={{ marginTop: 0 }}>
+                    Marque solo lo que este usuario necesite. Podrá delegar a sus subcuentas únicamente lo que usted
+                    tenga asignado.
+                  </p>
+                  <NavModulePicker
+                    value={form.navPick}
+                    onChange={(next) => setForm({ ...form, navPick: next })}
+                    hasNavPage={hasNavPage}
+                    isSuperAdmin={isSuperAdmin}
+                    disabled={false}
+                  />
+                </div>
+              )}
 
               <div className="um-form-divider">Datos de acceso</div>
               <div className="form-row-2">
@@ -484,25 +688,6 @@ const UserManagement = () => {
               <p className="um-password-policy-hint">
                 Tras el primer acceso, la cuenta deberá definir su propia contraseña: {PASSWORD_POLICY_HINT}
               </p>
-
-              <div className="um-permissions-preview">
-                <div className="perm-title">
-                  Permisos del rol{' '}
-                  <strong>
-                    {form.role === 'superadmin' ? 'Super administrador' : form.role === 'admin' ? 'Administrador' : 'Usuario'}
-                  </strong>
-                  :
-                </div>
-                <div className="perm-grid">
-                  {(PERMISSION_ROWS[form.role === 'superadmin' ? 'superadmin' : form.role === 'admin' ? 'admin' : 'user'] || PERMISSION_ROWS.user).map(
-                    (p, i) => (
-                      <div key={i} className={`perm-item ${p.ok ? 'yes' : 'no'}`}>
-                        <span className="perm-dot" />
-                        {p.label}
-                      </div>
-                    )
-                  )}
-                </div>
               </div>
 
               <div className="modal-footer">
@@ -528,7 +713,11 @@ const UserManagement = () => {
 
       {modal === 'edit' && activeUser && (
         <div className="modal-overlay um-modal-overlay" onClick={closeModal} role="presentation">
-          <div className="modal-content glass um-modal um-modal-shell" onClick={(e) => e.stopPropagation()} role="dialog">
+          <div
+            className="modal-content glass um-modal um-modal-shell um-modal--edit"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+          >
             <div className="modal-header">
               <h2>Editar Usuario</h2>
               <button type="button" className="btn-icon um-modal-close" onClick={closeModal} aria-label="Cerrar">
@@ -536,6 +725,7 @@ const UserManagement = () => {
               </button>
             </div>
             <form onSubmit={handleEdit} className="um-form">
+              <div className="um-modal-body-scroll">
               {isSuperAdmin ? (
                 <div className="form-group">
                   <label>Rol</label>
@@ -548,7 +738,7 @@ const UserManagement = () => {
                         role="button"
                         tabIndex={0}
                       >
-                        {opt.icon === 'super' || opt.icon === 'admin' ? <Shield size={20} /> : <Eye size={20} />}
+                        {opt.icon === 'super' ? <Shield size={20} /> : <Eye size={20} />}
                         <div>
                           <div className="role-name">{opt.name}</div>
                           <div className="role-desc">{opt.desc}</div>
@@ -564,7 +754,7 @@ const UserManagement = () => {
                     {activeUser.role === 'superadmin'
                       ? 'Super admin'
                       : activeUser.role === 'admin'
-                        ? 'Administrador'
+                        ? 'Usuario'
                         : 'Usuario'}
                   </strong>
                   . Solo el super administrador puede cambiar el rol.
@@ -592,6 +782,24 @@ const UserManagement = () => {
                     onChange={(e) => setForm({ ...form, profileName: e.target.value })}
                   />
                 </div>
+              </div>
+
+              {activeUser.role !== 'superadmin' && (
+                <div className="form-group" style={{ marginTop: '1rem' }}>
+                  <label>Módulos del menú</label>
+                  <p className="um-modal-hint" style={{ marginTop: 0 }}>
+                    Solo puede asignar módulos que su propia cuenta tenga habilitados.
+                  </p>
+                  <NavModulePicker
+                    value={form.navPick}
+                    onChange={(next) => setForm({ ...form, navPick: next })}
+                    hasNavPage={hasNavPage}
+                    isSuperAdmin={isSuperAdmin}
+                    disabled={false}
+                  />
+                </div>
+              )}
+
               </div>
 
               <div className="modal-footer">
@@ -671,6 +879,72 @@ const UserManagement = () => {
             <div className="modal-footer">
               <button type="button" className="btn btn-secondary" onClick={closeDevicesModal}>
                 Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {supportTarget && (
+        <div
+          className="modal-overlay um-modal-overlay um-support-confirm-overlay"
+          onClick={() => !supportBusy && closeSupportConfirm()}
+          role="presentation"
+        >
+          <div
+            className="modal-content glass um-modal um-modal-shell um-support-confirm-modal"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="um-support-confirm-title"
+          >
+            <div className="modal-header um-support-confirm-header">
+              <div className="um-support-confirm-title-row">
+                <span className="um-support-confirm-icon" aria-hidden>
+                  <LogIn size={22} strokeWidth={2.25} />
+                </span>
+                <h2 id="um-support-confirm-title">Modo soporte técnico</h2>
+              </div>
+              <button
+                type="button"
+                className="btn-icon um-modal-close"
+                onClick={closeSupportConfirm}
+                disabled={supportBusy}
+                aria-label="Cerrar"
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="modal-body um-support-confirm-body">
+              <p className="um-support-confirm-lead">
+                Verá la plataforma exactamente como la ve esta cuenta. Para volver a la suya use{' '}
+                <strong>«Volver a mi cuenta»</strong> en la barra superior.
+              </p>
+              <div className="um-support-confirm-user-card glass">
+                <Mail size={18} className="um-support-confirm-user-card-icon" aria-hidden />
+                <div className="um-support-confirm-user-card-text">
+                  <span className="um-support-confirm-user-label">Usuario</span>
+                  <span className="um-support-confirm-user-email">{supportTarget.email}</span>
+                  {supportTarget.profileName ? (
+                    <span className="um-support-confirm-user-name">{supportTarget.profileName}</span>
+                  ) : null}
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer um-support-confirm-footer">
+              <button type="button" className="btn btn-secondary" onClick={closeSupportConfirm} disabled={supportBusy}>
+                Cancelar
+              </button>
+              <button type="button" className="btn btn-primary" onClick={() => void confirmEnterSupport()} disabled={supportBusy}>
+                {supportBusy ? (
+                  <>
+                    <Loader size={16} className="spin" /> Entrando…
+                  </>
+                ) : (
+                  <>
+                    <LogIn size={16} /> Entrar como este usuario
+                  </>
+                )}
               </button>
             </div>
           </div>

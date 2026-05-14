@@ -1,6 +1,9 @@
 /**
  * Plantillas de dispositivo (modelo, marca, decoder, downlinks).
- * Persistencia local del navegador; sirven para acelerar el alta y coherencia con el gateway.
+ * El **catálogo compartido** vive en SQLite (`server_settings` vía GET/PUT `/api/device-templates`): el superadmin lo publica;
+ * el resto de usuarios lo hidrata al cargar la app y ve las mismas plantillas (más semillas integradas).
+ * Persistencia local (`localStorage`) sigue como respaldo y caché; downlinks por equipo se replican en `device_shared_presets` (servidor)
+ * para que cualquier usuario asignado vea los mismos presets y telemetría en tiempo real (SSE) sin depender del navegador del superadmin.
  * El `decoderScript` y el **channel** (FPort LoRaWAN de aplicación para downlinks; p. ej. 85 en plantillas Milesight)
  * se guardan en el servidor (`device_decode_config`): el script en cada ingesta y el channel al enviar downlinks.
  * **lorawanClass** (A/B/C) se guarda en `device_decode_config` y en `user_devices` / sesión LNS al aplicar la plantilla.
@@ -20,6 +23,128 @@ const DEFAULT_TEMPLATE_ID_KEY = 'device_profile_default_template_id_v1';
  */
 const EXCLUDED_BUILTIN_SEEDS_KEY = 'device_profile_excluded_builtin_seeds_v1';
 
+/** Catálogo publicado en servidor (SQLite). Tras hidratar, `getDeviceTemplates()` lo fusiona con semillas integradas. */
+let serverTemplatesState = {
+  status: 'unknown',
+  templates: [],
+  defaultTemplateId: null,
+  updatedAt: null,
+};
+
+const primedDownlinksByNorm = new Map();
+const primedCatalogTemplateIdByNorm = new Map();
+const primedTelemetryLabelsByNorm = new Map();
+
+function deviceKeyNorm(deviceId) {
+  return storageDeviceIdKey(deviceId) || String(deviceId || '').trim().toLowerCase();
+}
+
+export function primeDeviceSharedPresetsFromDeviceRows(rows) {
+  for (const row of rows || []) {
+    const p = row.deviceSharedPresets;
+    if (!p || typeof p !== 'object') continue;
+    const k = deviceKeyNorm(row.deviceId);
+    if (!k) continue;
+    if (Array.isArray(p.downlinks) && p.downlinks.length) {
+      primedDownlinksByNorm.set(k, normalizeDownlinks(p.downlinks));
+    }
+    if (p.catalogTemplateId != null && String(p.catalogTemplateId).trim()) {
+      primedCatalogTemplateIdByNorm.set(k, String(p.catalogTemplateId).trim());
+    }
+    const tl = normalizeTelemetryLabelHints(p.telemetryLabels || {});
+    if (Object.keys(tl).length) primedTelemetryLabelsByNorm.set(k, tl);
+  }
+}
+
+export function clearPrimedDeviceSharedPresets() {
+  primedDownlinksByNorm.clear();
+  primedCatalogTemplateIdByNorm.clear();
+  primedTelemetryLabelsByNorm.clear();
+}
+
+/**
+ * @param {object} doc respuesta GET /api/device-templates
+ */
+export function applyServerDeviceTemplatesCatalog(doc) {
+  const templates = Array.isArray(doc?.templates) ? doc.templates : [];
+  serverTemplatesState = {
+    status: 'loaded',
+    templates: templates.map((t) => (t && typeof t === 'object' ? { ...t } : {})),
+    defaultTemplateId:
+      doc?.defaultTemplateId != null && String(doc.defaultTemplateId).trim()
+        ? String(doc.defaultTemplateId).trim()
+        : null,
+    updatedAt: doc?.updatedAt != null ? String(doc.updatedAt) : null,
+  };
+}
+
+export async function hydrateDeviceTemplatesCatalogFromServer() {
+  const { fetchDeviceTemplatesCatalog } = await import('./api.js');
+  const doc = await fetchDeviceTemplatesCatalog();
+  applyServerDeviceTemplatesCatalog(doc);
+  return doc;
+}
+
+export async function publishLocalCustomTemplatesIfServerEmpty(isSuperAdmin) {
+  if (!isSuperAdmin) return false;
+  const { fetchDeviceTemplatesCatalog, putDeviceTemplatesCatalog } = await import('./api.js');
+  const cat = await fetchDeviceTemplatesCatalog();
+  if (Array.isArray(cat.templates) && cat.templates.length > 0) return false;
+  const customs = loadRaw().filter((t) => !templateMatchesSeedCatalog(t));
+  if (customs.length === 0) return false;
+  let def = cat.defaultTemplateId != null && String(cat.defaultTemplateId).trim() ? String(cat.defaultTemplateId).trim() : null;
+  if (!def && typeof window !== 'undefined') {
+    try {
+      const v = localStorage.getItem(DEFAULT_TEMPLATE_ID_KEY);
+      if (v && String(v).trim()) def = String(v).trim();
+    } catch {
+      /* ignore */
+    }
+  }
+  await putDeviceTemplatesCatalog({ templates: customs, defaultTemplateId: def });
+  const next = await fetchDeviceTemplatesCatalog();
+  applyServerDeviceTemplatesCatalog(next);
+  persistList(customs);
+  return true;
+}
+
+export async function flushDeviceTemplatesCatalogToServer() {
+  if (serverTemplatesState.status !== 'loaded') return;
+  const { putDeviceTemplatesCatalog } = await import('./api.js');
+  const saved = await putDeviceTemplatesCatalog({
+    templates: serverTemplatesState.templates,
+    defaultTemplateId: serverTemplatesState.defaultTemplateId,
+  });
+  applyServerDeviceTemplatesCatalog(saved);
+}
+
+function mergeSeedsIntoTemplateList(customList) {
+  const list = Array.isArray(customList) ? [...customList] : [];
+  const modeloSet = new Set(list.map((t) => (t.modelo || '').trim().toLowerCase()));
+  const excludedSeeds = loadExcludedBuiltinSeedKeys();
+  const additions = [];
+  let salt = 0;
+  for (const seed of SEED_DEVICE_TEMPLATES) {
+    const m = (seed.modelo || '').trim().toLowerCase();
+    if (!m || modeloSet.has(m)) continue;
+    if (excludedSeeds.has(seedKeyForSeedEntry(seed))) continue;
+    modeloSet.add(m);
+    salt += 1;
+    additions.push({
+      id: `tpl_builtin_${m.replace(/[^a-z0-9]+/g, '_')}_${Date.now()}_${salt}`,
+      modelo: seed.modelo.trim(),
+      marca: (seed.marca || 'Milesight').trim(),
+      channel: String(seed.channel || '1').trim(),
+      lorawanClass: normalizeTemplateLorawanClass(seed.lorawanClass),
+      decoderScript: String(seed.decoderScript || ''),
+      downlinks: normalizeDownlinks(seed.downlinks),
+      otaaAppEui: '',
+      otaaAppKey: '',
+    });
+  }
+  return [...list, ...additions];
+}
+
 function seedCatalogKey(marca, modelo) {
   return `${String(marca || '').trim().toLowerCase()}|${String(modelo || '').trim().toLowerCase()}`;
 }
@@ -28,7 +153,7 @@ function seedKeyForSeedEntry(seed) {
   return seedCatalogKey(seed.marca || 'Milesight', seed.modelo);
 }
 
-function templateMatchesSeedCatalog(t) {
+export function templateMatchesSeedCatalog(t) {
   const k = seedCatalogKey(t.marca, t.modelo);
   return SEED_DEVICE_TEMPLATES.some((s) => seedKeyForSeedEntry(s) === k);
 }
@@ -142,12 +267,16 @@ export function normalizeTelemetryLabelHints(raw) {
  */
 export function getTelemetryLabelHintsForDevice(deviceId) {
   if (typeof window === 'undefined' || !deviceId) return null;
+  const norm = storageDeviceIdKey(deviceId) || String(deviceId).trim().toLowerCase();
   const tid = getStoredTemplateIdForDevice(deviceId);
-  if (!tid) return null;
   const tpl = getDeviceTemplateById(tid);
-  if (!tpl) return null;
-  const norm = normalizeTelemetryLabelHints(tpl.telemetryLabels);
-  return Object.keys(norm).length ? norm : null;
+  const fromTpl = tpl ? normalizeTelemetryLabelHints(tpl.telemetryLabels) : {};
+  const primed = (norm && primedTelemetryLabelsByNorm.get(norm)) || {};
+  const merged = { ...fromTpl };
+  for (const [fk, vals] of Object.entries(primed)) {
+    merged[fk] = { ...(fromTpl[fk] || {}), ...(vals && typeof vals === 'object' ? vals : {}) };
+  }
+  return Object.keys(merged).length ? merged : null;
 }
 
 /** Join EUI (App EUI) y AppKey para OTAA en el LNS; vacíos = no propagar al servidor desde la plantilla. */
@@ -194,6 +323,10 @@ export function downlinksLocalStorageKey(deviceId) {
 /** Lee downlinks guardados (clave normalizada o legado `downlinks_<id>`). */
 export function readDownlinksFromLocalStorage(deviceId) {
   if (typeof window === 'undefined' || !deviceId) return [];
+  const k = storageDeviceIdKey(deviceId) || String(deviceId).trim().toLowerCase();
+  if (k && primedDownlinksByNorm.has(k)) {
+    return [...primedDownlinksByNorm.get(k)];
+  }
   try {
     const k = downlinksLocalStorageKey(deviceId);
     let raw = localStorage.getItem(k);
@@ -217,6 +350,8 @@ function templateSourceLocalStorageKey(deviceId) {
 export function getStoredTemplateIdForDevice(deviceId) {
   if (typeof localStorage === 'undefined' || !deviceId) return null;
   const norm = storageDeviceIdKey(deviceId) || String(deviceId).trim().toLowerCase();
+  const primed = norm && primedCatalogTemplateIdByNorm.get(norm);
+  if (primed) return primed;
   const kNorm = `${DEVICE_TEMPLATE_SOURCE_KEY_PREFIX}${norm}`;
   try {
     let v = localStorage.getItem(kNorm);
@@ -263,6 +398,7 @@ function persistList(list) {
 
 function ensureBuiltinSeedsMerged() {
   if (typeof window === 'undefined') return;
+  if (serverTemplatesState.status === 'loaded') return;
 
   const list = loadRaw();
   const modeloSet = new Set(list.map((t) => (t.modelo || '').trim().toLowerCase()));
@@ -293,12 +429,14 @@ function ensureBuiltinSeedsMerged() {
 }
 
 export function getDeviceTemplates() {
+  if (serverTemplatesState.status === 'loaded') {
+    return mergeSeedsIntoTemplateList(serverTemplatesState.templates);
+  }
   ensureBuiltinSeedsMerged();
   return loadRaw();
 }
 
 export function saveDeviceTemplate(payload) {
-  const list = loadRaw();
   const id =
     payload.id ||
     `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -316,24 +454,38 @@ export function saveDeviceTemplate(payload) {
     otaaAppKey: otaa.otaaAppKey,
     telemetryLabels: normalizeTelemetryLabelHints(payload.telemetryLabels),
   };
-  const idx = list.findIndex((t) => t.id === id);
-  if (idx >= 0) {
-    list[idx] = entry;
+  if (serverTemplatesState.status === 'loaded') {
+    const list = [...serverTemplatesState.templates];
+    const idx = list.findIndex((t) => String(t.id) === String(entry.id));
+    if (idx >= 0) list[idx] = entry;
+    else list.push(entry);
+    serverTemplatesState = { ...serverTemplatesState, templates: list };
+    persistList(list);
   } else {
-    list.push(entry);
+    const list = loadRaw();
+    const idx = list.findIndex((t) => t.id === id);
+    if (idx >= 0) {
+      list[idx] = entry;
+    } else {
+      list.push(entry);
+    }
+    persistList(list);
   }
-  persistList(list);
   return entry;
 }
 
 export function deleteDeviceTemplate(id) {
   const sid = id != null ? String(id).trim() : '';
-  const list = loadRaw();
-  const victim = sid ? list.find((t) => String(t.id ?? '').trim() === sid) : null;
+  const sourceList =
+    serverTemplatesState.status === 'loaded' ? [...serverTemplatesState.templates] : [...loadRaw()];
+  const victim = sid ? sourceList.find((t) => String(t.id ?? '').trim() === sid) : null;
   if (victim && templateMatchesSeedCatalog(victim)) {
     rememberExcludedBuiltinSeedKey(seedCatalogKey(victim.marca, victim.modelo));
   }
-  const next = sid ? list.filter((t) => String(t.id ?? '').trim() !== sid) : list;
+  const next = sid ? sourceList.filter((t) => String(t.id ?? '').trim() !== sid) : sourceList;
+  if (serverTemplatesState.status === 'loaded') {
+    serverTemplatesState = { ...serverTemplatesState, templates: next };
+  }
   persistList(next);
   const def = getDefaultTemplateId();
   if (typeof window !== 'undefined' && sid && def != null && String(def).trim() === sid) {
@@ -342,6 +494,10 @@ export function deleteDeviceTemplate(id) {
 }
 
 export function getDefaultTemplateId() {
+  if (serverTemplatesState.status === 'loaded') {
+    const d = serverTemplatesState.defaultTemplateId;
+    return d && String(d).trim() ? String(d).trim() : null;
+  }
   if (typeof window === 'undefined') return null;
   try {
     const v = localStorage.getItem(DEFAULT_TEMPLATE_ID_KEY);
@@ -353,6 +509,13 @@ export function getDefaultTemplateId() {
 
 /** @param {string | null | undefined} templateId id de plantilla o null para no heredar por defecto */
 export function setDefaultTemplateId(templateId) {
+  if (serverTemplatesState.status === 'loaded') {
+    serverTemplatesState = {
+      ...serverTemplatesState,
+      defaultTemplateId:
+        templateId == null || String(templateId).trim() === '' ? null : String(templateId).trim(),
+    };
+  }
   if (typeof window === 'undefined') return;
   try {
     if (templateId == null || String(templateId).trim() === '') {
@@ -388,14 +551,32 @@ export async function persistTemplateForDeviceId(deviceId, template, saveDeviceD
     productModel: productModelLabelFromTemplate(template),
   });
   const dls = normalizeDownlinks(template.downlinks);
+  const tid = template.id != null && String(template.id).trim() ? String(template.id).trim() : '';
   if (typeof localStorage !== 'undefined') {
     const kDl = downlinksLocalStorageKey(deviceId);
     const kSrc = templateSourceLocalStorageKey(deviceId);
     localStorage.setItem(kDl, JSON.stringify(dls));
-    const tid = template.id != null && String(template.id).trim() ? String(template.id).trim() : '';
     if (tid) {
       localStorage.setItem(kSrc, tid);
     }
+  }
+  const kNorm = deviceKeyNorm(deviceId);
+  if (kNorm) {
+    primedDownlinksByNorm.set(kNorm, dls);
+    if (tid) primedCatalogTemplateIdByNorm.set(kNorm, tid);
+    const tl = normalizeTelemetryLabelHints(template.telemetryLabels);
+    if (Object.keys(tl).length) primedTelemetryLabelsByNorm.set(kNorm, tl);
+    else primedTelemetryLabelsByNorm.delete(kNorm);
+  }
+  try {
+    const { putDeviceDownlinkPresets } = await import('./api.js');
+    await putDeviceDownlinkPresets(idApi, {
+      downlinks: dls,
+      catalogTemplateId: tid || null,
+      telemetryLabels: normalizeTelemetryLabelHints(template.telemetryLabels),
+    });
+  } catch (e) {
+    console.warn('[deviceTemplates] putDeviceDownlinkPresets:', e?.message || e);
   }
 }
 
@@ -433,7 +614,16 @@ export function listDeviceIdsBoundToTemplate(templateId) {
 export async function pushTemplateToAssignedDevices(template, saveDeviceDecodeConfig) {
   const id = template?.id != null && String(template.id).trim() ? String(template.id).trim() : '';
   if (!id) return { synced: 0, errors: ['Plantilla sin id'] };
-  const deviceIds = listDeviceIdsBoundToTemplate(id);
+  const localIds = listDeviceIdsBoundToTemplate(id);
+  let remoteIds = [];
+  try {
+    const { fetchAssignedDeviceIdsForTemplate } = await import('./api.js');
+    const data = await fetchAssignedDeviceIdsForTemplate(id);
+    remoteIds = Array.isArray(data?.deviceIds) ? data.deviceIds : [];
+  } catch {
+    /* sin sesión o sin permiso Dispositivos */
+  }
+  const deviceIds = [...new Set([...localIds, ...remoteIds].map((x) => String(x || '').trim()).filter(Boolean))];
   const errors = [];
   let synced = 0;
   for (const did of deviceIds) {
@@ -499,7 +689,14 @@ export function mergeDeviceTemplatesFromImport(parsed) {
     throw new Error('El archivo debe ser un array de plantillas o un objeto con la propiedad templates.');
   }
 
-  const list = [...getDeviceTemplates()];
+  let customBase;
+  if (serverTemplatesState.status === 'loaded') {
+    customBase = [...serverTemplatesState.templates];
+  } else {
+    ensureBuiltinSeedsMerged();
+    customBase = [...loadRaw()];
+  }
+  const list = [...customBase];
   const byId = new Map(list.map((t) => [t.id, t]));
   let added = 0;
   let replaced = 0;
@@ -554,6 +751,9 @@ export function mergeDeviceTemplatesFromImport(parsed) {
     affectedTemplateIds.push(id);
   });
 
+  if (serverTemplatesState.status === 'loaded') {
+    serverTemplatesState = { ...serverTemplatesState, templates: list };
+  }
   persistList(list);
   return { added, replaced, skipped, affectedTemplateIds: [...new Set(affectedTemplateIds)] };
 }

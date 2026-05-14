@@ -42,6 +42,9 @@ import {
   normalizeOtaaTemplateFields,
   lorawanClassOptionLabel,
   productModelLabelFromTemplate,
+  hydrateDeviceTemplatesCatalogFromServer,
+  publishLocalCustomTemplatesIfServerEmpty,
+  primeDeviceSharedPresetsFromDeviceRows,
 } from '../services/deviceTemplates';
 import { getLatestDeviceData, getUsers } from '../services/localAuth';
 import { applyStaleOfflineConnectStatus, isDeviceVisuallyOnline } from '../utils/deviceConnectionStatus';
@@ -224,8 +227,10 @@ function mergeDeviceRowWithLatestTelemetry(dev, localUpdate) {
 }
 
 const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
-  const { credentials, token, user, userProfile, isAdmin, isSuperAdmin, canCreateDevices } = useAuth();
+  const { credentials, token, user, userProfile, hasNavPage, isSuperAdmin, canCreateDevices } = useAuth();
   const { t } = useLanguage();
+  const canAssignDevice = isSuperAdmin || (hasNavPage('Users') && hasNavPage('Devices'));
+  const showDeviceRowActions = hasNavPage('Devices') || isSuperAdmin;
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -272,6 +277,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
       let list = response.data?.data?.content || response.data?.content || [];
       if (!Array.isArray(list)) list = [];
       let mapped = list.map((d) => applyStaleOfflineConnectStatus(d));
+      primeDeviceSharedPresetsFromDeviceRows(mapped);
       if (ensureRows.length > 0) {
         const seen = new Set(mapped.map((d) => String(d.deviceId || '').trim().toLowerCase()));
         for (const row of ensureRows) {
@@ -294,6 +300,23 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
     }
     return { ok: !caught, error: caught };
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await hydrateDeviceTemplatesCatalogFromServer();
+        if (!cancelled && isSuperAdmin) {
+          await publishLocalCustomTemplatesIfServerEmpty(true);
+        }
+      } catch (e) {
+        if (!cancelled) console.warn('[DeviceList] catálogo plantillas:', e?.message || e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isSuperAdmin]);
 
   useEffect(() => {
     loadDevices();
@@ -363,7 +386,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
   }, []);
 
   useEffect(() => {
-    if (!assignForDevice || !isAdmin) return;
+    if (!assignForDevice || !canAssignDevice) return;
     let cancelled = false;
     (async () => {
       try {
@@ -376,7 +399,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
     return () => {
       cancelled = true;
     };
-  }, [assignForDevice, isAdmin]);
+  }, [assignForDevice, canAssignDevice]);
 
   const templatesForPicker = useMemo(
     () => filterDeviceTemplatesByQuery(templatePickQuery),
@@ -903,7 +926,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                 </td>
                 <td className="device-actions-col">
                   <div className="actions">
-                    {isAdmin && (
+                    {showDeviceRowActions && (
                       <div className="device-row-actions-icons" role="group" aria-label="Acciones del dispositivo">
                         {isSuperAdmin && (
                           <button
@@ -924,6 +947,8 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                             Renovación de licencia
                           </button>
                         )}
+                        {hasNavPage('Devices') && (
+                          <>
                         <button
                           type="button"
                           className="device-action-pill"
@@ -960,6 +985,9 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                         >
                           <Play size={18} strokeWidth={2} />
                         </button>
+                          </>
+                        )}
+                        {canAssignDevice && (
                         <button
                           type="button"
                           className="device-action-pill"
@@ -969,6 +997,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                         >
                           <UserPlus size={18} strokeWidth={2} />
                         </button>
+                        )}
                         {isSuperAdmin && (
                           <button
                             type="button"
@@ -1360,7 +1389,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                     >
                       <span className="assign-user-email">{u.email}</span>
                       <span className="assign-user-meta">
-                        {u.profileName || '—'} · {u.role === 'superadmin' ? 'Super admin' : u.role === 'admin' ? 'Admin' : 'Usuario'}
+                        {u.profileName || '—'} · {u.role === 'superadmin' ? 'Super admin' : 'Usuario'}
                       </span>
                     </button>
                   ))

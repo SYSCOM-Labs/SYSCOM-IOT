@@ -147,21 +147,50 @@ body:not(.theme-dark) .um-modal-shell.um-devices-modal .um-devices-table th {
 .role-badge.viewer     { background: rgba(59,130,246,0.12); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
 
 /* Modal */
-.um-modal {
+/* Modal: crear / editar usuario */
+.um-modal.um-modal--create,
+.um-modal.um-modal--edit {
+  max-width: 560px;
+  width: min(100%, 560px);
+  max-height: min(92vh, 900px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.um-modal.um-modal--create .um-form,
+.um-modal.um-modal--edit .um-form {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.um-modal.um-modal--create .um-modal-body-scroll,
+.um-modal.um-modal--edit .um-modal-body-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 14px 10px 18px 22px;
+}
+
+.um-modal.um-modal--create .modal-footer,
+.um-modal.um-modal--edit .modal-footer {
+  flex-shrink: 0;
+  margin-top: 0;
+}
+
+/* Otros modales (dispositivos, contraseña): cápsula flexible */
+.um-modal.um-modal-shell:not(.um-modal--create):not(.um-modal--edit):not(.um-devices-modal):not(.um-support-confirm-modal) {
   max-width: 640px;
   width: 100%;
   max-height: min(92vh, 920px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
-}
-
-.um-modal.um-modal--create .um-form {
-  overflow-y: auto;
-  flex: 1;
-  min-height: 0;
-  padding-right: 8px;
-  max-height: min(78vh, 760px);
 }
 
 .um-modal .modal-footer {
@@ -187,11 +216,27 @@ body:not(.theme-dark) .um-modal-shell.um-devices-modal .um-devices-table th {
   gap: 12px;
 }
 
-/* Role selector */
 .role-selector {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
+}
+
+/* Role selector: en modales estrechos, una columna para que el texto no se comprima */
+.um-modal-shell .role-selector {
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 520px) {
+  .um-modal-shell .role-selector {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  .um-modal-shell .form-row-2 {
+    grid-template-columns: 1fr;
+  }
 }
 
 .role-option {
@@ -389,4 +434,234 @@ body:not(.theme-dark) .um-modal-shell.um-devices-modal .um-devices-table th {
   line-height: 1.45;
   color: var(--text-secondary);
   margin: 0;
+}
+
+.um-row--support-eligible {
+  cursor: pointer;
+}
+
+.um-row--support-eligible:hover {
+  background: rgba(59, 130, 246, 0.08);
+}
+
+body.theme-dark .um-row--support-eligible:hover {
+  background: rgba(59, 130, 246, 0.12);
+}
+
+.um-support-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.875rem;
+  font-weight: 400;
+  opacity: 0.88;
+  max-width: 52rem;
+  line-height: 1.45;
+}
+
+.device-action-pill--support {
+  border-color: rgba(59, 130, 246, 0.45);
+  color: #60a5fa;
+}
+
+.um-nav-grid.um-nav-grid--list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.um-nav-tile {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0.65rem 1rem;
+  border-radius: 12px;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid rgba(99, 102, 241, 0.22);
+  background: rgba(99, 102, 241, 0.06);
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    background 0.18s ease;
+}
+
+.um-nav-tile:hover {
+  border-color: rgba(99, 102, 241, 0.42);
+  background: rgba(99, 102, 241, 0.1);
+}
+
+.um-nav-tile.um-nav-tile--on {
+  border-color: rgba(6, 182, 212, 0.55);
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.12), rgba(99, 102, 241, 0.1));
+  box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.15);
+}
+
+.um-nav-tile input[type='checkbox'] {
+  cursor: pointer;
+  flex-shrink: 0;
+  width: 1.1rem;
+  height: 1.1rem;
+  accent-color: var(--info-color, #0891b2);
+}
+
+.um-nav-tile-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--text-primary);
+  white-space: normal;
+  word-break: break-word;
+}
+
+body.theme-dark .um-nav-tile {
+  background: rgba(15, 23, 42, 0.55);
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+body.theme-dark .um-nav-tile.um-nav-tile--on {
+  background: linear-gradient(135deg, rgba(8, 145, 178, 0.18), rgba(49, 46, 129, 0.35));
+  border-color: rgba(34, 211, 238, 0.4);
+}
+
+/* Modal confirmación modo soporte (centrado, estilo premium) */
+.um-support-confirm-overlay.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+}
+
+.um-support-confirm-modal.modal-content {
+  width: min(100%, 440px);
+  max-width: 440px;
+  margin: 0;
+  animation: um-support-confirm-in 0.28s ease;
+}
+
+@keyframes um-support-confirm-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .um-support-confirm-modal.modal-content {
+    animation: none;
+  }
+}
+
+.um-support-confirm-header.modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.12) 0%, transparent 92%);
+  border-bottom-color: rgba(56, 189, 248, 0.28);
+}
+
+.um-support-confirm-title-row h2 {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.um-support-confirm-icon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(56, 189, 248, 0.35), rgba(99, 102, 241, 0.35));
+  border: 1px solid rgba(147, 197, 253, 0.35);
+  color: #e0f2fe;
+  box-shadow: 0 0 20px rgba(56, 189, 248, 0.25);
+}
+
+.um-support-confirm-body.modal-body {
+  padding-top: 16px;
+}
+
+.um-support-confirm-lead {
+  margin: 0 0 1rem;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.um-support-confirm-lead strong {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.um-support-confirm-user-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(99, 102, 241, 0.22);
+  background: rgba(99, 102, 241, 0.06);
+}
+
+body.theme-dark .um-support-confirm-user-card {
+  background: rgba(15, 23, 42, 0.45);
+  border-color: rgba(99, 102, 241, 0.28);
+}
+
+.um-support-confirm-user-card-icon {
+  flex-shrink: 0;
+  color: #38bdf8;
+  opacity: 0.95;
+}
+
+.um-support-confirm-user-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  text-align: left;
+}
+
+.um-support-confirm-user-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted);
+}
+
+.um-support-confirm-user-email {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.um-support-confirm-user-name {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.um-support-confirm-footer.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
 }

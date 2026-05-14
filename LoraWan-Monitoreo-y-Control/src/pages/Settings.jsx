@@ -33,7 +33,7 @@ function notifyLogoChanged() {
 const SettingsPage = () => {
   const { t } = useLanguage();
   const { isDarkMode, toggleTheme } = useTheme();
-  const { user, userProfile, resyncSession, isAdmin } = useAuth();
+  const { user, userProfile, resyncSession, hasNavPage } = useAuth();
   const logoFileRef = useRef(null);
   const barAvatarFileRef = useRef(null);
   const dbImportFileRef = useRef(null);
@@ -57,7 +57,7 @@ const SettingsPage = () => {
   }, [userProfile?.profileName, user?.profileName]);
 
   useEffect(() => {
-    if (!isAdmin) return undefined;
+    if (!hasNavPage('Settings')) return undefined;
     let cancelled = false;
     (async () => {
       try {
@@ -70,7 +70,7 @@ const SettingsPage = () => {
     return () => {
       cancelled = true;
     };
-  }, [isAdmin]);
+  }, [hasNavPage]);
 
   useEffect(() => {
     if (!activityLogOpen) return;
@@ -454,7 +454,7 @@ const SettingsPage = () => {
           </button>
         </section>
 
-        {isAdmin && (
+        {hasNavPage('Settings') && (
           <section className="settings-section settings-section-premium">
             <h3>
               <Database size={20} className="premium-hero-title-icon" style={{ verticalAlign: 'middle', marginRight: 6 }} aria-hidden />

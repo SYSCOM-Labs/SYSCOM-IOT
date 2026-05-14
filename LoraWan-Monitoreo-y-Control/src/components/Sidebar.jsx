@@ -19,13 +19,13 @@ import {
 } from 'lucide-react';
 
 const Sidebar = ({ activePage, onNavigate, isOpen, onToggle }) => {
-  const { logout, isAdmin, isSuperAdmin, user, userProfile } = useAuth();
+  const { logout, hasNavPage, isSuperAdmin, user, userProfile } = useAuth();
   const barAvatarOverride = useBarAvatarOverride();
 
   const sidebarRoleLabel = () => {
-    const r = user?.role;
-    if (r === 'superadmin') return 'Super administrador';
-    if (r === 'admin') return 'Administrador';
+    const rr = user?.role;
+    if (rr === 'superadmin') return 'Super administrador';
+    if (rr === 'admin') return 'Usuario';
     return 'Usuario';
   };
 
@@ -57,17 +57,17 @@ const Sidebar = ({ activePage, onNavigate, isOpen, onToggle }) => {
   const menuItems = [
     { id: 'Dashboard', icon: <LayoutDashboard size={20} />, label: t('nav.dashboard') },
     { id: 'Devices', icon: <Tablet size={20} />, label: t('nav.devices') },
-    { id: 'Gateway', icon: <RadioTower size={20} />, label: t('nav.gateway'), adminOnly: true },
-    { id: 'Automations', icon: <Zap size={20} />, label: t('nav.automations'), adminOnly: true },
+    { id: 'Gateway', icon: <RadioTower size={20} />, label: t('nav.gateway') },
+    { id: 'Automations', icon: <Zap size={20} />, label: t('nav.automations') },
     { id: 'History', icon: <History size={20} />, label: t('nav.history') },
     { id: 'SpecialReport', icon: <Calculator size={20} />, label: t('nav.special_report') },
-    { id: 'Users', icon: <Users size={20} />, label: 'Usuarios', adminOnly: true },
+    { id: 'Users', icon: <Users size={20} />, label: 'Usuarios' },
     { id: 'Templates', icon: <Layers size={20} />, label: 'Plantillas', superAdminOnly: true },
-    { id: 'Settings', icon: <Settings size={20} />, label: t('nav.settings'), adminOnly: true },
-  ].filter(
-    (item) =>
-      (!item.adminOnly || isAdmin) && (!item.superAdminOnly || isSuperAdmin)
-  );
+    { id: 'Settings', icon: <Settings size={20} />, label: t('nav.settings') },
+  ].filter((item) => {
+    if (item.superAdminOnly) return isSuperAdmin;
+    return hasNavPage(item.id);
+  });
 
   return (
     <aside className={`sidebar sidebar--premium ${isOpen ? 'open' : ''}`}>

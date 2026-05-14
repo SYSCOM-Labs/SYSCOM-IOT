@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback, useRef } from 'react';
+import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import './DeviceList.css';
 import '../styles/premiumPageShell.css';
 import { Plus, Pencil, Trash2, X, Layers, Wand2, Upload, Download } from 'lucide-react';
@@ -16,6 +16,9 @@ import {
   pushTemplateToAssignedDevices,
   getDeviceTemplateById,
   normalizeTelemetryLabelHints,
+  hydrateDeviceTemplatesCatalogFromServer,
+  publishLocalCustomTemplatesIfServerEmpty,
+  flushDeviceTemplatesCatalogToServer,
 } from '../services/deviceTemplates';
 import { saveDeviceDecodeConfig } from '../services/api';
 import { adaptDecoderScriptForSyscom } from '../utils/adaptDecoderScript';
@@ -66,6 +69,22 @@ const TemplatesPage = () => {
     setTemplates(getDeviceTemplates());
     setDefaultTemplateIdState(getDefaultTemplateId());
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        await hydrateDeviceTemplatesCatalogFromServer();
+        if (!cancelled) await publishLocalCustomTemplatesIfServerEmpty(true);
+      } catch (e) {
+        if (!cancelled) console.warn('[TemplatesPage] catálogo servidor:', e?.message || e);
+      }
+      if (!cancelled) refresh();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [refresh]);
 
   const openNew = () => {
     setDecoderSnapshot('');
@@ -147,7 +166,7 @@ const TemplatesPage = () => {
     setTemplateSyncBusy(true);
     try {
       const r = await pushTemplateToAssignedDevices(entry, saveDeviceDecodeConfig);
-      const parts = ['Plantilla guardada en este navegador.'];
+      const parts = ['Plantilla guardada en el catálogo del servidor (visible para todos los usuarios con acceso a dispositivos).'];
       if (r.synced > 0) {
         parts.push(
           `Actualizado en servidor y en downlinks locales: ${r.synced} dispositivo(s) vinculados (puerto, clase LoRaWAN, decoder, downlinks). Las claves OTAA de cada equipo no se alteran desde aquí.`
@@ -182,14 +201,24 @@ const TemplatesPage = () => {
       });
     } finally {
       setTemplateSyncBusy(false);
+      try {
+        await flushDeviceTemplatesCatalogToServer();
+      } catch (fe) {
+        console.warn('[TemplatesPage] publicar catálogo:', fe?.message || fe);
+      }
       refresh();
     }
   };
 
-  const handleDelete = (t) => {
+  const handleDelete = async (t) => {
     if (!window.confirm(`¿Eliminar la plantilla "${t.modelo}" (${t.marca})?`)) return;
     deleteDeviceTemplate(t.id);
     refresh();
+    try {
+      await flushDeviceTemplatesCatalogToServer();
+    } catch (e) {
+      console.warn('[TemplatesPage] publicar catálogo tras borrar:', e?.message || e);
+    }
   };
 
   const handleAdaptDecoder = () => {
@@ -242,6 +271,11 @@ const TemplatesPage = () => {
           const parsed = JSON.parse(text);
           const { added, replaced, skipped, affectedTemplateIds } = mergeDeviceTemplatesFromImport(parsed);
           refresh();
+          try {
+            await flushDeviceTemplatesCatalogToServer();
+          } catch (fe) {
+            console.warn('[TemplatesPage] publicar tras importar:', fe?.message || fe);
+          }
           let syncedDevices = 0;
           const syncErrors = [];
           if (Array.isArray(affectedTemplateIds) && affectedTemplateIds.length > 0) {
@@ -411,9 +445,14 @@ const TemplatesPage = () => {
                         <button
                           type="button"
                           className="btn btn-secondary templates-default-btn"
-                          onClick={() => {
+                          onClick={async () => {
                             setDefaultTemplateId(null);
                             refresh();
+                            try {
+                              await flushDeviceTemplatesCatalogToServer();
+                            } catch (e) {
+                              console.warn('[TemplatesPage] publicar catálogo:', e?.message || e);
+                            }
                           }}
                         >
                           Quitar
@@ -424,9 +463,14 @@ const TemplatesPage = () => {
                         type="button"
                         className="btn btn-secondary templates-default-btn"
                         title="Cada nuevo dispositivo heredará decoder y downlinks de esta plantilla"
-                        onClick={() => {
+                        onClick={async () => {
                           setDefaultTemplateId(t.id);
                           refresh();
+                          try {
+                            await flushDeviceTemplatesCatalogToServer();
+                          } catch (e) {
+                            console.warn('[TemplatesPage] publicar catálogo:', e?.message || e);
+                          }
                         }}
                       >
                         Heredar en altas

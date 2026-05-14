@@ -599,3 +599,183 @@ body.theme-dark .license-expiry-banner {
   border-color: rgba(251, 191, 36, 0.35);
   background: linear-gradient(135deg, rgba(180, 83, 9, 0.2), rgba(120, 53, 15, 0.15));
 }
+
+/* Modo soporte: superadmin viendo otra cuenta */
+.syscom-impersonation-banner {
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(56, 189, 248, 0.55);
+  background: linear-gradient(
+    105deg,
+    #0f172a 0%,
+    #1e3a5f 35%,
+    #172554 70%,
+    #0c1929 100%
+  );
+  color: #f8fafc;
+  box-shadow: 0 4px 24px rgba(15, 23, 42, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.syscom-impersonation-banner__inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0.65rem 1rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem 1rem;
+}
+
+.syscom-impersonation-banner__spacer {
+  min-width: 0;
+}
+
+.syscom-impersonation-banner__center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 0.15rem;
+  min-width: 0;
+  grid-column: 2;
+}
+
+.syscom-impersonation-banner__kicker {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: rgba(186, 230, 253, 0.88);
+}
+
+.syscom-impersonation-banner__name {
+  font-weight: 700;
+  font-size: clamp(1.05rem, 2.5vw, 1.35rem);
+  letter-spacing: 0.02em;
+  color: #fff;
+  text-shadow:
+    0 0 20px rgba(56, 189, 248, 0.75),
+    0 1px 2px rgba(0, 0, 0, 0.5);
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+@keyframes syscom-impersonation-btn-glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.12),
+      0 0 18px rgba(34, 211, 238, 0.45),
+      0 0 36px rgba(59, 130, 246, 0.35);
+    filter: brightness(1);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.2),
+      0 0 28px rgba(34, 211, 238, 0.85),
+      0 0 52px rgba(96, 165, 250, 0.55);
+    filter: brightness(1.08);
+  }
+}
+
+@keyframes syscom-impersonation-btn-shine {
+  0% {
+    background-position: 120% 50%;
+  }
+  100% {
+    background-position: -20% 50%;
+  }
+}
+
+.syscom-impersonation-banner__btn {
+  grid-column: 3;
+  justify-self: end;
+  position: relative;
+  overflow: hidden;
+  border: none;
+  border-radius: 10px;
+  padding: 0.5rem 1.1rem;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  color: #0f172a;
+  background: linear-gradient(120deg, #22d3ee 0%, #38bdf8 40%, #818cf8 100%);
+  background-size: 200% 100%;
+  animation:
+    syscom-impersonation-btn-glow 2.4s ease-in-out infinite,
+    syscom-impersonation-btn-shine 3.5s linear infinite;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+
+.syscom-impersonation-banner__btn::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    105deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.55) 45%,
+    rgba(255, 255, 255, 0.1) 55%,
+    transparent 100%
+  );
+  transform: translateX(-100%);
+  animation: syscom-impersonation-btn-sweep 2.2s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes syscom-impersonation-btn-sweep {
+  0% {
+    transform: translateX(-120%);
+  }
+  55%,
+  100% {
+    transform: translateX(120%);
+  }
+}
+
+.syscom-impersonation-banner__btn:hover:not(:disabled) {
+  transform: translateY(-1px) scale(1.02);
+  filter: brightness(1.06) saturate(1.05);
+}
+
+.syscom-impersonation-banner__btn:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+
+.syscom-impersonation-banner__btn:disabled {
+  cursor: wait;
+  opacity: 0.75;
+  animation: none;
+}
+
+.syscom-impersonation-banner__btn:disabled::after {
+  animation: none;
+}
+
+@media (max-width: 640px) {
+  .syscom-impersonation-banner__inner {
+    grid-template-columns: 1fr;
+    justify-items: stretch;
+  }
+
+  .syscom-impersonation-banner__center {
+    grid-column: 1;
+    order: 1;
+  }
+
+  .syscom-impersonation-banner__btn {
+    grid-column: 1;
+    justify-self: stretch;
+    order: 2;
+    width: 100%;
+  }
+
+  .syscom-impersonation-banner__spacer {
+    display: none;
+  }
+}
+
+body.theme-dark .syscom-impersonation-banner {
+  border-bottom-color: rgba(34, 211, 238, 0.5);
+}

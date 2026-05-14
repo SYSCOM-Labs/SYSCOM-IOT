@@ -20,6 +20,7 @@ const {
   getMqttApiStatus,
 } = require('./milesight-mqtt-publisher');
 const { store, readLnsTxAckPruneSilenceMs } = require('./store');
+const navPerm = require('./navPermissions');
 const { flattenTelemetryProps } = require('./lib/telemetryPayloadUtils');
 const { tryBootstrapMilesightAbpSession, retryMilesightAbpBootstrapAll } = require('./milesight-lns-bootstrap');
 const { validatePasswordStrength } = require('./password-policy');
@@ -277,6 +278,54 @@ function resolveDownlinkDeviceClass(reqBody, deviceId, ud, sessionFallbackClass,
     return normalizeLnsDeviceClassLetter(fromTel);
   }
   return normalizeLnsDeviceClassLetter('A');
+}
+
+function normalizeDeviceSharedPresetsBody(body) {
+  const downlinks = Array.isArray(body?.downlinks)
+    ? body.downlinks
+        .map((d) => ({
+          name: String(d?.name || '').trim(),
+          hex: String(d?.hex || '')
+            .trim()
+            .replace(/\s/g, '')
+            .toLowerCase()
+            .replace(/^0x/, ''),
+        }))
+        .filter((d) => d.name && d.hex)
+    : [];
+  const catalogTemplateId =
+    body?.catalogTemplateId != null && String(body.catalogTemplateId).trim()
+      ? String(body.catalogTemplateId).trim()
+      : null;
+  const telemetryLabels =
+    body?.telemetryLabels && typeof body.telemetryLabels === 'object' && !Array.isArray(body.telemetryLabels)
+      ? body.telemetryLabels
+      : {};
+  return { downlinks, catalogTemplateId, telemetryLabels };
+}
+
+function attachDeviceSharedPresetsToContent(content) {
+  if (!Array.isArray(content) || content.length === 0) return;
+  const ids = [];
+  for (const row of content) {
+    if (row && row.deviceId) ids.push(row.deviceId);
+  }
+  const map = store.getDeviceSharedPresetsMap(ids);
+  for (const row of content) {
+    const p = map[row.deviceId];
+    if (!p || typeof p !== 'object') continue;
+    row.deviceSharedPresets = {
+      downlinks: Array.isArray(p.downlinks) ? p.downlinks : [],
+      catalogTemplateId:
+        p.catalogTemplateId != null && String(p.catalogTemplateId).trim()
+          ? String(p.catalogTemplateId).trim()
+          : null,
+      telemetryLabels:
+        p.telemetryLabels && typeof p.telemetryLabels === 'object' && !Array.isArray(p.telemetryLabels)
+          ? p.telemetryLabels
+          : {},
+    };
+  }
 }
 
 const DASHBOARD_WIDGET_TYPES = new Set([
@@ -540,6 +589,7 @@ function buildDevicesContentAssignedOnly(userId) {
       content.push(row);
     }
   }
+  attachDeviceSharedPresetsToContent(content);
   return content;
 }
 
@@ -635,11 +685,14 @@ function buildDevicesContentSuperadmin() {
     content.push(row);
   }
   content.sort((a, b) => String(a.deviceId).localeCompare(String(b.deviceId)));
+  attachDeviceSharedPresetsToContent(content);
   return content;
 }
 
-function isStaffRole(role) {
-  return role === 'superadmin' || role === 'admin';
+function canRunAutomationsForUser(user) {
+  if (!user) return false;
+  if (user.role === 'superadmin') return true;
+  return navPerm.userHasNav(user, 'Automations');
 }
 
 /** Super admin puede operar con cualquier deviceId; resto solo si consta en user_devices. */
@@ -671,21 +724,34 @@ function profileAvatarUrl(email) {
   return `https://www.gravatar.com/avatar/${h}?s=160&d=identicon&r=pg`;
 }
 
-function sessionJwtPayload(user) {
-  return {
+/**
+ * @param {object} user fila usuario (BD)
+ * @param {{ impersonatorId?: string }} [opts] si `impersonatorId` está definido, JWT = sesión de soporte (superadmin viendo otra cuenta)
+ */
+function sessionJwtPayload(user, opts = {}) {
+  const impersonatorId =
+    opts && opts.impersonatorId != null && String(opts.impersonatorId).trim()
+      ? String(opts.impersonatorId).trim()
+      : '';
+  const isImpersonation = Boolean(impersonatorId);
+  const nav = navPerm.effectiveNavForUser(user);
+  const payload = {
     id: user.id,
     email: user.email,
     role: user.role,
     profileName: user.profileName,
-    mustChangePassword: Boolean(user.mustChangePassword),
+    mustChangePassword: isImpersonation ? false : Boolean(user.mustChangePassword),
     avatarUrl: profileAvatarUrl(user.email),
+    nav,
   };
+  if (impersonatorId) payload.impersonatorId = impersonatorId;
+  return payload;
 }
 
 /** Respuestas API: sin contraseña de app ni contraseña del gateway. */
 function sanitizeUserRecord(user) {
   if (!user) return user;
-  const { password: _pw, ...rest } = user;
+  const { password: _pw, navPermissionsJson: _npj, ...rest } = user;
   let milesightUgGateway = rest.milesightUgGateway;
   if (milesightUgGateway && typeof milesightUgGateway === 'object') {
     milesightUgGateway = {
@@ -700,6 +766,7 @@ function sanitizeUserRecord(user) {
     milesightUgGateway,
     mustChangePassword: Boolean(user.mustChangePassword),
     avatarUrl: profileAvatarUrl(user.email),
+    nav: navPerm.effectiveNavForUser(user),
   };
 }
 
@@ -1405,7 +1472,7 @@ automationRunner.configure({
   appendDownlinkLog,
   insertUiEventWithStream,
   buildLnsDownlinkApiSuccessBody,
-  isStaffRole,
+  canRunAutomationsForUser,
 });
 store.setAutomationTelemetryHook((payload) => {
   try {
@@ -1490,7 +1557,11 @@ const authMiddleware = (req, res, next) => {
   if (firstPwOk || meOk) return next();
 
   const fullUser = store.getUserById(req.user.id);
-  if (fullUser?.mustChangePassword) {
+  if (fullUser) {
+    req.user.nav = navPerm.effectiveNavForUser(fullUser);
+    req.user.role = fullUser.role;
+  }
+  if (fullUser?.mustChangePassword && !req.user.impersonatorId) {
     return res.status(403).json({
       code: 'MUST_CHANGE_PASSWORD',
       error: 'Debe definir una contraseña segura antes de continuar.',
@@ -1518,30 +1589,82 @@ const refreshAuthMiddleware = (req, res, next) => {
   }
   const fullUser = store.getUserById(decoded.id);
   if (!fullUser) return res.status(401).json({ error: 'Usuario no encontrado' });
+  const impFromTok =
+    decoded.impersonatorId != null && String(decoded.impersonatorId).trim()
+      ? String(decoded.impersonatorId).trim()
+      : '';
+  req.impersonatorIdFromToken = impFromTok;
   req.user = {
     id: fullUser.id,
     email: fullUser.email,
     role: fullUser.role,
     profileName: fullUser.profileName,
     mustChangePassword: Boolean(fullUser.mustChangePassword),
+    nav: navPerm.effectiveNavForUser(fullUser),
+    ...(impFromTok ? { impersonatorId: impFromTok } : {}),
   };
   next();
 };
 
 const adminMiddleware = (req, res, next) => {
-  if (!isStaffRole(req.user.role)) return res.status(403).json({ error: 'Solo administradores' });
+  const full = store.getUserById(req.user.id);
+  if (!full) return res.status(401).json({ error: 'Usuario no encontrado' });
+  if (!navPerm.userHasNav(full, 'Users')) {
+    return res.status(403).json({ error: 'Permisos insuficientes para esta acción' });
+  }
   next();
 };
 
-/** Super admin o admin (no rol usuario/viewer). */
 const staffOnlyMiddleware = (req, res, next) => {
-  if (!isStaffRole(req.user.role)) {
+  const full = store.getUserById(req.user.id);
+  if (!full) return res.status(401).json({ error: 'Usuario no encontrado' });
+  if (!navPerm.userHasNav(full, 'Devices')) {
+    return res.status(403).json({ error: 'Permisos insuficientes para esta acción' });
+  }
+  next();
+};
+
+const navSettingsMiddleware = (req, res, next) => {
+  const full = store.getUserById(req.user.id);
+  if (!full) return res.status(401).json({ error: 'Usuario no encontrado' });
+  if (!navPerm.userHasNav(full, 'Settings')) {
+    return res.status(403).json({ error: 'Permisos insuficientes para esta acción' });
+  }
+  next();
+};
+
+const navGatewayMiddleware = (req, res, next) => {
+  const full = store.getUserById(req.user.id);
+  if (!full) return res.status(401).json({ error: 'Usuario no encontrado' });
+  if (!navPerm.userHasNav(full, 'Gateway')) {
+    return res.status(403).json({ error: 'Permisos insuficientes para esta acción' });
+  }
+  next();
+};
+
+const navAutomationsMiddleware = (req, res, next) => {
+  const full = store.getUserById(req.user.id);
+  if (!full) return res.status(401).json({ error: 'Usuario no encontrado' });
+  if (!navPerm.userHasNav(full, 'Automations')) {
     return res.status(403).json({ error: 'Permisos insuficientes para esta acción' });
   }
   next();
 };
 
 const superAdminOnlyMiddleware = (req, res, next) => {
+  if (req.user.role !== 'superadmin') {
+    return res.status(403).json({ error: 'Solo el super administrador puede realizar esta acción' });
+  }
+  next();
+};
+
+/** Superadmin real (no sesión de soporte viendo otra cuenta). */
+const realSuperAdminMiddleware = (req, res, next) => {
+  if (req.user.impersonatorId) {
+    return res.status(403).json({
+      error: 'No disponible durante una sesión de soporte. Use «Volver a mi cuenta» en la barra superior.',
+    });
+  }
   if (req.user.role !== 'superadmin') {
     return res.status(403).json({ error: 'Solo el super administrador puede realizar esta acción' });
   }
@@ -1686,7 +1809,9 @@ app.post('/api/auth/check-email', loginRateLimit, (req, res) => {
   if (!user) {
     return res.json({ exists: false });
   }
-  const staff = user.role === 'admin' || user.role === 'superadmin';
+  const staff =
+    user.role === 'superadmin' ||
+    ['Users', 'Gateway', 'Automations', 'Settings', 'Templates'].some((k) => navPerm.userHasNav(user, k));
   return res.json({
     exists: true,
     accountKind: staff ? 'staff' : 'user',
@@ -1715,6 +1840,9 @@ app.post('/api/auth/login', loginRateLimit, (req, res) => {
 });
 
 app.post('/api/auth/first-password', authMiddleware, (req, res) => {
+  if (req.user.impersonatorId) {
+    return res.status(403).json({ error: 'No disponible en sesión de soporte.' });
+  }
   const row = store.getUserById(req.user.id);
   if (!row) return res.status(404).json({ error: 'Usuario no encontrado' });
   if (!row.mustChangePassword) {
@@ -1733,20 +1861,82 @@ app.post('/api/auth/first-password', authMiddleware, (req, res) => {
 app.post('/api/auth/refresh', refreshAuthMiddleware, (req, res) => {
   const row = store.getUserById(req.user.id);
   if (!row) return res.status(404).json({ error: 'Usuario no encontrado' });
-  if (row.mustChangePassword) {
+  if (row.mustChangePassword && !req.impersonatorIdFromToken) {
     return res.status(403).json({
       code: 'MUST_CHANGE_PASSWORD',
       error: 'Debe definir una contraseña segura antes de continuar.',
     });
   }
-  const token = jwt.sign(sessionJwtPayload(row), JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+  const imp = req.impersonatorIdFromToken || '';
+  const token = jwt.sign(
+    sessionJwtPayload(row, imp ? { impersonatorId: imp } : {}),
+    JWT_SECRET,
+    { expiresIn: JWT_EXPIRES_IN }
+  );
   res.json({ token, user: sanitizeUserRecord(row) });
 });
 
 app.get('/api/auth/me', authMiddleware, (req, res) => {
   const user = store.getUserById(req.user.id);
   if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
-  res.json(sanitizeUserRecord(user));
+  const body = sanitizeUserRecord(user);
+  const impId = req.user.impersonatorId != null ? String(req.user.impersonatorId).trim() : '';
+  if (impId) {
+    const actor = store.getUserById(impId);
+    body.impersonation = actor
+      ? {
+          actorId: actor.id,
+          actorEmail: actor.email,
+          actorProfileName: String(actor.profileName || '').trim(),
+        }
+      : { actorId: impId, actorEmail: '', actorProfileName: '' };
+  } else {
+    body.impersonation = null;
+  }
+  res.json(body);
+});
+
+/** Debe declararse ANTES de `/impersonate/:targetUserId` para que «stop» no se interprete como id de usuario. */
+app.post('/api/auth/impersonate/stop', authMiddleware, (req, res) => {
+  const impId = req.user.impersonatorId != null ? String(req.user.impersonatorId).trim() : '';
+  if (!impId) {
+    return res.status(400).json({ error: 'No hay una sesión de soporte activa' });
+  }
+  const actor = store.getUserById(impId);
+  if (!actor || actor.role !== 'superadmin') {
+    return res.status(403).json({
+      error: 'La sesión de soporte ya no es válida. Cierre sesión e inicie de nuevo.',
+    });
+  }
+  const token = jwt.sign(sessionJwtPayload(actor), JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+  res.json({ token, user: sanitizeUserRecord(actor), impersonation: null });
+});
+
+app.post('/api/auth/impersonate/:targetUserId', authMiddleware, realSuperAdminMiddleware, (req, res) => {
+  const raw = req.params.targetUserId != null ? String(req.params.targetUserId).trim() : '';
+  if (!raw) return res.status(400).json({ error: 'Usuario destino requerido' });
+  if (raw === req.user.id) {
+    return res.status(400).json({ error: 'No puede iniciar soporte sobre su propia cuenta' });
+  }
+  const target = store.getUserById(raw);
+  if (!target) return res.status(404).json({ error: 'Usuario no encontrado' });
+  if (target.role === 'superadmin') {
+    return res.status(403).json({
+      error: 'Por seguridad no se permite el modo soporte sobre otra cuenta de super administrador.',
+    });
+  }
+  const token = jwt.sign(sessionJwtPayload(target, { impersonatorId: req.user.id }), JWT_SECRET, {
+    expiresIn: JWT_EXPIRES_IN,
+  });
+  res.json({
+    token,
+    user: sanitizeUserRecord(target),
+    impersonation: {
+      actorId: req.user.id,
+      actorEmail: req.user.email,
+      actorProfileName: String(req.user.profileName || '').trim(),
+    },
+  });
 });
 
 app.get('/api/auth/license-warnings', authMiddleware, (req, res) => {
@@ -1770,7 +1960,11 @@ const authFromBearerOrQuery = (req, res, next) => {
     return res.status(401).json({ error: 'Token inválido o expirado' });
   }
   const fullUser = store.getUserById(req.user.id);
-  if (fullUser?.mustChangePassword) {
+  if (fullUser) {
+    req.user.nav = navPerm.effectiveNavForUser(fullUser);
+    req.user.role = fullUser.role;
+  }
+  if (fullUser?.mustChangePassword && !req.user.impersonatorId) {
     return res.status(403).json({
       code: 'MUST_CHANGE_PASSWORD',
       error: 'Debe definir una contraseña segura antes de continuar.',
@@ -1799,7 +1993,7 @@ app.get('/api/events/stream', authFromBearerOrQuery, (req, res) => {
 });
 
 /** Métricas y uptime en memoria (sin servicios externos). Solo administradores. */
-app.get('/api/admin/syscom-metrics', authMiddleware, staffOnlyMiddleware, (req, res) => {
+app.get('/api/admin/syscom-metrics', authMiddleware, navSettingsMiddleware, (req, res) => {
   const snap = metrics.snapshot();
   res.json({
     status: 'Success',
@@ -1829,7 +2023,7 @@ function rejectMilesightUgQueueProxy(res) {
 }
 
 // ── Milesight UG65/UG67 API (proxy autenticado hacia https://gateway:8080) ──
-app.post('/api/milesight-ug-gateway/probe', authMiddleware, staffOnlyMiddleware, async (req, res) => {
+app.post('/api/milesight-ug-gateway/probe', authMiddleware, navSettingsMiddleware, async (req, res) => {
   try {
     const { baseUrl, apiUsername, apiPassword, rejectUnauthorized } = req.body || {};
     if (!baseUrl) return res.status(400).json({ error: 'baseUrl requerido (ej. https://192.168.1.10:8080)' });
@@ -1847,7 +2041,7 @@ app.post('/api/milesight-ug-gateway/probe', authMiddleware, staffOnlyMiddleware,
   }
 });
 
-app.post('/api/milesight-ug-gateway/probe-saved', authMiddleware, staffOnlyMiddleware, requireMilesightUgGateway, async (req, res) => {
+app.post('/api/milesight-ug-gateway/probe-saved', authMiddleware, navSettingsMiddleware, requireMilesightUgGateway, async (req, res) => {
   try {
     await loginToGateway(req.milesightUgConfig);
     res.json({ ok: true, message: 'Login en el gateway correcto (credenciales guardadas)' });
@@ -1857,7 +2051,7 @@ app.post('/api/milesight-ug-gateway/probe-saved', authMiddleware, staffOnlyMiddl
   }
 });
 
-app.get('/api/milesight-ug-gateway/applications', authMiddleware, staffOnlyMiddleware, requireMilesightUgGateway, async (req, res) => {
+app.get('/api/milesight-ug-gateway/applications', authMiddleware, navSettingsMiddleware, requireMilesightUgGateway, async (req, res) => {
   try {
     const limit = String(req.query.limit ?? '50');
     const offset = String(req.query.offset ?? '0');
@@ -1869,7 +2063,7 @@ app.get('/api/milesight-ug-gateway/applications', authMiddleware, staffOnlyMiddl
   }
 });
 
-app.get('/api/milesight-ug-gateway/applications/:name', authMiddleware, staffOnlyMiddleware, requireMilesightUgGateway, async (req, res) => {
+app.get('/api/milesight-ug-gateway/applications/:name', authMiddleware, navSettingsMiddleware, requireMilesightUgGateway, async (req, res) => {
   try {
     const name = encodeURIComponent(req.params.name);
     const r = await ugJsonRequest(req.user.id, req.milesightUgConfig, 'GET', `/api/applications/${name}`, null);
@@ -1879,7 +2073,7 @@ app.get('/api/milesight-ug-gateway/applications/:name', authMiddleware, staffOnl
   }
 });
 
-app.get('/api/milesight-ug-gateway/devices', authMiddleware, staffOnlyMiddleware, requireMilesightUgGateway, async (req, res) => {
+app.get('/api/milesight-ug-gateway/devices', authMiddleware, navSettingsMiddleware, requireMilesightUgGateway, async (req, res) => {
   try {
     const limit = String(req.query.limit ?? '100');
     const offset = String(req.query.offset ?? '0');
@@ -1891,7 +2085,7 @@ app.get('/api/milesight-ug-gateway/devices', authMiddleware, staffOnlyMiddleware
   }
 });
 
-app.get('/api/milesight-ug-gateway/devices/by-name/:name', authMiddleware, staffOnlyMiddleware, requireMilesightUgGateway, async (req, res) => {
+app.get('/api/milesight-ug-gateway/devices/by-name/:name', authMiddleware, navSettingsMiddleware, requireMilesightUgGateway, async (req, res) => {
   try {
     const name = encodeURIComponent(req.params.name);
     const r = await ugJsonRequest(req.user.id, req.milesightUgConfig, 'GET', `/api/devices/${name}`, null);
@@ -1904,7 +2098,7 @@ app.get('/api/milesight-ug-gateway/devices/by-name/:name', authMiddleware, staff
 app.get(
   '/api/milesight-ug-gateway/devices/:devEUI/data',
   authMiddleware,
-  staffOnlyMiddleware,
+  navSettingsMiddleware,
   requireMilesightUgGateway,
   async (req, res) => {
     try {
@@ -1920,7 +2114,7 @@ app.get(
 app.post(
   '/api/milesight-ug-gateway/devices/:devEUI/ingest',
   authMiddleware,
-  staffOnlyMiddleware,
+  navSettingsMiddleware,
   requireMilesightUgGateway,
   async (req, res) => {
     try {
@@ -1941,7 +2135,7 @@ app.post(
 app.get(
   '/api/milesight-ug-gateway/devices/:devEUI/queue',
   authMiddleware,
-  staffOnlyMiddleware,
+  navSettingsMiddleware,
   (req, res, next) => {
     if (rejectMilesightUgQueueProxy(res)) return;
     next();
@@ -1961,7 +2155,7 @@ app.get(
 app.post(
   '/api/milesight-ug-gateway/devices/:devEUI/queue',
   authMiddleware,
-  staffOnlyMiddleware,
+  navSettingsMiddleware,
   (req, res, next) => {
     if (rejectMilesightUgQueueProxy(res)) return;
     next();
@@ -1981,7 +2175,7 @@ app.post(
 app.delete(
   '/api/milesight-ug-gateway/devices/:devEUI/queue',
   authMiddleware,
-  staffOnlyMiddleware,
+  navSettingsMiddleware,
   (req, res, next) => {
     if (rejectMilesightUgQueueProxy(res)) return;
     next();
@@ -1998,7 +2192,7 @@ app.delete(
   }
 );
 
-app.get('/api/milesight-ug-gateway/urpackets', authMiddleware, staffOnlyMiddleware, requireMilesightUgGateway, (req, res) => {
+app.get('/api/milesight-ug-gateway/urpackets', authMiddleware, navSettingsMiddleware, requireMilesightUgGateway, (req, res) => {
   streamUrpackets(req.user.id, req.milesightUgConfig, res).catch((e) => {
     if (!res.headersSent) res.status(502).json({ error: e.message });
   });
@@ -2007,7 +2201,7 @@ app.get('/api/milesight-ug-gateway/urpackets', authMiddleware, staffOnlyMiddlewa
 app.put(
   '/api/milesight-ug-gateway/users/:username/password',
   authMiddleware,
-  staffOnlyMiddleware,
+  navSettingsMiddleware,
   requireMilesightUgGateway,
   async (req, res) => {
     try {
@@ -2031,7 +2225,7 @@ app.get('/api/milesight-mqtt/status', authMiddleware, (req, res) => {
   res.json(getMqttApiStatus());
 });
 
-app.post('/api/milesight-mqtt/downlink', authMiddleware, staffOnlyMiddleware, async (req, res) => {
+app.post('/api/milesight-mqtt/downlink', authMiddleware, navSettingsMiddleware, async (req, res) => {
   const body = req.body || {};
   const deuiNorm = body.devEUI != null ? String(body.devEUI).replace(/\s/g, '').toLowerCase() : '';
   try {
@@ -2069,7 +2263,7 @@ app.post('/api/milesight-mqtt/downlink', authMiddleware, staffOnlyMiddleware, as
   }
 });
 
-app.post('/api/milesight-mqtt/ns-request', authMiddleware, staffOnlyMiddleware, async (req, res) => {
+app.post('/api/milesight-mqtt/ns-request', authMiddleware, navSettingsMiddleware, async (req, res) => {
   try {
     const { id, method, url, body: nsBody, timeoutMs } = req.body || {};
     if (!method || !url) return res.status(400).json({ error: 'method y url requeridos (§7 Milesight MQTT API)' });
@@ -2089,7 +2283,9 @@ app.get('/api/users', authMiddleware, adminMiddleware, (req, res) => {
   if (req.user.role === 'superadmin') {
     raw = store.allUsersSanitized();
   } else {
-    raw = store.listUsersByCreator(req.user.id);
+    const selfRow = store.getUserById(req.user.id);
+    const subtree = store.listUsersInSubtree(req.user.id);
+    raw = selfRow ? [selfRow, ...subtree] : subtree;
   }
   res.json(raw.map((u) => sanitizeUserRecord(u)));
 });
@@ -2105,11 +2301,9 @@ app.get('/api/users/:id/devices', authMiddleware, adminMiddleware, (req, res) =>
     const staffId = String(req.user.id ?? '').trim();
     const isSuper = req.user.role === 'superadmin';
     if (!isSuper) {
-      const sameCreator = String(row.createdBy ?? '').trim() === staffId;
-      const inHierarchy = store
-        .listUsersByCreator(req.user.id)
-        .some((u) => String(u.id) === String(row.id));
-      if (!sameCreator && !inHierarchy) {
+      const self = staffId === String(row.id);
+      const inSubtree = self || store.isUserDescendantOf(staffId, String(row.id));
+      if (!inSubtree) {
         return res.status(403).json({ error: 'Sin permiso para ver los dispositivos de este usuario' });
       }
     }
@@ -2137,7 +2331,10 @@ app.get('/api/users/:id/devices', authMiddleware, adminMiddleware, (req, res) =>
 });
 
 app.post('/api/users', authMiddleware, adminMiddleware, (req, res) => {
-  const { password, role, profileName } = req.body;
+  const actor = store.getUserById(req.user.id);
+  if (!actor) return res.status(401).json({ error: 'Usuario no encontrado' });
+
+  const { password, profileName, navPermissions: navBody, role: roleBody } = req.body || {};
   const email = String(req.body?.email || '')
     .trim()
     .toLowerCase();
@@ -2153,23 +2350,25 @@ app.post('/api/users', authMiddleware, adminMiddleware, (req, res) => {
       code: 'USER_EXISTS',
     });
   }
-  let newRole = 'user';
-  if (role === 'superadmin') {
-    if (req.user.role !== 'superadmin') {
-      return res.status(403).json({ error: 'Solo el super administrador puede crear cuentas super admin' });
-    }
-    newRole = 'superadmin';
-  } else if (role === 'admin') {
-    newRole = 'admin';
-  } else {
-    newRole = 'user';
-  }
-  if (req.user.role === 'admin' && (newRole === 'superadmin' || (newRole !== 'admin' && newRole !== 'user'))) {
-    return res.status(400).json({ error: 'Solo puede crear administradores o usuarios de su jerarquía' });
-  }
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return res.status(400).json({ error: 'Correo electrónico no válido' });
   }
+
+  let newRole = 'user';
+  if (roleBody === 'superadmin') {
+    if (req.user.role !== 'superadmin') {
+      return res.status(403).json({ error: 'Solo el super administrador puede crear cuentas super administrador' });
+    }
+    newRole = 'superadmin';
+  }
+
+  let navJson;
+  if (newRole === 'superadmin') {
+    navJson = navPerm.navToJson(navPerm.allNavTrue());
+  } else {
+    navJson = navPerm.navToJson(navPerm.sanitizeNavAssignment(actor, navBody));
+  }
+
   const newUser = {
     id: Date.now().toString(),
     email,
@@ -2181,6 +2380,7 @@ app.post('/api/users', authMiddleware, adminMiddleware, (req, res) => {
     ingestToken: crypto.randomBytes(24).toString('hex'),
     createdAt: new Date().toISOString(),
     mustChangePassword: true,
+    navPermissionsJson: navJson,
   };
   store.insertUser(newUser);
   res.status(201).json(sanitizeUserRecord(newUser));
@@ -2190,13 +2390,13 @@ app.put('/api/users/:id', authMiddleware, (req, res) => {
   const row = store.getUserById(req.params.id);
   if (!row) return res.status(404).json({ error: 'Usuario no encontrado' });
   const isSelf = row.id === req.user.id;
-  const isOwner = row.createdBy === req.user.id;
   const isSuper = req.user.role === 'superadmin';
-  if (!isSelf && !isOwner && !isSuper) return res.status(403).json({ error: 'Sin permiso' });
+  const canManageDesc = store.isUserDescendantOf(req.user.id, row.id);
+  if (!isSelf && !isSuper && !canManageDesc) return res.status(403).json({ error: 'Sin permiso' });
   const { password, regenerateIngestToken, ...updates } = req.body;
   if (updates.role !== undefined) {
     const nr = updates.role;
-    if (!['superadmin', 'admin', 'user'].includes(nr)) {
+    if (!['superadmin', 'user'].includes(nr)) {
       /* ignore */
     } else if (!isSuper) {
       return res.status(403).json({ error: 'Solo el super administrador puede cambiar roles' });
@@ -2208,6 +2408,15 @@ app.put('/api/users/:id', authMiddleware, (req, res) => {
         }
       }
       row.role = nr;
+    }
+  }
+  if (updates.navPermissions !== undefined && (isSuper || canManageDesc || isSelf)) {
+    if (row.role === 'superadmin') {
+      row.navPermissionsJson = navPerm.navToJson(navPerm.allNavTrue());
+    } else {
+      const editor = store.getUserById(req.user.id);
+      const sanitized = navPerm.sanitizeNavAssignment(editor, updates.navPermissions);
+      row.navPermissionsJson = navPerm.navToJson(sanitized);
     }
   }
   if (updates.profileName !== undefined) row.profileName = updates.profileName;
@@ -2224,10 +2433,10 @@ app.put('/api/users/:id', authMiddleware, (req, res) => {
       row.mustChangePassword = true;
     }
   }
-  if (regenerateIngestToken === true && (isSelf || isOwner || isSuper)) {
+  if (regenerateIngestToken === true && (isSelf || canManageDesc || isSuper)) {
     row.ingestToken = crypto.randomBytes(24).toString('hex');
   }
-  if (updates.milesightUgGateway !== undefined && (isSelf || isOwner || isSuper)) {
+  if (updates.milesightUgGateway !== undefined && (isSelf || canManageDesc || isSuper)) {
     const cur = row.milesightUgGateway || {};
     const inc = updates.milesightUgGateway || {};
     const prevUrl = cur.baseUrl;
@@ -2262,7 +2471,7 @@ app.delete('/api/users/:id', authMiddleware, adminMiddleware, (req, res) => {
         return res.status(400).json({ error: 'No puede eliminar el único super administrador' });
       }
     }
-  } else if (row.createdBy !== req.user.id) {
+  } else if (!store.isUserDescendantOf(req.user.id, row.id)) {
     return res.status(403).json({ error: 'Sin permiso' });
   }
   store.deleteUserById(req.params.id);
@@ -2374,7 +2583,7 @@ app.get('/api/lorawan-gateways', authMiddleware, (req, res) => {
   res.json(enriched);
 });
 
-app.post('/api/lorawan-gateways', authMiddleware, staffOnlyMiddleware, (req, res) => {
+app.post('/api/lorawan-gateways', authMiddleware, navGatewayMiddleware, (req, res) => {
   const { name, gatewayEui, frequencyBand } = req.body || {};
   const nameTrim = name != null ? String(name).trim() : '';
   if (!nameTrim || !gatewayEui || frequencyBand == null || String(frequencyBand).trim() === '') {
@@ -2429,7 +2638,7 @@ app.post('/api/lorawan-gateways', authMiddleware, staffOnlyMiddleware, (req, res
   res.status(201).json({ ...row, lnsAbpBootstrapRetry });
 });
 
-app.delete('/api/lorawan-gateways/:id', authMiddleware, staffOnlyMiddleware, (req, res) => {
+app.delete('/api/lorawan-gateways/:id', authMiddleware, navGatewayMiddleware, (req, res) => {
   const ok = store.deleteLorawanGateway(req.user.id, req.params.id);
   if (!ok) return res.status(404).json({ error: 'No encontrado' });
   res.json({ ok: true });
@@ -2444,12 +2653,104 @@ app.get('/api/devices', authMiddleware, (req, res) => {
   res.json({ status: 'Success', data: { content } });
 });
 
+app.get('/api/device-templates', authMiddleware, (req, res) => {
+  try {
+    const cat = store.getDeviceTemplatesCatalog();
+    res.json({
+      templates: cat.templates,
+      defaultTemplateId: cat.defaultTemplateId,
+      updatedAt: cat.updatedAt,
+    });
+  } catch (e) {
+    console.error('[GET /api/device-templates]', e);
+    res.status(500).json({ error: e.message || 'Error al leer plantillas' });
+  }
+});
+
+app.put('/api/device-templates', authMiddleware, realSuperAdminMiddleware, (req, res) => {
+  try {
+    const body = req.body || {};
+    if (!Array.isArray(body.templates)) {
+      return res.status(400).json({ error: 'templates debe ser un array' });
+    }
+    if (body.templates.length > 400) {
+      return res.status(400).json({ error: 'Demasiadas plantillas en el catálogo' });
+    }
+    for (let i = 0; i < body.templates.length; i += 1) {
+      const t = body.templates[i];
+      const dec = t?.decoderScript != null ? String(t.decoderScript) : '';
+      if (dec.length > 450000) {
+        return res.status(400).json({ error: `Plantilla ${i + 1}: decoder demasiado grande` });
+      }
+    }
+    const defaultTemplateId =
+      body.defaultTemplateId != null && String(body.defaultTemplateId).trim()
+        ? String(body.defaultTemplateId).trim()
+        : null;
+    store.setDeviceTemplatesCatalog({ templates: body.templates, defaultTemplateId });
+    const cat = store.getDeviceTemplatesCatalog();
+    res.json({
+      templates: cat.templates,
+      defaultTemplateId: cat.defaultTemplateId,
+      updatedAt: cat.updatedAt,
+    });
+  } catch (e) {
+    console.error('[PUT /api/device-templates]', e);
+    res.status(500).json({ error: e.message || 'Error al guardar plantillas' });
+  }
+});
+
+app.get(
+  '/api/device-templates/assigned-device-ids',
+  authMiddleware,
+  staffOnlyMiddleware,
+  (req, res) => {
+    const tid = String(req.query.templateId || '').trim();
+    if (!tid) return res.status(400).json({ error: 'templateId requerido (query)' });
+    try {
+      const deviceIds = store.listDeviceIdsWithCatalogTemplate(tid);
+      res.json({ templateId: tid, deviceIds });
+    } catch (e) {
+      console.error('[GET /api/device-templates/assigned-device-ids]', e);
+      res.status(500).json({ error: e.message || 'Error al listar dispositivos' });
+    }
+  }
+);
+
+app.get(
+  '/api/devices/:deviceId/downlink-presets',
+  authMiddleware,
+  staffOnlyMiddleware,
+  deviceAssignmentMiddleware,
+  (req, res) => {
+    const did = decodeURIComponent(String(req.params.deviceId || '').trim());
+    const raw = store.getDeviceSharedPresetsParsed(did);
+    const presets = raw && typeof raw === 'object' ? normalizeDeviceSharedPresetsBody(raw) : normalizeDeviceSharedPresetsBody({});
+    res.json({ deviceId: did, presets });
+  }
+);
+
+app.put(
+  '/api/devices/:deviceId/downlink-presets',
+  authMiddleware,
+  staffOnlyMiddleware,
+  deviceAssignmentMiddleware,
+  (req, res) => {
+    const did = decodeURIComponent(String(req.params.deviceId || '').trim());
+    const norm = normalizeDeviceSharedPresetsBody(req.body || {});
+    store.setDeviceSharedPresetsParsed(did, norm);
+    res.json({ deviceId: did, presets: norm });
+  }
+);
+
 app.post('/api/devices/assign', authMiddleware, (req, res) => {
   const actor = store.getUserById(req.user.id);
   if (!actor) return res.status(401).json({ error: 'Usuario no encontrado' });
-  const { role } = actor;
-  if (role === 'user' || role === 'viewer') {
-    return res.status(403).json({ error: 'Los usuarios no pueden asignar dispositivos' });
+  const canAssign =
+    actor.role === 'superadmin' ||
+    (navPerm.userHasNav(actor, 'Devices') && navPerm.userHasNav(actor, 'Users'));
+  if (!canAssign) {
+    return res.status(403).json({ error: 'No tiene permiso para asignar dispositivos' });
   }
 
   const { deviceId, assigneeEmail } = req.body || {};
@@ -2461,20 +2762,17 @@ app.post('/api/devices/assign', authMiddleware, (req, res) => {
   if (!assignee) return res.status(404).json({ error: 'No existe un usuario con ese correo' });
   if (assignee.id === actor.id) return res.status(400).json({ error: 'No puede asignarse a sí mismo' });
 
-  if (role === 'admin') {
-    if (assignee.createdBy !== actor.id) {
-      return res.status(403).json({ error: 'Solo puede asignar a cuentas que usted creó' });
-    }
-    if (assignee.role !== 'admin' && assignee.role !== 'user') {
-      return res.status(403).json({ error: 'Solo puede asignar a administradores o usuarios de su jerarquía' });
+  if (actor.role !== 'superadmin') {
+    if (!store.isUserDescendantOf(actor.id, assignee.id)) {
+      return res.status(403).json({ error: 'Solo puede asignar a usuarios de su jerarquía' });
     }
     if (!store.getUserDevice(actor.id, did)) {
       return res.status(403).json({ error: 'No tiene este dispositivo en su cuenta' });
     }
   }
 
-  if (role === 'superadmin') {
-    if (!['admin', 'user', 'superadmin'].includes(assignee.role)) {
+  if (actor.role === 'superadmin') {
+    if (!['user', 'superadmin'].includes(assignee.role)) {
       return res.status(400).json({ error: 'Rol de destino no válido' });
     }
     const hasLocal = store.getUserDevice(actor.id, did);
@@ -2527,8 +2825,9 @@ app.post('/api/devices/assign', authMiddleware, (req, res) => {
   store.upsertDeviceLabel(assignee.id, did, row.displayName);
   try {
     store.propagateDeviceBsdPreferencesToUser(actor.id, assignee.id, did);
+    store.propagateDeviceDashboardWidgetsToUser(actor.id, assignee.id, did);
   } catch (e) {
-    console.warn('[devices/assign] BSD prefs:', e.message || e);
+    console.warn('[devices/assign] BSD prefs / dashboard widgets:', e.message || e);
   }
   res.status(prevA ? 200 : 201).json({ ok: true, userDevice: row });
 });
@@ -2860,7 +3159,7 @@ app.get('/api/automations', authMiddleware, (req, res) => {
   res.json({ rules: store.listAutomationRules(req.user.id) });
 });
 
-app.put('/api/automations', authMiddleware, staffOnlyMiddleware, (req, res) => {
+app.put('/api/automations', authMiddleware, navAutomationsMiddleware, (req, res) => {
   const { rules } = req.body || {};
   if (!Array.isArray(rules)) return res.status(400).json({ error: 'rules debe ser un array' });
   store.replaceAutomationRules(req.user.id, rules);
@@ -2871,11 +3170,11 @@ const BACKUP_NAS_SETTING_KEY = 'backup_nas_destination';
 const BACKUP_NAS_DEST_MAX_LEN = 2048;
 
 /** Destino de copia de respaldos (solo superadmin). Ruta local/montaje → copia integrada; opcional SYSCOM_DB_BACKUP_SYNC_CMD con $FILE/$NAS. */
-app.get('/api/admin/backup-config', authMiddleware, adminMiddleware, (req, res) => {
+app.get('/api/admin/backup-config', authMiddleware, navSettingsMiddleware, (req, res) => {
   res.json({ nasDestination: store.getServerSetting(BACKUP_NAS_SETTING_KEY) });
 });
 
-app.put('/api/admin/backup-config', authMiddleware, adminMiddleware, (req, res) => {
+app.put('/api/admin/backup-config', authMiddleware, navSettingsMiddleware, (req, res) => {
   const raw = req.body && req.body.nasDestination != null ? String(req.body.nasDestination) : '';
   if (raw.length > BACKUP_NAS_DEST_MAX_LEN) {
     return res.status(400).json({
@@ -2890,7 +3189,7 @@ app.put('/api/admin/backup-config', authMiddleware, adminMiddleware, (req, res) 
 });
 
 /** Volcado completo SQLite (solo superadmin): usuarios, dispositivos, gateways, historial, reglas, dashboards, LNS, etc. */
-app.get('/api/admin/database/export', authMiddleware, adminMiddleware, (req, res) => {
+app.get('/api/admin/database/export', authMiddleware, navSettingsMiddleware, (req, res) => {
   const os = require('os');
   const tmp = path.join(
     os.tmpdir(),
@@ -2926,7 +3225,7 @@ app.get('/api/admin/database/export', authMiddleware, adminMiddleware, (req, res
 app.post(
   '/api/admin/database/import',
   authMiddleware,
-  adminMiddleware,
+  superAdminOnlyMiddleware,
   express.raw({ limit: '512mb', type: () => true }),
   (req, res) => {
     try {
@@ -2952,7 +3251,7 @@ app.post(
 );
 
 /** Reenvío servidor → URL externa (evita CORS del navegador en webhooks de reglas). */
-app.post('/api/automation/webhook-relay', authMiddleware, staffOnlyMiddleware, async (req, res) => {
+app.post('/api/automation/webhook-relay', authMiddleware, navAutomationsMiddleware, async (req, res) => {
   const url = String(req.body?.url || '').trim();
   const payload = req.body?.payload;
   if (!url) return res.status(400).json({ error: 'url requerida' });
@@ -3015,7 +3314,7 @@ app.get(
 );
 
 app.get('/api/devices/:deviceId/dashboard-widgets', authMiddleware, deviceAssignmentMiddleware, (req, res) => {
-  const widgets = store.getDeviceDashboardWidgets(req.user.id, req.params.deviceId);
+  const widgets = store.getDeviceDashboardWidgetsWithPeerFallback(req.user.id, req.params.deviceId);
   res.json({ status: 'Success', widgets });
 });
 
@@ -3024,7 +3323,7 @@ function handleDashboardWidgetsSave(req, res) {
     if (!assertDeviceAssignedToUser(req, res, req.params.deviceId)) return;
     const result = validateDashboardWidgets(req.body || {});
     if (result.error) return res.status(400).json({ error: result.error });
-    store.setDeviceDashboardWidgets(req.user.id, req.params.deviceId, result.widgets);
+    store.setDeviceDashboardWidgetsForAllAssignees(req.params.deviceId, result.widgets, req.user.id);
     res.json({ status: 'Success', widgets: result.widgets });
   } catch (e) {
     console.error('[dashboard-widgets]', e);
@@ -3066,12 +3365,46 @@ app.put('/api/devices/:deviceId/bsd-preferences', authMiddleware, deviceAssignme
     if (!assertDeviceAssignedToUser(req, res, req.params.deviceId)) return;
     const r = normalizeDeviceBsdPreferencesBody(req.body || {});
     if (r.error) return res.status(400).json({ error: r.error });
-    store.setDeviceBsdPreferences(req.user.id, req.params.deviceId, r.prefs);
-    const { prefs, updatedAt } = store.getDeviceBsdPreferences(req.user.id, req.params.deviceId);
+    const did = req.params.deviceId;
+    if (req.user.role === 'superadmin' || Boolean(req.user.nav && req.user.nav.Devices)) {
+      store.setDeviceBsdPreferencesForAllAssignees(did, r.prefs, req.user.id);
+    } else {
+      store.setDeviceBsdPreferences(req.user.id, did, r.prefs);
+    }
+    const { prefs, updatedAt } = store.getDeviceBsdPreferences(req.user.id, did);
     res.json({ status: 'Success', prefs, updatedAt });
   } catch (e) {
     console.error('[bsd-preferences PUT]', e);
     res.status(400).json({ error: e.message || 'Error al guardar preferencias' });
+  }
+});
+
+app.get('/api/me/panel-bsd-preferences', authMiddleware, (req, res) => {
+  try {
+    const seg = req.query.segment != null ? String(req.query.segment) : '';
+    const panelId =
+      req.query.panelId != null && String(req.query.panelId).trim() ? String(req.query.panelId).trim() : 'main';
+    const { prefs, updatedAt } = store.getUserPanelBsdPreferences(req.user.id, seg, panelId);
+    res.json({ status: 'Success', prefs, updatedAt });
+  } catch (e) {
+    console.error('[panel-bsd-preferences GET]', e);
+    res.status(500).json({ error: e.message || 'Error al leer preferencias del panel' });
+  }
+});
+
+app.put('/api/me/panel-bsd-preferences', authMiddleware, (req, res) => {
+  try {
+    const segment = req.body?.segment != null ? String(req.body.segment) : '';
+    const panelId =
+      req.body?.panelId != null && String(req.body.panelId).trim() ? String(req.body.panelId).trim() : 'main';
+    const r = normalizeDeviceBsdPreferencesBody(req.body || {});
+    if (r.error) return res.status(400).json({ error: r.error });
+    store.setUserPanelBsdPreferences(req.user.id, segment, panelId, r.prefs);
+    const { prefs, updatedAt } = store.getUserPanelBsdPreferences(req.user.id, segment, panelId);
+    res.json({ status: 'Success', prefs, updatedAt });
+  } catch (e) {
+    console.error('[panel-bsd-preferences PUT]', e);
+    res.status(400).json({ error: e.message || 'Error al guardar preferencias del panel' });
   }
 });
 
@@ -3708,6 +4041,7 @@ app.post('/api/setup', loginRateLimit, (req, res) => {
     ingestToken: crypto.randomBytes(24).toString('hex'),
     createdAt: new Date().toISOString(),
     mustChangePassword: false,
+    navPermissionsJson: navPerm.navToJson(navPerm.allNavTrue()),
   };
   store.insertUser(admin);
   res.status(201).json({ ok: true });

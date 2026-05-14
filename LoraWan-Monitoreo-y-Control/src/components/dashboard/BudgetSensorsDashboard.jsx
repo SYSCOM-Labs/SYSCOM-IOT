@@ -34,6 +34,9 @@ import {
   fetchDeviceHistory,
   sendDownlink,
   fetchDeviceBsdPreferences,
+  putDeviceBsdPreferences,
+  fetchPanelBsdPreferences,
+  putPanelBsdPreferences,
   SYSCOM_LNS_DOWNLINK_SENT_EVENT,
 } from '../../services/api';
 import { getLatestDeviceData, queryTelemetry } from '../../services/localAuth';
@@ -47,7 +50,12 @@ import {
 import { formatTelemetryChartTooltipValue, tryTelemetryDisplayLabel } from '../../utils/telemetryDisplayFormat';
 import { getTelemetryPropertyValue } from '../../utils/telemetryPropertyPath';
 import { transformWidgetNumeric } from '../../utils/widgetFormula';
-import { applyDeviceBsdBundle, deviceBsdBundleIsEmpty } from '../../utils/deviceBsdPreferencesBundle';
+import {
+  applyDeviceBsdBundle,
+  collectDeviceBsdBundle,
+  deviceBsdBundleIsEmpty,
+} from '../../utils/deviceBsdPreferencesBundle';
+import { applyPanelBsdBundle, collectPanelBsdBundle } from '../../utils/panelBsdPreferencesBundle';
 import { applyStaleOfflineConnectStatus, isDeviceVisuallyOnline } from '../../utils/deviceConnectionStatus';
 import { SYSCOM_REALTIME_LNS, SYSCOM_REALTIME_TELEMETRY } from '../../constants/realtimeEvents';
 import { pushAppActivityLog } from '../../utils/appActivityLog';
@@ -1894,6 +1902,14 @@ function coalesceMaxSeenMs(...vals) {
   return ms.length ? Math.max(...ms) : null;
 }
 
+/** Marca de tiempo en ms para comparar fuentes de telemetría (API vs almacén local). */
+function telemetryTsToMs(ts) {
+  if (ts == null) return null;
+  if (typeof ts === 'number' && Number.isFinite(ts)) return ts;
+  const n = new Date(ts).getTime();
+  return Number.isFinite(n) ? n : null;
+}
+
 /** Texto corto para pie de widget con marca de tiempo del último dato persistido / fusionado. */
 function formatLastTelemetryUpdateLine(ts) {
   if (ts == null) return '';
@@ -1923,8 +1939,13 @@ async function mergeDeviceLive(dev, credentials, token, preloadedLatest = undefi
     const liveFromAPI = apiData.properties || propsResp.data?.properties || {};
     const entry = findLocalEntry(dev, latest);
     const liveFromLocal = entry?.properties || {};
+    const tsApi = telemetryTsToMs(apiData.lastTimestamp);
+    const tsLocal = telemetryTsToMs(entry?.timestamp);
+    /** Preferir la fuente con telemetría más reciente; si solo hay una con marca, esa gana en solapes. */
+    const useApiOverlay = tsLocal == null || (tsApi != null && tsApi >= tsLocal);
+    const propsMerged = useApiOverlay ? { ...liveFromLocal, ...liveFromAPI } : { ...liveFromAPI, ...liveFromLocal };
     const lastSeen = coalesceMaxSeenMs(apiData.lastTimestamp, entry?.timestamp, dev.lastUpdateTime);
-    let merged = { ...dev, ...liveFromAPI, ...liveFromLocal };
+    let merged = { ...dev, ...propsMerged };
     if (lastSeen != null) merged = { ...merged, lastUpdateTime: lastSeen };
     return applyStaleOfflineConnectStatus(merged);
   } catch {
@@ -1973,7 +1994,8 @@ export default function BudgetSensorsDashboard({
   onRefresh,
   refreshing = false,
 }) {
-  const { credentials, token, isAdmin, canEditDashboard, user, userProfile } = useAuth();
+  const { credentials, token, hasNavPage, canEditDashboard, user, userProfile } = useAuth();
+  const canSendLnsCommands = hasNavPage('Devices');
   const { t } = useLanguage();
   const dashDeviceId = variant === 'device' ? resolveDeviceDashboardStorageId(device) : null;
 
@@ -2447,19 +2469,87 @@ export default function BudgetSensorsDashboard({
       ),
     [variant, dashDeviceId, panelInstanceId, panelOwnerSegment]
   );
+
+  const bsdServerPushTimerRef = useRef(null);
+  const scheduleBsdServerPersistRef = useRef(() => {});
+
+  /** Tras cada cambio local del BSD, subir el bundle al servidor con debounce (vista dispositivo: por equipo; panel: por segmento y pestaña). */
+  useEffect(() => {
+    scheduleBsdServerPersistRef.current = () => {
+      if (!token) return;
+      const uid = String((user && user.id) || (userProfile && userProfile.id) || '').trim();
+      if (!uid) return;
+      if (bsdServerPushTimerRef.current != null) clearTimeout(bsdServerPushTimerRef.current);
+      bsdServerPushTimerRef.current = setTimeout(async () => {
+        bsdServerPushTimerRef.current = null;
+        try {
+          if (variant === 'device') {
+            const id = String(dashDeviceId || '').trim();
+            if (!id) return;
+            const bundle = collectDeviceBsdBundle(id);
+            if (!bundle) return;
+            const data = await putDeviceBsdPreferences(id, bundle);
+            const updatedAt = data?.updatedAt != null ? String(data.updatedAt) : '';
+            if (updatedAt) {
+              try {
+                localStorage.setItem(`sycom_bsd_remote_rev_${uid}_${id}`, updatedAt);
+              } catch {
+                /* ignore */
+              }
+            }
+          } else if (variant === 'panel') {
+            const pid =
+              panelInstanceId != null && String(panelInstanceId).trim()
+                ? String(panelInstanceId).trim()
+                : 'main';
+            const seg =
+              panelOwnerSegment != null && String(panelOwnerSegment).trim()
+                ? String(panelOwnerSegment).trim()
+                : '';
+            const bundle = collectPanelBsdBundle(panelOwnerSegment, pid);
+            if (!bundle) return;
+            const data = await putPanelBsdPreferences(seg, pid, bundle);
+            const updatedAt = data?.updatedAt != null ? String(data.updatedAt) : '';
+            if (updatedAt) {
+              try {
+                const markerKey = `sycom_bsd_panel_remote_rev_${uid}_${encodeURIComponent(seg)}_${encodeURIComponent(pid)}`;
+                localStorage.setItem(markerKey, updatedAt);
+              } catch {
+                /* ignore */
+              }
+            }
+          }
+        } catch (e) {
+          console.warn('[BSD] persistencia servidor:', e?.message || e);
+        }
+      }, 1600);
+    };
+  }, [variant, dashDeviceId, panelInstanceId, panelOwnerSegment, token, user?.id, userProfile?.id]);
+
+  useEffect(() => {
+    return () => {
+      if (bsdServerPushTimerRef.current != null) {
+        clearTimeout(bsdServerPushTimerRef.current);
+        bsdServerPushTimerRef.current = null;
+      }
+    };
+  }, []);
+
   /** Sin `dashDeviceId` en vista dispositivo, no escribir en `bsd_dash_grid_v1_default` (evita mezclar equipos). */
   const persistBsdGridLayoutDisk = useCallback(
     (normalizedLayout) => {
       if (variant === 'device' && !dashDeviceId) return;
-      if (variant === 'panel' && !panelOwnerSegment) return;
       try {
         /** Posiciones y tamaños del grid (rejilla 12 cols): persistencia por dispositivo o panel (`dashboardGridLayoutStorageKey`). */
         localStorage.setItem(dashboardGridLayoutKey, JSON.stringify(normalizedLayout));
       } catch {
         /* ignore */
       }
+      if ((variant === 'device' && dashDeviceId) || variant === 'panel') {
+        scheduleBsdServerPersistRef.current?.();
+      }
     },
-    [variant, dashDeviceId, dashboardGridLayoutKey, panelOwnerSegment]
+    [variant, dashDeviceId, dashboardGridLayoutKey]
   );
   const [gridLayout, setGridLayout] = useState(() => {
     if (variant === 'panel') return [];
@@ -2531,16 +2621,10 @@ export default function BudgetSensorsDashboard({
     const filtered = filterLayoutToAllowedDashboardItems(merged, defaults);
     const sizeSafe = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(filtered));
     /**
-     * Nunca usar `merged` cuando `filtered` queda vacío: `merged` puede reintroducir celdas que el filtro
-     * acaba de quitar (p. ej. desincronía visibilidad vs. disco), y el widget «vuelve» al tablero aunque
-     * el usuario lo haya quitado.
+     * No reinyectar la plantilla por defecto cuando el filtro deja el grid vacío: eso mostraba widgets
+     * que el usuario no había colocado manualmente (p. ej. desincronía transitoria). Se conserva el resultado filtrado.
      */
-    const preCompact =
-      defaults.length > 0 && filtered.length === 0
-        ? normalizeLayoutForPersistence(mergeStoredBsdGridLayout([], defaults))
-        : sizeSafe;
-    /** No reempacar todo el grid aquí: `compactBsdGridLayoutTopLeft` reordenaba celdas en cada sync (visibilidad, ancho, etc.) y los widgets «saltaban». */
-    const nextLayout = preCompact;
+    const nextLayout = sizeSafe;
     try {
       const disk = normalizeLayoutForPersistence(readStoredBsdGridLayout(dashboardGridLayoutKey) || []);
       if (!layoutsEqualStable(disk, nextLayout)) persistBsdGridLayoutDisk(nextLayout);
@@ -2676,6 +2760,50 @@ export default function BudgetSensorsDashboard({
       cancelled = true;
     };
   }, [variant, dashDeviceId, token, user?.id, userProfile?.id]);
+
+  /** Sincroniza BSD del panel desde el servidor (otro navegador o caché limpiada). Una fila por (usuario, segmento, id de pestaña). */
+  useEffect(() => {
+    if (variant !== 'panel' || !token) return undefined;
+    const uid = String((user && user.id) || (userProfile && userProfile.id) || '').trim();
+    if (!uid) return undefined;
+    const seg =
+      panelOwnerSegment != null && String(panelOwnerSegment).trim() ? String(panelOwnerSegment).trim() : '';
+    const pid =
+      panelInstanceId != null && String(panelInstanceId).trim() ? String(panelInstanceId).trim() : 'main';
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await fetchPanelBsdPreferences(seg, pid);
+        if (cancelled || !data || typeof data.prefs !== 'object') return;
+        const updatedAt = data.updatedAt != null ? String(data.updatedAt) : '';
+        if (!updatedAt) return;
+        const markerKey = `sycom_bsd_panel_remote_rev_${uid}_${encodeURIComponent(seg)}_${encodeURIComponent(pid)}`;
+        try {
+          if (localStorage.getItem(markerKey) === updatedAt) return;
+        } catch {
+          /* ignore */
+        }
+        if (deviceBsdBundleIsEmpty(data.prefs)) return;
+        applyPanelBsdBundle(panelOwnerSegment, pid, data.prefs);
+        try {
+          localStorage.setItem(markerKey, updatedAt);
+        } catch {
+          /* ignore */
+        }
+        setWidgetConfigs(loadAllWidgetConfigs());
+        setVisibilityMap(loadDashboardVisibility('panel', null, pid, panelOwnerSegment));
+        const gk = dashboardGridLayoutStorageKey('panel', null, pid, panelOwnerSegment);
+        const nextGrid = normalizeLayoutForPersistence(readStoredBsdGridLayout(gk));
+        gridLayoutLatestRef.current = nextGrid;
+        setGridLayout(nextGrid);
+      } catch (e) {
+        console.warn('[BSD] preferencias panel servidor:', e?.message || e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [variant, token, user?.id, userProfile?.id, panelOwnerSegment, panelInstanceId]);
 
   useEffect(() => {
     if (!canEditDashboard) {
@@ -4645,6 +4773,7 @@ export default function BudgetSensorsDashboard({
     const draft = mergeWidgetConfig(dashboardWidgetSensorStub(DASH_WIDGET.STREAM), prev || {});
     draft.data = { ...draft.data, historyRangePreset: id };
     saveWidgetConfig(k, draft);
+    scheduleBsdServerPersistRef.current?.();
     setWidgetConfigs(loadAllWidgetConfigs());
   }, [dk]);
 
@@ -4662,6 +4791,7 @@ export default function BudgetSensorsDashboard({
       if (!draft.timeframe.operation) draft.timeframe.operation = 'avg';
     }
     saveWidgetConfig(k, draft);
+    scheduleBsdServerPersistRef.current?.();
     setWidgetConfigs(loadAllWidgetConfigs());
   }, [variant, widgetConfigs, dk]);
 
@@ -4672,6 +4802,7 @@ export default function BudgetSensorsDashboard({
       const draft = mergeWidgetConfig(dashboardWidgetSensorStub(DASH_WIDGET.TRACKING_MAP), prev);
       draft.data = { ...draft.data, trackingTimeRange: range };
       saveWidgetConfig(k, draft);
+      scheduleBsdServerPersistRef.current?.();
       setWidgetConfigs(loadAllWidgetConfigs());
     },
     [widgetConfigs, dk]
@@ -4746,6 +4877,7 @@ export default function BudgetSensorsDashboard({
           /* ignore */
         }
       }
+      scheduleBsdServerPersistRef.current?.();
     },
     [variant, canEditDashboard, dashDeviceId, dashboardGridLayoutKey, dk, persistBsdGridLayoutDisk, panelOwnerSegment]
   );
@@ -5172,7 +5304,7 @@ export default function BudgetSensorsDashboard({
   );
 
   const handleSwitchClick = useCallback(async () => {
-    if (!isAdmin || !switchTargetDeviceId || switchProcessing) return;
+    if (!canSendLnsCommands || !switchTargetDeviceId || switchProcessing) return;
     const dls = switchWidgetDownlinkList;
     if (dls.length === 0) {
       window.alert('No hay downlinks guardados. Configúralos en Dispositivos → acciones → Downlink.');
@@ -5228,7 +5360,7 @@ export default function BudgetSensorsDashboard({
       setSwitchProcessing(false);
     }
   }, [
-    isAdmin,
+    canSendLnsCommands,
     switchTargetDeviceId,
     switchProcessing,
     switchWidgetDownlinkList,
@@ -5243,7 +5375,7 @@ export default function BudgetSensorsDashboard({
     async (hex) => {
       const n = normalizeDownlinkHex(hex);
       const dl = downlinkWidgetDownlinkList.find((d) => normalizeDownlinkHex(d.hex) === n);
-      if (!isAdmin || !downlinkWidgetTargetDeviceId || !dl) return;
+      if (!canSendLnsCommands || !downlinkWidgetTargetDeviceId || !dl) return;
       if (downlinkSendingHexRef.current.has(n)) return;
       downlinkSendingHexRef.current.add(n);
       setDownlinkSendingVersion((v) => v + 1);
@@ -5264,7 +5396,7 @@ export default function BudgetSensorsDashboard({
         setDownlinkSendingVersion((v) => v + 1);
       }
     },
-    [isAdmin, downlinkWidgetTargetDeviceId, downlinkWidgetDownlinkList, credentials, token]
+    [canSendLnsCommands, downlinkWidgetTargetDeviceId, downlinkWidgetDownlinkList, credentials, token]
   );
 
   const buildDashboardWidgetSensor = useCallback(
@@ -5770,13 +5902,13 @@ export default function BudgetSensorsDashboard({
                 type="button"
                 className={`bsd-switch-track ${switchOn ? 'on' : 'off'} ${switchProcessing ? 'busy' : ''}`}
                 onClick={handleSwitchClick}
-                disabled={!isAdmin || !switchTargetDeviceId || switchWidgetDownlinkList.length === 0}
+                disabled={!canSendLnsCommands || !switchTargetDeviceId || switchWidgetDownlinkList.length === 0}
                 aria-pressed={switchOn}
               >
                 <span className="bsd-switch-knob" />
                 <span className="bsd-switch-label">{switchProcessing ? '…' : switchOn ? 'ON' : 'OFF'}</span>
               </button>
-              {!isAdmin && <p className="bsd-control-hint">Solo administradores pueden enviar comandos.</p>}
+              {!canSendLnsCommands && <p className="bsd-control-hint">Se requiere permiso de dispositivos para enviar comandos.</p>}
             </div>
             {switchLastTelemetryLabel ? (
               <div className="bsd-widget-footnote" style={wTitleStyle(DASH_WIDGET.SWITCH)}>
@@ -5826,7 +5958,7 @@ export default function BudgetSensorsDashboard({
                         key={`${hexKey}_${i}`}
                         type="button"
                         className={`bsd-downlink-btn bsd-downlink-btn--send${isSending ? ' bsd-downlink-btn--sending' : ''}`}
-                        disabled={!isAdmin || !downlinkWidgetTargetDeviceId || isSending}
+                        disabled={!canSendLnsCommands || !downlinkWidgetTargetDeviceId || isSending}
                         aria-busy={isSending}
                         onClick={() => handlePanelDownlinkClick(act.hex)}
                         style={
@@ -5846,7 +5978,7 @@ export default function BudgetSensorsDashboard({
                 </div>
               )}
             </div>
-            {!isAdmin && <p className="bsd-control-hint">Solo administradores pueden enviar downlinks.</p>}
+            {!canSendLnsCommands && <p className="bsd-control-hint">Se requiere permiso de dispositivos para enviar downlinks.</p>}
             {lastTelemetryAtLabel ? (
               <div className="bsd-widget-footnote" style={wTitleStyle(DASH_WIDGET.DOWNLINK)}>
                 {lastTelemetryAtLabel}
@@ -6683,6 +6815,7 @@ export default function BudgetSensorsDashboard({
                   }
                 : cfg;
             saveWidgetConfig(key, cfgToSave);
+            scheduleBsdServerPersistRef.current?.();
 
             if (meta?.dashboardTargetKey && meta.dashboardTargetKey !== oldKey) {
               const oldWid = dashboardWidgetIdFromStorageKey(oldKey);
