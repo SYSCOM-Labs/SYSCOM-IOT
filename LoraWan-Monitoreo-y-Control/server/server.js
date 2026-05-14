@@ -2338,6 +2338,9 @@ app.post('/api/users', authMiddleware, adminMiddleware, (req, res) => {
   const email = String(req.body?.email || '')
     .trim()
     .toLowerCase();
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return res.status(400).json({ error: 'Correo electrónico no válido' });
+  }
   if (!password || String(password).length < 6) {
     return res.status(400).json({
       error:
@@ -2349,9 +2352,6 @@ app.post('/api/users', authMiddleware, adminMiddleware, (req, res) => {
       error: 'Ese correo ya está registrado.',
       code: 'USER_EXISTS',
     });
-  }
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    return res.status(400).json({ error: 'Correo electrónico no válido' });
   }
 
   let newRole = 'user';
@@ -2382,7 +2382,15 @@ app.post('/api/users', authMiddleware, adminMiddleware, (req, res) => {
     mustChangePassword: true,
     navPermissionsJson: navJson,
   };
-  store.insertUser(newUser);
+  try {
+    store.insertUser(newUser);
+  } catch (e) {
+    const msg = String(e && e.message);
+    if (msg.includes('UNIQUE') && msg.toLowerCase().includes('email')) {
+      return res.status(409).json({ error: 'Ese correo ya está registrado.', code: 'USER_EXISTS' });
+    }
+    throw e;
+  }
   res.status(201).json(sanitizeUserRecord(newUser));
 });
 
@@ -2420,8 +2428,21 @@ app.put('/api/users/:id', authMiddleware, (req, res) => {
     }
   }
   if (updates.profileName !== undefined) row.profileName = updates.profileName;
-  if (updates.email) {
-    row.email = updates.email;
+  if (updates.email !== undefined && updates.email !== null) {
+    const email = String(updates.email || '')
+      .trim()
+      .toLowerCase();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Correo electrónico no válido' });
+    }
+    const other = store.getUserByEmail(email);
+    if (other && String(other.id) !== String(row.id)) {
+      return res.status(409).json({
+        error: 'Ese correo ya está registrado en otra cuenta.',
+        code: 'USER_EXISTS',
+      });
+    }
+    row.email = email;
   }
   if (password) {
     const pv = validatePasswordStrength(password);
@@ -2456,7 +2477,18 @@ app.put('/api/users/:id', authMiddleware, (req, res) => {
     invalidateJwt(row.id, ugNormalizeBaseUrl(prevUrl || ''));
     invalidateJwt(row.id, ugNormalizeBaseUrl(next.baseUrl || ''));
   }
-  store.updateUserRecord(row);
+  try {
+    store.updateUserRecord(row);
+  } catch (e) {
+    const msg = String(e && e.message);
+    if (msg.includes('UNIQUE') && msg.toLowerCase().includes('email')) {
+      return res.status(409).json({
+        error: 'Ese correo ya está registrado en otra cuenta.',
+        code: 'USER_EXISTS',
+      });
+    }
+    throw e;
+  }
   res.json(sanitizeUserRecord(row));
 });
 
@@ -2606,9 +2638,9 @@ app.post('/api/lorawan-gateways', authMiddleware, navGatewayMiddleware, (req, re
     });
   }
   const el = eui.toLowerCase();
-  if (store.lorawanGatewayExists(req.user.id, el)) {
+  if (store.lorawanGatewayEuiExistsGlobally(el)) {
     return res.status(409).json({
-      error: 'Ya existe un gateway registrado con este EUI.',
+      error: 'Ya existe un gateway registrado con este EUI (en el sistema).',
       code: 'GATEWAY_EXISTS',
     });
   }
@@ -2675,6 +2707,21 @@ app.put('/api/device-templates', authMiddleware, realSuperAdminMiddleware, (req,
     }
     if (body.templates.length > 400) {
       return res.status(400).json({ error: 'Demasiadas plantillas en el catálogo' });
+    }
+    const modeloSeen = new Map();
+    for (let i = 0; i < body.templates.length; i += 1) {
+      const t = body.templates[i];
+      const m = t?.modelo != null ? String(t.modelo).trim().toLowerCase() : '';
+      if (m) {
+        if (modeloSeen.has(m)) {
+          return res.status(409).json({
+            error:
+              'El catálogo contiene más de una plantilla con el mismo modelo. Cada modelo debe ser único (comparación sin distinguir mayúsculas).',
+            code: 'TEMPLATE_MODEL_EXISTS',
+          });
+        }
+        modeloSeen.set(m, i);
+      }
     }
     for (let i = 0; i < body.templates.length; i += 1) {
       const t = body.templates[i];
@@ -2898,6 +2945,14 @@ app.post('/api/user-devices', authMiddleware, superAdminOnlyMiddleware, (req, re
   }
 
   const prev = store.getUserDevice(req.user.id, id);
+  /** El alta desde la UI no debe «actualizar en silencio»; las ediciones van por PATCH u otras rutas. */
+  if (prev) {
+    return res.status(409).json({
+      error:
+        'Este dispositivo ya está registrado en su cuenta (mismo DevEUI o identificador). No se puede duplicar el alta.',
+      code: 'DEVICE_EXISTS',
+    });
+  }
   const pmBodyRaw = productModel !== undefined ? productModel : templateModel;
   const pmFromBody =
     pmBodyRaw != null && String(pmBodyRaw).trim() !== '' ? String(pmBodyRaw).trim().slice(0, 200) : '';
@@ -2908,14 +2963,14 @@ app.post('/api/user-devices', authMiddleware, superAdminOnlyMiddleware, (req, re
   const existingById = store.getAnyUserDeviceForDeviceId(id);
   if (existingById && (!prev || existingById.id !== prev.id)) {
     return res.status(409).json({
-      error: 'Ya existe un dispositivo registrado con este identificador.',
+      error: 'Ya existe un dispositivo con este identificador en el sistema (no se puede duplicar).',
       code: 'DEVICE_EXISTS',
     });
   }
   const duEui = store.getAnyUserDeviceByDevEuiNorm(eui);
   if (duEui && (!prev || duEui.id !== prev.id)) {
     return res.status(409).json({
-      error: 'Ya existe un dispositivo registrado con este DevEUI.',
+      error: 'Ya existe un dispositivo con este DevEUI en el sistema (no se puede duplicar).',
       code: 'DEVICE_EXISTS',
     });
   }
@@ -2963,7 +3018,7 @@ app.post('/api/user-devices', authMiddleware, superAdminOnlyMiddleware, (req, re
     lnsAutoBootstrap = { ok: false, skipped: true, reason: 'exception', detail: String(e.message || e) };
   }
 
-  res.status(prev ? 200 : 201).json({ ...row, lnsAutoBootstrap });
+  res.status(201).json({ ...row, lnsAutoBootstrap });
 });
 
 app.patch('/api/user-devices/:deviceId', authMiddleware, superAdminOnlyMiddleware, (req, res) => {
@@ -4043,7 +4098,15 @@ app.post('/api/setup', loginRateLimit, (req, res) => {
     mustChangePassword: false,
     navPermissionsJson: navPerm.navToJson(navPerm.allNavTrue()),
   };
-  store.insertUser(admin);
+  try {
+    store.insertUser(admin);
+  } catch (e) {
+    const msg = String(e && e.message);
+    if (msg.includes('UNIQUE') && msg.toLowerCase().includes('email')) {
+      return res.status(409).json({ error: 'Ese correo ya está registrado.', code: 'USER_EXISTS' });
+    }
+    throw e;
+  }
   res.status(201).json({ ok: true });
 });
 
@@ -4139,16 +4202,24 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     if (eng) {
       console.log('[LNS] Motor MAC LoRaWAN activo (Join OTAA, uplinks cifrados, downlinks).');
       const txAckOff = String(process.env.SYSCOM_LNS_TX_ACK || '').trim() === '0';
-      const appTxAckOff = String(process.env.SYSCOM_LNS_APP_DOWNLINK_TX_ACK || '').trim() === '0';
-      if (txAckOff || appTxAckOff) {
+      const appTxAckExplicitOff = String(process.env.SYSCOM_LNS_APP_DOWNLINK_TX_ACK || '').trim() === '0';
+      const appTxAckExplicitOn = ['1', 'true', 'on', 'yes'].includes(
+        String(process.env.SYSCOM_LNS_APP_DOWNLINK_TX_ACK || '').trim().toLowerCase()
+      );
+      if (txAckOff || appTxAckExplicitOff) {
         console.log(
           '[LNS] Prueba sin GW_TX_ACK:',
           [
             txAckOff ? 'SYSCOM_LNS_TX_ACK=0' : null,
-            appTxAckOff ? 'SYSCOM_LNS_APP_DOWNLINK_TX_ACK=0' : null,
+            appTxAckExplicitOff ? 'SYSCOM_LNS_APP_DOWNLINK_TX_ACK=0' : null,
           ]
             .filter(Boolean)
             .join(' · ')
+        );
+      }
+      if (!appTxAckExplicitOff && !appTxAckExplicitOn) {
+        console.log(
+          '[LNS] Downlinks de aplicación en **clase C**: sin esperar GW_TX_ACK por defecto (fiabilidad). Forzar espera: SYSCOM_LNS_APP_DOWNLINK_TX_ACK=1.'
         );
       }
       if (String(process.env.SYSCOM_LNS_CLASS_C_USE_GATEWAY_TMST || '').trim() === '1') {

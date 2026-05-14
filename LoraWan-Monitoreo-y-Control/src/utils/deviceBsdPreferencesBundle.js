@@ -38,13 +38,18 @@ export function collectDeviceBsdBundle(deviceId) {
   const gridKey = dashboardGridLayoutStorageKey('device', id, undefined, undefined);
   const gridLayout = readStoredBsdGridLayout(gridKey);
   const visibility = loadDashboardVisibility('device', id);
-  const downlinks = readDownlinksFromLocalStorage(id);
-  return {
+  const downlinksRaw = readDownlinksFromLocalStorage(id);
+  const out = {
     valueWidgets,
     gridLayout,
     visibility: { ...visibility },
-    downlinks,
   };
+  /** No enviar `downlinks: []` al servidor: el PUT reemplaza el JSON y un GET posterior pisaría la cola local (carrera antes de plantillas / id). */
+  const nDl = Array.isArray(downlinksRaw)
+    ? downlinksRaw.filter((r) => r && String(r.hex || '').trim()).length
+    : 0;
+  if (nDl > 0) out.downlinks = downlinksRaw;
+  return out;
 }
 
 /**
@@ -90,10 +95,24 @@ export function applyDeviceBsdBundle(deviceId, bundle) {
 
   const dl = bundle.downlinks;
   if (Array.isArray(dl)) {
-    try {
-      localStorage.setItem(downlinksLocalStorageKey(id), JSON.stringify(dl));
-    } catch {
-      /* ignore */
+    const incomingHasHex = dl.some((r) => r && String(r.hex || '').trim());
+    let skipEmptyOverwrite = false;
+    if (!incomingHasHex) {
+      try {
+        const curRaw = localStorage.getItem(downlinksLocalStorageKey(id));
+        const cur = curRaw ? JSON.parse(curRaw) : [];
+        const curHasHex = Array.isArray(cur) && cur.some((r) => r && String(r.hex || '').trim());
+        if (curHasHex) skipEmptyOverwrite = true;
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!skipEmptyOverwrite) {
+      try {
+        localStorage.setItem(downlinksLocalStorageKey(id), JSON.stringify(dl));
+      } catch {
+        /* ignore */
+      }
     }
   }
 }

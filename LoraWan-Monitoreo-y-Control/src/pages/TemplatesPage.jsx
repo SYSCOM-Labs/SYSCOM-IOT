@@ -23,6 +23,7 @@ import {
 import { saveDeviceDecodeConfig } from '../services/api';
 import { adaptDecoderScriptForSyscom } from '../utils/adaptDecoderScript';
 import { inferTelemetryLabelsFromDecoderScript } from '../utils/inferDecoderTelemetryLabels';
+import { getDuplicateEntityNotice } from '../utils/duplicateEntityNotice';
 import CenteredAlertModal from '../components/CenteredAlertModal';
 import './TemplatesPage.css';
 
@@ -151,6 +152,21 @@ const TemplatesPage = () => {
         telemetryLabels: form.telemetryLabels,
       });
     } catch (err) {
+      if (err.code === 'TEMPLATE_MODEL_EXISTS') {
+        const dup = getDuplicateEntityNotice('TEMPLATE_MODEL_EXISTS', {
+          conflictModelo: err.conflictModelo,
+          conflictMarca: err.conflictMarca,
+        });
+        setTemplatesNoticeModal({
+          open: true,
+          title: dup.title,
+          message: dup.body,
+          variant: 'warning',
+          wide: false,
+          confirmLabel: 'Entendido',
+        });
+        return;
+      }
       setTemplatesNoticeModal({
         open: true,
         title: 'No se pudo guardar',
@@ -204,7 +220,20 @@ const TemplatesPage = () => {
       try {
         await flushDeviceTemplatesCatalogToServer();
       } catch (fe) {
-        console.warn('[TemplatesPage] publicar catálogo:', fe?.message || fe);
+        const code = fe?.response?.data?.code;
+        if (code === 'TEMPLATE_MODEL_EXISTS') {
+          const dup = getDuplicateEntityNotice('TEMPLATE_MODEL_EXISTS');
+          setTemplatesNoticeModal({
+            open: true,
+            title: dup.title,
+            message: `${dup.body}\n\nRevise si hay modelos repetidos (p. ej. tras importar) y unifique antes de volver a guardar.`,
+            variant: 'warning',
+            wide: true,
+            confirmLabel: 'Aceptar',
+          });
+        } else {
+          console.warn('[TemplatesPage] publicar catálogo:', fe?.message || fe);
+        }
       }
       refresh();
     }

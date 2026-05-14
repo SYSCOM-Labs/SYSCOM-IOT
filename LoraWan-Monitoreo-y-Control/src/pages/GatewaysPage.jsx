@@ -3,7 +3,9 @@ import { Plus, X, Trash2, RefreshCw, Loader, RadioTower } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import { fetchLorawanGateways, createLorawanGateway, deleteLorawanGateway } from '../services/api';
 import FormToast from '../components/FormToast';
+import { getDuplicateEntityNotice } from '../utils/duplicateEntityNotice';
 import { LORAWAN_GATEWAY_BAND_OPTIONS, LORAWAN_GATEWAY_BAND_VALUES } from '../constants/lorawanGatewayBands';
+import { hexDigitsBorderClass, requiredTrimBorderClass } from '../utils/formFieldBorderClasses';
 import '../components/modals/DeviceActionsModal.css';
 import './DeviceList.css';
 import '../styles/premiumPageShell.css';
@@ -115,9 +117,11 @@ const GatewaysPage = () => {
       const code = err?.response?.data?.code;
       const msg = err?.response?.data?.error || err?.message || t('common.error');
       if (code === 'GATEWAY_EXISTS') {
+        const dup = getDuplicateEntityNotice('GATEWAY_EXISTS');
         setNotify({
-          type: 'error',
-          message: 'Ya existe un gateway con este EUI. No se puede completar el registro.',
+          type: 'warning',
+          title: dup.title,
+          message: dup.body,
         });
         setSaveError(null);
       } else {
@@ -240,8 +244,10 @@ const GatewaysPage = () => {
         <div className="gateways-page-toast-host">
           <FormToast
             type={notify.type}
+            title={notify.title}
             message={notify.message}
             onDismiss={() => setNotify(null)}
+            durationMs={notify.type === 'warning' ? 10000 : 5000}
           />
         </div>
       )}
@@ -266,15 +272,21 @@ const GatewaysPage = () => {
                   Registra el EUI del gateway en tu cuenta. El estado Online/Offline se infiere de la telemetría que
                   referencie ese EUI en la ingesta.
                 </p>
-                {notify?.type === 'error' && (
-                  <FormToast type="error" message={notify.message} onDismiss={() => setNotify(null)} durationMs={8000} />
+                {notify?.type === 'warning' && (
+                  <FormToast
+                    type="warning"
+                    title={notify.title}
+                    message={notify.message}
+                    onDismiss={() => setNotify(null)}
+                    durationMs={12000}
+                  />
                 )}
                 {saveError && <div className="gateways-banner error">{saveError}</div>}
                 <div className="form-group">
                   <label htmlFor="gw-name">Nombre</label>
                   <input
                     id="gw-name"
-                    className="glass"
+                    className={['glass', requiredTrimBorderClass(form.name)].filter(Boolean).join(' ')}
                     value={form.name}
                     onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
                     placeholder="Ej. Gateway almacén norte"
@@ -289,7 +301,7 @@ const GatewaysPage = () => {
                   </div>
                   <input
                     id="gw-eui"
-                    className="glass gw-eui-input"
+                    className={['glass', 'gw-eui-input', hexDigitsBorderClass(form.gatewayEui, 16)].filter(Boolean).join(' ')}
                     value={form.gatewayEui}
                     onChange={(e) => setForm((f) => ({ ...f, gatewayEui: e.target.value }))}
                     placeholder="16 caracteres hex (8 bytes)"

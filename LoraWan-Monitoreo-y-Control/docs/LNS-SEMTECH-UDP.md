@@ -37,7 +37,7 @@ Linux/macOS: `export LNS_UDP_PORT=1700`
 | `SYSCOM_LNS_PULL_BURST` | Máximo de **PULL_RESP** enviados por cada **PULL_DATA** (1–20), por defecto `1`. Sube solo si tu forwarder acepta varios por ciclo. |
 | `SYSCOM_LNS_TX_ACK_ENABLED` | Si está definido, **sustituye** a `SYSCOM_LNS_TX_ACK` (`1`/`true` = esperar GW_TX_ACK correlacionado). |
 | `SYSCOM_LNS_TX_ACK` | `1` (por defecto): confirma **FCnt down** solo tras **TX_ACK** exitoso del gateway; reintentos sin cambiar el frame. **`0`**: no espera GW_TX_ACK (pruebas si el forwarder no manda `txpk_ack`). |
-| `SYSCOM_LNS_APP_DOWNLINK_TX_ACK` | Si **`0`**: solo los downlinks de **aplicación** (API/UI) ignoran GW_TX_ACK (FCnt al encolar). Si no se define, hereda `SYSCOM_LNS_TX_ACK` / `SYSCOM_LNS_TX_ACK_ENABLED`. |
+| `SYSCOM_LNS_APP_DOWNLINK_TX_ACK` | Si **`0`**: downlinks de **aplicación** (API/UI) no esperan GW_TX_ACK. Si **`1`**/`true`: sí esperan (si el tracking global está activo). **Sin definir**: clase **A/B** hereda `SYSCOM_LNS_TX_ACK`; clase **C** no espera ACK por defecto (fiabilidad con `imme` / gateways que ACK tarde). |
 | `SYSCOM_LNS_CLASS_C_USE_GATEWAY_TMST` | **`1`**: clase **C** construye `txpk` con **`tmst`** = último `rxpk.tmst` del nodo + `SYSCOM_LNS_CLASS_C_TMST_OFFSET_US` (µs), **`imme: false`**, misma freq/dr RX2 (p. ej. UG65 que rechaza solo `imme`). Sin `tmst` válido en sesión se mantiene `imme`. **No** usar `Date.now()` para `tmst` (no es el reloj del concentrador). |
 | `SYSCOM_LNS_CLASS_C_TMST_OFFSET_US` | Retardo en **microsegundos** respecto al último uplink; por defecto **500000** (0,5 s). Mínimo 50000. |
 | `SYSCOM_LNS_TX_ACK_MAX_RETRIES` | Reintentos tras rechazo TX_ACK, por defecto `3`. |

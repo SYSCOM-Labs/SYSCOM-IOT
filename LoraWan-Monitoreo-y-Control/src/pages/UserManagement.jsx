@@ -22,6 +22,8 @@ import {
   Mail,
 } from 'lucide-react';
 import { NAV_MODULE_DEFS } from '../config/navConfig';
+import FormToast from '../components/FormToast';
+import { getDuplicateEntityNotice } from '../utils/duplicateEntityNotice';
 import './DeviceList.css';
 import '../styles/premiumPageShell.css';
 import './UserManagement.css';
@@ -177,9 +179,10 @@ const UserManagement = ({ onAfterEnterSupport }) => {
   const [supportTarget, setSupportTarget] = useState(null);
   const [supportBusy, setSupportBusy] = useState(false);
 
-  const showToast = (type, msg) => {
-    setToast({ type, msg });
-    setTimeout(() => setToast(null), 4000);
+  const showToast = (type, msg, opts = {}) => {
+    const durationMs = opts.durationMs ?? (type === 'warning' ? 8000 : 4000);
+    setToast({ type, msg: msg || '', title: opts.title ?? null, durationMs });
+    setTimeout(() => setToast(null), durationMs);
   };
 
   const loadUsers = async () => {
@@ -319,7 +322,8 @@ const UserManagement = ({ onAfterEnterSupport }) => {
       await loadUsers();
     } catch (e) {
       if (e.code === 'USER_EXISTS' || e.message?.includes('ya está registrado')) {
-        showToast('error', 'Ese correo ya está registrado. No se puede completar el alta.');
+        const dup = getDuplicateEntityNotice('USER_EXISTS', { userAction: 'create' });
+        showToast('warning', dup.body, { title: dup.title });
       } else showToast('error', `Error: ${e.message}`);
     } finally {
       setSaving(false);
@@ -346,7 +350,12 @@ const UserManagement = ({ onAfterEnterSupport }) => {
       closeModal();
       loadUsers();
     } catch (e) {
-      showToast('error', 'Error al actualizar: ' + e.message);
+      if (e.code === 'USER_EXISTS' || e.message?.includes('ya está registrado')) {
+        const dup = getDuplicateEntityNotice('USER_EXISTS', { userAction: 'edit' });
+        showToast('warning', dup.body, { title: dup.title });
+      } else {
+        showToast('error', 'Error al actualizar: ' + e.message);
+      }
     } finally {
       setSaving(false);
     }
@@ -422,9 +431,14 @@ const UserManagement = ({ onAfterEnterSupport }) => {
   return (
     <div className="device-list-page device-list-page--premium premium-shell">
       {toast && (
-        <div className={`um-toast ${toast.type}`}>
-          {toast.type === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
-          {toast.msg}
+        <div className="um-toast-host">
+          <FormToast
+            type={toast.type}
+            title={toast.title}
+            message={toast.msg}
+            onDismiss={() => setToast(null)}
+            durationMs={toast.durationMs}
+          />
         </div>
       )}
 

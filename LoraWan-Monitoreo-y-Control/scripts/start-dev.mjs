@@ -7,7 +7,8 @@
  * Para producción seguir usando `npm run start:prod` (solo API sirviendo dist/).
  * Para arrancar solo la API en desarrollo: `npm run start:api`.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import net from 'node:net';
 import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -87,5 +88,66 @@ function launch(label, cmd, args) {
 process.on('SIGINT', () => stopAll('SIGINT'));
 process.on('SIGTERM', () => stopAll('SIGTERM'));
 
+/** Mismo criterio que `server.js` / proxy de Vite: `PORT` en entorno o en `.env`. */
+function resolveApiPort() {
+  const fromShell = Number.parseInt(process.env.PORT || '', 10);
+  if (Number.isFinite(fromShell) && fromShell > 0) return fromShell;
+  if (existsSync(envFile)) {
+    try {
+      const raw = readFileSync(envFile, 'utf8');
+      const m = raw.match(/^\s*PORT\s*=\s*(\d+)/im);
+      if (m) {
+        const p = Number.parseInt(m[1], 10);
+        if (Number.isFinite(p) && p > 0) return p;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return 3001;
+}
+
+function waitForApiPort(port, timeoutMs = 90000) {
+  const host = '127.0.0.1';
+  const start = Date.now();
+  process.stdout.write(`[start-dev] Esperando API en http://${host}:${port}/ …\n`);
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      if (shuttingDown) {
+        reject(new Error('Cancelado'));
+        return;
+      }
+      if (Date.now() - start > timeoutMs) {
+        reject(
+          new Error(
+            `La API no abrió el puerto ${port} en ${timeoutMs}ms (revisa logs [api] o si el puerto está ocupado).`
+          )
+        );
+        return;
+      }
+      const s = net.connect({ port, host }, () => {
+        s.end();
+        process.stdout.write('[start-dev] API lista; arrancando Vite.\n');
+        resolve();
+      });
+      s.on('error', () => {
+        s.destroy();
+        setTimeout(tick, 150);
+      });
+    };
+    tick();
+  });
+}
+
+const apiPort = resolveApiPort();
 launch('api', process.execPath, apiArgs);
-launch('front', process.execPath, [viteJs]);
+waitForApiPort(apiPort)
+  .then(() => {
+    if (!shuttingDown) launch('front', process.execPath, [viteJs]);
+  })
+  .catch((err) => {
+    if (shuttingDown) return;
+    console.error('[start-dev]', err.message || err);
+    stopAll();
+    process.exit(1);
+  });

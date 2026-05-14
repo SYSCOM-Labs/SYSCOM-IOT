@@ -20,6 +20,7 @@ import {
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import FormToast from '../components/FormToast';
+import { getDuplicateEntityNotice } from '../utils/duplicateEntityNotice';
 import CenteredAlertModal from '../components/CenteredAlertModal';
 import DeviceActionsModal from '../components/modals/DeviceActionsModal';
 import DeviceDashboardModal from '../components/modals/DeviceDashboardModal';
@@ -51,6 +52,7 @@ import { applyStaleOfflineConnectStatus, isDeviceVisuallyOnline } from '../utils
 import { pushAppActivityLog } from '../utils/appActivityLog';
 import { SYSCOM_REALTIME_TELEMETRY } from '../constants/realtimeEvents';
 import { collectDeviceBsdBundle, deviceBsdBundleIsEmpty } from '../utils/deviceBsdPreferencesBundle';
+import { hexDigitsBorderClass, requiredTrimBorderClass } from '../utils/formFieldBorderClasses';
 
 const EMPTY_CREATE = { devEUI: '', appEUI: '', appKey: '', displayName: '', tag: '' };
 
@@ -568,6 +570,20 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
     const tagStr = createForm.tag.trim();
     setSavingDevice(true);
     try {
+      const idNorm = String(devHex || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+      const alreadyListed =
+        idNorm.length === 16 &&
+        devices.some((d) => String(d.deviceId || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase() === idNorm);
+      if (alreadyListed) {
+        const dup = getDuplicateEntityNotice('DEVICE_EXISTS');
+        setCreateNotify({
+          type: 'warning',
+          title: dup.title,
+          message: dup.body,
+        });
+        return;
+      }
+
       const created = await registerUserDevice({
         deviceId: devHex,
         displayName: name,
@@ -663,18 +679,21 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
       if (templateApplyWarning) alertParts.push(templateApplyWarning);
       if (alertParts.length) setBlockingAlert(alertParts.join('\n\n—\n\n'));
     } catch (err) {
-      const code = err.response?.data?.code;
-      const msg =
-        err.response?.data?.error ||
-        err.response?.data?.errMsg ||
-        err.response?.data?.message ||
-        err.message ||
-        t('common.error');
-      if (code === 'DEVICE_EXISTS') {
+      const status = err.response?.status;
+      const data = err.response?.data;
+      const code = data?.code;
+      const errText = String(data?.error || data?.errMsg || data?.message || err.message || '');
+      const treatAsDeviceExists =
+        code === 'DEVICE_EXISTS' ||
+        (status === 409 &&
+          /ya existe|duplicar|no se puede duplicar|ya está registrado en su cuenta/i.test(errText));
+      const msg = errText || t('common.error');
+      if (treatAsDeviceExists) {
+        const dup = getDuplicateEntityNotice('DEVICE_EXISTS');
         setCreateNotify({
-          type: 'error',
-          message:
-            'Ya existe un dispositivo con este identificador o DevEUI. El registro no se puede completar.',
+          type: 'warning',
+          title: dup.title,
+          message: dup.body,
         });
       } else if (code === 'DEVICE_VALIDATION') {
         setCreateNotify({ type: 'error', message: msg });
@@ -1225,9 +1244,12 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                 {createNotify && (
                   <FormToast
                     type={createNotify.type}
+                    title={createNotify.title}
                     message={createNotify.message}
                     onDismiss={() => setCreateNotify(null)}
-                    durationMs={createNotify.type === 'error' ? 9000 : 4000}
+                    durationMs={
+                      createNotify.type === 'warning' ? 11000 : createNotify.type === 'error' ? 9000 : 4000
+                    }
                   />
                 )}
                 {!sensorFormValid.ok && (
@@ -1246,7 +1268,15 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                       <input
                         id="device-create-deveui"
                         name="device-create-deveui"
-                        className="glass mono device-modal-input device-modal-input--lg"
+                        className={[
+                          'glass',
+                          'mono',
+                          'device-modal-input',
+                          'device-modal-input--lg',
+                          hexDigitsBorderClass(createForm.devEUI, 16),
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
                         value={createForm.devEUI}
                         onChange={(e) => setCreateForm({ ...createForm, devEUI: e.target.value })}
                         required
@@ -1261,7 +1291,15 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                       <input
                         id="device-create-appeui"
                         name="device-create-appeui"
-                        className="glass mono device-modal-input device-modal-input--lg"
+                        className={[
+                          'glass',
+                          'mono',
+                          'device-modal-input',
+                          'device-modal-input--lg',
+                          hexDigitsBorderClass(createForm.appEUI, 16),
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
                         value={createForm.appEUI}
                         onChange={(e) => setCreateForm({ ...createForm, appEUI: e.target.value })}
                         required
@@ -1276,7 +1314,15 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                       <input
                         id="device-create-appkey"
                         name="device-create-appkey"
-                        className="glass mono device-modal-input device-modal-input--lg"
+                        className={[
+                          'glass',
+                          'mono',
+                          'device-modal-input',
+                          'device-modal-input--lg',
+                          hexDigitsBorderClass(createForm.appKey, 32),
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
                         value={createForm.appKey}
                         onChange={(e) => setCreateForm({ ...createForm, appKey: e.target.value })}
                         required
@@ -1291,7 +1337,14 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                       <input
                         id="device-create-displayname"
                         name="device-create-displayname"
-                        className="glass device-modal-input device-modal-input--lg"
+                        className={[
+                          'glass',
+                          'device-modal-input',
+                          'device-modal-input--lg',
+                          requiredTrimBorderClass(createForm.displayName),
+                        ]
+                          .filter(Boolean)
+                          .join(' ')}
                         value={createForm.displayName}
                         onChange={(e) => setCreateForm({ ...createForm, displayName: e.target.value })}
                         required

@@ -64,23 +64,23 @@ body:not(.theme-dark) .um-modal-shell.um-devices-modal .um-devices-table th {
   border-radius: 12px;
 }
 
-.um-toast {
+.um-toast-host {
   position: fixed;
   top: 20px;
   right: 20px;
   z-index: 9999;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 18px;
-  border-radius: 10px;
-  font-size: 0.9rem;
-  font-weight: 500;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  max-width: min(440px, calc(100vw - 2.5rem));
   animation: slideIn 0.25s ease;
 }
-.um-toast.success { background: rgba(16,185,129,0.15); border: 1px solid rgba(16,185,129,0.4); color: #10b981; }
-.um-toast.error   { background: rgba(239,68,68,0.15);  border: 1px solid rgba(239,68,68,0.4);  color: #ef4444; }
+
+.um-toast-host .form-toast {
+  margin-bottom: 0;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.28);
+}
+
+body:not(.theme-dark) .um-toast-host .form-toast {
+  box-shadow: 0 8px 28px rgba(24, 24, 27, 0.12);
+}
 
 @keyframes slideIn {
   from { opacity: 0; transform: translateX(30px); }

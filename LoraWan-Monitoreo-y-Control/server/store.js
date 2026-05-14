@@ -776,6 +776,11 @@ class Store {
       lgwExists: this.db.prepare(
         'SELECT 1 FROM lorawan_gateways WHERE user_id = ? AND lower(gateway_eui) = lower(?)'
       ),
+      lgwExistsGlobally: this.db.prepare(`
+        SELECT 1 FROM lorawan_gateways
+        WHERE lower(replace(replace(replace(gateway_eui,':',''),'-',''),' ','')) = ?
+        LIMIT 1
+      `),
       lgwEuiForMac: this.db.prepare(`
         SELECT gateway_eui FROM lorawan_gateways WHERE user_id = ?
         AND lower(replace(replace(replace(gateway_eui,':',''),'-',''),' ','')) IN (?, ?) LIMIT 1
@@ -1601,6 +1606,15 @@ class Store {
 
   lorawanGatewayExists(userId, euiLower) {
     return Boolean(this.st.lgwExists.get(userId, euiLower));
+  }
+
+  /** True si cualquier usuario ya dio de alta este Gateway EUI (16 hex normalizado). */
+  lorawanGatewayEuiExistsGlobally(eui16Norm) {
+    const h = String(eui16Norm || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (h.length !== 16) return false;
+    return Boolean(this.st.lgwExistsGlobally.get(h));
   }
 
   insertLorawanGateway(row) {

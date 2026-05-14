@@ -437,8 +437,25 @@ export function getDeviceTemplates() {
 }
 
 export function saveDeviceTemplate(payload) {
+  const incomingId = payload.id != null && String(payload.id).trim() !== '' ? String(payload.id).trim() : null;
+  const modeloNorm = String(payload.modelo || '').trim().toLowerCase();
+  if (modeloNorm) {
+    const list = getDeviceTemplates();
+    const conflict = list.find((t) => {
+      if ((t.modelo || '').trim().toLowerCase() !== modeloNorm) return false;
+      if (incomingId && String(t.id || '').trim() === incomingId) return false;
+      return true;
+    });
+    if (conflict) {
+      const err = new Error('TEMPLATE_MODEL_EXISTS');
+      err.code = 'TEMPLATE_MODEL_EXISTS';
+      err.conflictModelo = conflict.modelo;
+      err.conflictMarca = conflict.marca;
+      throw err;
+    }
+  }
   const id =
-    payload.id ||
+    incomingId ||
     `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   const otaa = normalizeOtaaTemplateFields(payload);
   validateOtaaTemplateFields(otaa);

@@ -3,7 +3,8 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { createAdmin, checkEmailRegistered, checkSetup } from '../services/localAuth';
 import { validatePasswordStrength, PASSWORD_POLICY_HINT, isPasswordPolicySatisfied } from '../utils/passwordPolicy';
-import { Bot, CloudUpload, LineChart, Lock, LogIn, Mail, ShieldCheck, UserPlus } from 'lucide-react';
+import { Bot, CloudUpload, LineChart, Lock, LogIn, Mail, ShieldCheck, UserPlus, AlertTriangle } from 'lucide-react';
+import { getDuplicateEntityNotice } from '../utils/duplicateEntityNotice';
 import './Login.css';
 
 const HERO_FEATURES = [
@@ -137,6 +138,8 @@ const Login = () => {
   const [setupName, setSetupName] = useState('');
   const [setupPass, setSetupPass] = useState('');
   const [setupPass2, setSetupPass2] = useState('');
+  /** Aviso estructurado si el correo del setup inicial ya existe (409). */
+  const [setupDuplicate, setSetupDuplicate] = useState(null);
 
   const setupPwPolicyOk = useMemo(() => isPasswordPolicySatisfied(setupPass), [setupPass]);
   /** Borde rojo si ya escribió y no cumple política; verde si cumple; neutro si vacío. */
@@ -182,16 +185,21 @@ const Login = () => {
     };
   }, [setNeedsSetup]);
 
-  const resetError = () => setError('');
+  const resetError = () => {
+    setError('');
+    setSetupDuplicate(null);
+  };
 
   const handleSetup = async (e) => {
     e.preventDefault();
     if (setupPass !== setupPass2) {
+      setSetupDuplicate(null);
       setError('Las contraseñas no coinciden.');
       return;
     }
     const pv = validatePasswordStrength(setupPass);
     if (!pv.ok) {
+      setSetupDuplicate(null);
       setError(pv.error);
       return;
     }
@@ -201,10 +209,15 @@ const Login = () => {
       await createAdmin(setupEmail, setupPass, setupName);
       setNeedsSetup(false);
     } catch (err) {
-      const msg = err.response?.data?.errMsg || err.response?.data?.error || err.message || '';
+      const msg =
+        err.response?.data?.errMsg || err.response?.data?.error || err.message || '';
       if (err.code === 'USER_EXISTS' || err.message?.includes('ya está registrado')) {
-        setError('Ese correo ya está registrado. No se puede completar el registro.');
-      } else setError(msg || err.message);
+        setSetupDuplicate(getDuplicateEntityNotice('USER_EXISTS', { userAction: 'create' }));
+        setError('');
+      } else {
+        setSetupDuplicate(null);
+        setError(msg || err.message);
+      }
     } finally {
       setLoading(false);
     }
@@ -341,6 +354,15 @@ const Login = () => {
                   autoComplete="new-password"
                 />
               </div>
+              {setupDuplicate && (
+                <div className="login-notice login-notice--duplicate" role="status">
+                  <AlertTriangle size={22} className="login-notice__icon" aria-hidden />
+                  <div className="login-notice__text">
+                    <strong>{setupDuplicate.title}</strong>
+                    <p>{setupDuplicate.body}</p>
+                  </div>
+                </div>
+              )}
               {error && <div className="error-message">{error}</div>}
               <button type="submit" className="btn btn-primary full-width login-submit-btn" disabled={loading}>
                 {loading ? 'Creando...' : 'Crear cuenta y continuar'}

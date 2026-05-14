@@ -175,6 +175,57 @@ body.theme-dark .um-modal-shell.device-assign-modal .assign-user-list {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary-color, #6366f1) 25%, transparent);
 }
 
+/* Validación en vivo: verde = cumple requisito; rojo = falta o formato incorrecto (hex / nombre) */
+.device-list-page input.device-modal-input.input-border--valid,
+.templates-page input.device-modal-input.input-border--valid {
+  border-color: #22c55e;
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.28);
+}
+
+.device-list-page input.device-modal-input.input-border--valid:focus,
+.device-list-page input.device-modal-input.input-border--valid:focus-visible,
+.templates-page input.device-modal-input.input-border--valid:focus,
+.templates-page input.device-modal-input.input-border--valid:focus-visible {
+  border-color: #16a34a;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.25);
+}
+
+.device-list-page input.device-modal-input.input-border--invalid,
+.templates-page input.device-modal-input.input-border--invalid {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.3);
+}
+
+.device-list-page input.device-modal-input.input-border--invalid:focus,
+.device-list-page input.device-modal-input.input-border--invalid:focus-visible,
+.templates-page input.device-modal-input.input-border--invalid:focus,
+.templates-page input.device-modal-input.input-border--invalid:focus-visible {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.22);
+}
+
+.um-modal-shell.gateways-modal input.glass.input-border--valid {
+  border-color: #22c55e;
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.28);
+}
+
+.um-modal-shell.gateways-modal input.glass.input-border--valid:focus,
+.um-modal-shell.gateways-modal input.glass.input-border--valid:focus-visible {
+  border-color: #16a34a;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.25);
+}
+
+.um-modal-shell.gateways-modal input.glass.input-border--invalid {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.3);
+}
+
+.um-modal-shell.gateways-modal input.glass.input-border--invalid:focus,
+.um-modal-shell.gateways-modal input.glass.input-border--invalid:focus-visible {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.22);
+}
+
 .device-list-page .device-modal-input--lg,
 .templates-page .device-modal-input--lg {
   min-height: 52px;

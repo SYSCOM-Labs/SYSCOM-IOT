@@ -10,8 +10,30 @@
   animation: form-toast-in 0.2s ease-out;
 }
 
+.form-toast__single,
 .form-toast span {
   flex: 1;
+}
+
+.form-toast__text {
+  flex: 1;
+  min-width: 0;
+}
+
+.form-toast__title {
+  margin: 0 0 0.25rem;
+  font-weight: 700;
+  font-size: 0.92rem;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+.form-toast__detail {
+  margin: 0;
+  font-size: 0.84rem;
+  font-weight: 500;
+  line-height: 1.4;
+  opacity: 0.92;
 }
 
 .form-toast__icon {
@@ -38,6 +60,21 @@
   background: rgba(239, 68, 68, 0.12);
   border: 1px solid rgba(239, 68, 68, 0.35);
   color: #f87171;
+}
+
+/** Aviso (duplicados): ámbar + acento índigo, coherente con shell premium */
+.form-toast--warning {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.12) 0%, rgba(99, 102, 241, 0.08) 100%);
+  border: 1px solid rgba(245, 158, 11, 0.42);
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.12), 0 8px 24px rgba(0, 0, 0, 0.12);
+  color: #fbbf24;
+}
+
+body:not(.theme-dark) .form-toast--warning {
+  color: #b45309;
+  background: linear-gradient(135deg, rgba(251, 191, 36, 0.18) 0%, rgba(99, 102, 241, 0.1) 100%);
+  border-color: rgba(217, 119, 6, 0.45);
+  box-shadow: 0 0 0 1px rgba(99, 102, 241, 0.15), 0 6px 20px rgba(24, 24, 27, 0.06);
 }
 
 @keyframes form-toast-in {

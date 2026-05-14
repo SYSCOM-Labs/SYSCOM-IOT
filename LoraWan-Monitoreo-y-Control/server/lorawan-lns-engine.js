@@ -74,7 +74,8 @@ function classARxWindowMode() {
 /**
  * Si es false (`SYSCOM_LNS_TX_ACK=0`), el FCnt down se confirma al encolar (sin esperar GW_TX_ACK).
  * `SYSCOM_LNS_TX_ACK_ENABLED` (si está definido) tiene prioridad sobre `SYSCOM_LNS_TX_ACK`.
- * Pruebas con gateways que no envían `txpk_ack` (p. ej. algunos UG65): use también `SYSCOM_LNS_APP_DOWNLINK_TX_ACK=0`.
+ * Pruebas con gateways que no envían `txpk_ack` (p. ej. algunos UG65): use `SYSCOM_LNS_TX_ACK=0` o `SYSCOM_LNS_APP_DOWNLINK_TX_ACK=0`.
+ * Los downlinks de aplicación en **clase C** ya no esperan GW_TX_ACK por defecto (ver `appDownlinkTxAckWanted`).
  */
 function txAckTrackingEnabled() {
   const en = process.env.SYSCOM_LNS_TX_ACK_ENABLED;
@@ -91,18 +92,20 @@ function isTxAckEnabled() {
 }
 
 /**
- * Downlinks de **aplicación** (API / UI): si `SYSCOM_LNS_APP_DOWNLINK_TX_ACK` no está definido, se usa el mismo
- * criterio que `SYSCOM_LNS_TX_ACK` (por defecto **sí**). Así `fcnt_down` solo avanza tras GW_TX_ACK y no se
- * desincroniza del nodo si el concentrador rechaza el `txpk`. Forwarders sin GW_TX_ACK: `SYSCOM_LNS_TX_ACK=0`
- * o `SYSCOM_LNS_APP_DOWNLINK_TX_ACK=0`. Forzar solo app sin ACK: `SYSCOM_LNS_APP_DOWNLINK_TX_ACK=0` con TX_ACK=1.
+ * Downlinks de **aplicación** (API / UI): si `SYSCOM_LNS_APP_DOWNLINK_TX_ACK` está definido,
+ * `0`/`off` = no esperar GW_TX_ACK; cualquier otro valor = sí (si el tracking global `SYSCOM_LNS_TX_ACK` está activo).
+ * Si **no** está definido: **clase C** → no esperar GW_TX_ACK (muchas instalaciones UG65/Semtech: ACK tarde o token no correlacionado;
+ * el nodo clase C recibe en ventana continua). Clase A/B → hereda `SYSCOM_LNS_TX_ACK` (defecto sí).
  */
-function appDownlinkTxAckTrackingEnabled() {
+function appDownlinkTxAckWanted(deviceClassNorm) {
   const raw = process.env.SYSCOM_LNS_APP_DOWNLINK_TX_ACK;
   if (raw != null && String(raw).trim() !== '') {
     const v = String(raw).trim().toLowerCase();
-    return v !== '0' && v !== 'false' && v !== 'off';
+    if (v === '0' || v === 'false' || v === 'off') return false;
+    return true;
   }
-  return txAckTrackingEnabled();
+  if (deviceClassNorm === 'C') return false;
+  return true;
 }
 
 /**
@@ -1435,7 +1438,7 @@ function createLorawanLnsEngine(ctx) {
     const nextDown = session.fcntDown < 0 ? 0 : (session.fcntDown + 1) % 65536;
     const skipTrack = Boolean(opt.skipTxAckTrack);
     const useTrack =
-      !skipTrack && txAckTrackingEnabled() && appDownlinkTxAckTrackingEnabled();
+      !skipTrack && txAckTrackingEnabled() && appDownlinkTxAckWanted(cls);
     if (useTrack && store.lnsHasTrackedDownlinkPendingForDev(userId, devEuiNorm16)) {
       const err = new Error(
         'Downlink anterior pendiente de confirmación del gateway; inténtelo de nuevo en unos segundos.'
