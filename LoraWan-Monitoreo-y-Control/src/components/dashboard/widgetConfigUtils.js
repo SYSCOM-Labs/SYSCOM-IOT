@@ -4,6 +4,47 @@ import { getTelemetryPropertyValue } from '../../utils/telemetryPropertyPath';
 
 export const BSD_VALUE_WIDGETS_STORAGE_KEY = 'bsd_value_widgets_v1';
 const STORAGE_KEY = BSD_VALUE_WIDGETS_STORAGE_KEY;
+
+/**
+ * Límite aproximado de caracteres del `data:` de imagen incrustada por widget (el JSON total de tablero comparte ~5 MB).
+ * Por encima se omite al persistir en `localStorage` para evitar `QuotaExceededError`.
+ */
+export const MAX_WIDGET_IMAGE_DATA_URL_CHARS = 190_000;
+
+function clampConfigEmbeddedImageDataUrl(config) {
+  if (!config || typeof config !== 'object') return config;
+  const data = config.data;
+  if (!data || typeof data !== 'object') return config;
+  const url = data.uploadedImageDataUrl;
+  if (typeof url !== 'string' || !/^data:image\//i.test(url.trim())) return config;
+  if (url.length <= MAX_WIDGET_IMAGE_DATA_URL_CHARS) return config;
+  return { ...config, data: { ...data, uploadedImageDataUrl: '' } };
+}
+
+function sanitizeWidgetConfigMapForStorage(all) {
+  const out = {};
+  for (const [k, v] of Object.entries(all || {})) {
+    out[k] = clampConfigEmbeddedImageDataUrl(v && typeof v === 'object' ? v : {});
+  }
+  return out;
+}
+
+function stripAllEmbeddedImagesFromConfigMap(all) {
+  const out = {};
+  for (const [k, v] of Object.entries(all || {})) {
+    if (!v || typeof v !== 'object') {
+      out[k] = v;
+      continue;
+    }
+    const data = v.data;
+    if (!data || typeof data !== 'object') {
+      out[k] = v;
+      continue;
+    }
+    out[k] = { ...v, data: { ...data, uploadedImageDataUrl: '' } };
+  }
+  return out;
+}
 export const VISIBILITY_STORAGE_KEY = 'bsd_dashboard_visible_v1';
 
 /** Espacio de trabajo: varios paneles de control con nombres propios (solo variant panel). */
@@ -50,6 +91,10 @@ export const DASH_WIDGET = {
   /** Trayectoria GPS desde historial de telemetría (p. ej. rastreadores LoRaWAN). */
   TRACKING_MAP: 'dw_tracking_map',
   SATISFACTION: 'dw_satisfaction',
+  /** Tanque cilíndrico con nivel según escala (misma configuración que Circular). */
+  CONTAINER: 'dw_container',
+  /** Pila vertical con nivel de carga (misma lógica que Circular). */
+  BATTERY_LEVEL: 'dw_battery_level',
   /** Medidor semicircular (temperatura, humedad, nivel, etc.). */
   METRIC_CIRCULAR: 'dw_metric_circular',
   /** Valor de telemetría solo como texto (sin gráficos). */
@@ -149,6 +194,18 @@ export function getDashboardWidgetMenuEntries() {
       category: 'charts',
     },
     {
+      id: DASH_WIDGET.CONTAINER,
+      label: 'Contenedor',
+      description: 'Tanque con nivel de llenado según telemetría (escala y rangos como Circular).',
+      category: 'charts',
+    },
+    {
+      id: DASH_WIDGET.BATTERY_LEVEL,
+      label: 'Nivel Batería',
+      description: 'Indicador tipo pila con nivel según telemetría (escala y rangos como Circular).',
+      category: 'charts',
+    },
+    {
       id: DASH_WIDGET.METRIC_CIRCULAR,
       label: 'Métrica circular',
       description: 'Medidor semicircular con aguja; puedes repetir con otro campo.',
@@ -198,6 +255,8 @@ export function defaultDashboardVisibility() {
 /** Listado de pestaña Básicos al editar widgets fijos del tablero BSD. */
 export const DASHBOARD_BASICS_WIDGET_OPTIONS = [
   { id: DASH_WIDGET.SATISFACTION, label: 'Circular Widget' },
+  { id: DASH_WIDGET.CONTAINER, label: 'Contenedor Widget' },
+  { id: DASH_WIDGET.BATTERY_LEVEL, label: 'Nivel Batería Widget' },
   { id: DASH_WIDGET.METRIC_CIRCULAR, label: 'Métrica circular Widget' },
   { id: DASH_WIDGET.TEXT, label: 'Texto Widget' },
   { id: DASH_WIDGET.SENSOR_GRID, label: 'Multi-Sensor Panel Widget' },
@@ -1253,6 +1312,8 @@ export function applyWidgetPresetToDraft(draft, presetId) {
 export function defaultWidgetConfig(sensor) {
   const pk = sensor.propertyKey || 'value';
   const isMetricCircular = pk === `__bsd_${DASH_WIDGET.METRIC_CIRCULAR}`;
+  const isContainerWidget = pk === `__bsd_${DASH_WIDGET.CONTAINER}`;
+  const isBatteryLevelWidget = pk === `__bsd_${DASH_WIDGET.BATTERY_LEVEL}`;
   const isStreamChart = pk === `__bsd_${DASH_WIDGET.STREAM}`;
   const isBarChart = pk === `__bsd_${DASH_WIDGET.BAR_CHART}`;
   const isTextWidget = pk === `__bsd_${DASH_WIDGET.TEXT}`;
@@ -1276,6 +1337,8 @@ export function defaultWidgetConfig(sensor) {
     data: {
       fieldKey:
         isMetricCircular ||
+        isContainerWidget ||
+        isBatteryLevelWidget ||
         isStreamChart ||
         isBarChart ||
         isTextWidget ||
@@ -1296,19 +1359,26 @@ export function defaultWidgetConfig(sensor) {
       ...(isBarChart
         ? { barChartTarget: '', barLegendActual: 'Actual', barLegendTarget: 'Objetivo' }
         : {}),
-      ...(isImageWidget ? { uploadedImageDataUrl: '' } : {}),
-      ...(isMapWidget ? { savedLatitude: '', savedLongitude: '' } : {}),
+      ...(isImageWidget ? { uploadedImageDataUrl: '', staticImageUrl: '' } : {}),
+      ...(isMapWidget ? { savedLatitude: '', savedLongitude: '', mapBaseLayer: 'street' } : {}),
       ...(isTrackingMapWidget
         ? {
             trackingTimeRange: 'day',
             /** Vacío = todo el payload por fila (p. ej. AT101 con latitude/longitude/history en raíz). */
             trackingTelemetryField: '',
+            mapBaseLayer: 'street',
           }
         : {}),
     },
     appearance: {
       titleColor:
-        isMetricCircular ? '#0e7490' : isBarChart || isTextWidget || isTrackingMapWidget ? '#ffffff' : '#f97316',
+        isMetricCircular || isContainerWidget
+          ? '#0e7490'
+          : isBatteryLevelWidget
+            ? '#ea580c'
+            : isBarChart || isTextWidget || isTrackingMapWidget
+              ? '#ffffff'
+              : '#f97316',
       /** Vacío = cristal BSD; `transparent` = sin tinte; o `#rrggbb` */
       widgetBackgroundColor: '',
       /** Opcional: si el valor del campo cumple la condición, sustituye temporalmente el fondo del widget. */
@@ -1320,10 +1390,15 @@ export function defaultWidgetConfig(sensor) {
       },
     },
     gauge: {
-      indicatorType: 'numeric',
+      indicatorType: isContainerWidget || isBatteryLevelWidget ? 'circular' : 'numeric',
       scaleMin: 0,
-      scaleMax: isMetricCircular ? mcScale : isTextWidget ? 100 : Math.round(baseMax * 10) / 10,
-      ranges: isMetricCircular
+      scaleMax:
+        isMetricCircular || isContainerWidget || isBatteryLevelWidget
+          ? mcScale
+          : isTextWidget
+            ? 100
+            : Math.round(baseMax * 10) / 10,
+      ranges: isMetricCircular || isContainerWidget || isBatteryLevelWidget
         ? [
             { id: 'r1', name: '', value: Math.round(mcStep * 10) / 10, color: '#22c55e' },
             { id: 'r2', name: '', value: Math.round(mcStep * 2 * 10) / 10, color: '#eab308' },
@@ -1424,8 +1499,46 @@ export function loadAllWidgetConfigs() {
  */
 export function saveWidgetConfig(storageKey, config) {
   const all = loadAllWidgetConfigs();
-  all[storageKey] = config;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(all));
+  const merged = { ...all, [storageKey]: config };
+  const sanitized = sanitizeWidgetConfigMapForStorage(merged);
+  const hadOversizedEmbed =
+    config &&
+    typeof config === 'object' &&
+    typeof config.data?.uploadedImageDataUrl === 'string' &&
+    config.data.uploadedImageDataUrl.length > MAX_WIDGET_IMAGE_DATA_URL_CHARS;
+
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(sanitized));
+  } catch (e) {
+    const isQuota =
+      (typeof DOMException !== 'undefined' && e instanceof DOMException && e.code === 22) ||
+      e?.name === 'QuotaExceededError' ||
+      e?.name === 'NS_ERROR_DOM_QUOTA_REACHED';
+    if (!isQuota) throw e;
+    const stripped = stripAllEmbeddedImagesFromConfigMap(sanitized);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(stripped));
+    } catch (e2) {
+      console.error('[saveWidgetConfig] localStorage tras vaciar imágenes embebidas', e2);
+      throw e2;
+    }
+    if (typeof window !== 'undefined' && typeof window.alert === 'function') {
+      window.alert(
+        'El almacenamiento del navegador está lleno. Se guardó la configuración quitando las imágenes incrustadas de los widgets. Para conservar una imagen use una URL https:// en «URL de la imagen» o libere espacio del sitio en la configuración del navegador.'
+      );
+    }
+    return;
+  }
+
+  if (
+    hadOversizedEmbed &&
+    typeof window !== 'undefined' &&
+    typeof window.alert === 'function'
+  ) {
+    window.alert(
+      `La imagen incrustada supera el límite seguro del navegador (${MAX_WIDGET_IMAGE_DATA_URL_CHARS.toLocaleString('es')} caracteres de texto codificado). No se guardó incrustada: reduzca píxeles o use «URL de la imagen» (https://).`
+    );
+  }
 }
 
 /**

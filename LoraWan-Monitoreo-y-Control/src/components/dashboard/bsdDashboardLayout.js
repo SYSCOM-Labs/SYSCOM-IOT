@@ -84,6 +84,8 @@ export function buildDefaultBsdGridLayout(variant, panelDevicesLen, visibilityMa
 
   const kpiIds = [
     DASH_WIDGET.SATISFACTION,
+    DASH_WIDGET.CONTAINER,
+    DASH_WIDGET.BATTERY_LEVEL,
     DASH_WIDGET.METRIC_CIRCULAR,
     DASH_WIDGET.TEXT,
   ].filter((id) => V(id));
@@ -176,6 +178,8 @@ export function buildModerateBsdGridTemplateForWidget(gridId) {
     case DASH_WIDGET.IMAGE:
       return slot({ w: 4, h: 9, minW: 3, minH: 5 });
     case DASH_WIDGET.SATISFACTION:
+    case DASH_WIDGET.CONTAINER:
+    case DASH_WIDGET.BATTERY_LEVEL:
     case DASH_WIDGET.METRIC_CIRCULAR:
     case DASH_WIDGET.TEXT:
       return slot({ w: 3, h: 9, minW: 2, minH: 5 });

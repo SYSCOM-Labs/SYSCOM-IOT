@@ -19,7 +19,7 @@
 
 .widget-edit-modal {
   width: 100%;
-  max-width: min(720px, calc(100vw - 28px));
+  max-width: min(760px, calc(100vw - 28px));
   /* Cabe en el viewport con margen; el área central hace scroll (nunca se recorta el pie) */
   max-height: min(940px, calc(100vh - 32px));
   max-height: min(940px, calc(100dvh - 32px));
@@ -41,7 +41,7 @@
 
 @media (min-width: 900px) {
   .widget-edit-modal {
-    max-width: min(760px, calc(100vw - 48px));
+    max-width: min(840px, calc(100vw - 48px));
   }
 }
 
@@ -52,6 +52,16 @@
   padding: 22px 24px 16px;
   border-bottom: 1px solid rgba(99, 102, 241, 0.22);
   flex-shrink: 0;
+}
+
+/** Vista previa + pestañas + formulario: un solo scroll dentro del modal (cabecera y pie fijos). */
+.widget-edit-modal-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .widget-edit-head h2 {
@@ -91,42 +101,81 @@
 }
 
 .widget-edit-preview-wrap {
-  margin: 14px 24px 10px;
+  margin: 16px 24px 14px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  flex-shrink: 1;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
   min-height: 0;
+  width: 100%;
 }
 
-.widget-edit-preview-heading {
+/**
+ * Vista previa cuadrada (mismo ancho y alto) para ver el widget como en el tablero.
+ * El scroll del contenido (vista previa + pestañas + campos) está en `.widget-edit-modal-scroll`.
+ */
+.widget-edit-preview {
+  box-sizing: border-box;
+  width: min(100%, min(62dvh, 560px));
+  aspect-ratio: 1 / 1;
+  height: auto;
+  flex: 0 0 auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  padding: 0 2px;
-}
-
-.widget-edit-preview-heading__title {
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #a1a1aa;
-}
-
-.widget-edit-preview-heading__hint {
-  font-size: 0.78rem;
-  line-height: 1.4;
-  color: #71717a;
-}
-
-.widget-edit-preview {
-  padding: 20px;
-  min-height: 120px;
+  overflow: hidden;
+  padding: 14px;
   background: rgba(15, 15, 26, 0.65);
   border-radius: 20px;
   border: 1px solid rgba(99, 102, 241, 0.22);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+/** La superficie cristal / tarjeta la aporta el hijo (como en el tablero); el marco solo encuadra. */
+.widget-edit-preview.widget-edit-preview--chrome-pass {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.widget-edit-preview-root {
+  width: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  border-radius: 14px;
+}
+
+.widget-edit-preview-dash-note {
+  flex: 1 1 auto;
+  min-height: 96px;
+  padding: 16px 14px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: rgba(226, 232, 240, 0.72);
+  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+body:not(.theme-dark) .widget-edit-preview-dash-note {
+  color: rgba(51, 65, 85, 0.85);
+}
+
+.widget-edit-preview .widget-edit-switch-preview,
+.widget-edit-preview .widget-edit-downlink-preview {
+  max-width: 100%;
+}
+
+.widget-edit-preview .value-indicator {
+  min-height: 0;
+  max-height: 100%;
+  overflow: auto;
 }
 
 /* —— Vista previa: Switch / Downlink (controles, no indicador numérico) —— */
@@ -138,6 +187,9 @@
   text-align: center;
   gap: 12px;
   max-width: 22rem;
+  max-height: 100%;
+  min-height: 0;
+  overflow-y: auto;
   margin: 0 auto;
 }
 
@@ -360,6 +412,9 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
 }
 
 .widget-edit-sensor-grid-preview__head {
@@ -391,6 +446,8 @@
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 @media (min-width: 520px) {
@@ -578,12 +635,8 @@
 
 .widget-edit-body {
   padding: 20px 24px;
-  overflow-y: auto;
-  overflow-x: hidden;
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-height: 0;
-  overscroll-behavior: contain;
-  -webkit-overflow-scrolling: touch;
 }
 
 .widget-edit-fields {
@@ -1251,14 +1304,6 @@ body:not(.theme-dark) .widget-edit-close:hover {
   border-color: rgba(99, 102, 241, 0.45);
 }
 
-body:not(.theme-dark) .widget-edit-preview-heading__title {
-  color: #52525b;
-}
-
-body:not(.theme-dark) .widget-edit-preview-heading__hint {
-  color: #64748b;
-}
-
 body:not(.theme-dark) .widget-edit-preview {
   background: linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
   border-color: rgba(99, 102, 241, 0.2);
@@ -1606,7 +1651,7 @@ body:not(.theme-dark) .widget-edit-field-list::-webkit-scrollbar-thumb {
   color: #fff;
 }
 
-/* Widget Imagen (tablero): vista previa y pestaña Datos */
+/* Widget Imagen (tablero): vista previa y origen en Básicos */
 .widget-edit-file-input-hidden {
   position: absolute;
   width: 0;
@@ -1676,8 +1721,11 @@ body:not(.theme-dark) .widget-edit-field-list::-webkit-scrollbar-thumb {
 .widget-edit-image-dash-preview {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  min-height: 200px;
+  gap: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
 }
 
 .widget-edit-image-dash-preview__head {
@@ -1696,8 +1744,9 @@ body:not(.theme-dark) .widget-edit-field-list::-webkit-scrollbar-thumb {
 }
 
 .widget-edit-image-dash-preview__frame {
-  flex: 1;
-  min-height: 180px;
+  flex: 1 1 auto;
+  min-height: 120px;
+  max-height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1710,7 +1759,7 @@ body:not(.theme-dark) .widget-edit-field-list::-webkit-scrollbar-thumb {
 
 .widget-edit-image-dash-preview__img {
   max-width: 100%;
-  max-height: min(320px, 48vh);
+  max-height: 100%;
   width: auto;
   height: auto;
   object-fit: contain;
@@ -1763,14 +1812,19 @@ body:not(.theme-dark) .widget-edit-image-dash-preview__empty {
 
 .widget-edit-map-dash-preview__frame {
   padding: 0;
-  min-height: 200px;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 
 .widget-edit-map-dash-preview__iframe {
   display: block;
   width: 100%;
-  min-height: 200px;
-  height: 220px;
+  flex: 1 1 auto;
+  min-height: 180px;
+  max-height: 100%;
   border: 0;
   background: #1a1a2e;
   border-radius: 14px;

@@ -9,6 +9,7 @@ import {
   BSD_VALUE_WIDGETS_STORAGE_KEY,
   loadDashboardVisibility,
   dashboardWidgetConfigNamespace,
+  VISIBILITY_STORAGE_KEY,
 } from '../components/dashboard/widgetConfigUtils';
 import { dashboardGridLayoutStorageKey, readStoredBsdGridLayout } from '../components/dashboard/bsdDashboardLayout';
 
@@ -42,10 +43,48 @@ export function collectPanelBsdBundle(panelOwnerSegment, panelInstanceId) {
 }
 
 /**
+ * Borra en localStorage widgets, rejilla y visibilidad de un panel (no borra `main` por seguridad).
  * @param {string | null | undefined} panelOwnerSegment
  * @param {string | null | undefined} panelInstanceId
- * @param {Record<string, unknown> | null | undefined} bundle
  */
+export function purgePanelInstanceStorage(panelOwnerSegment, panelInstanceId) {
+  if (typeof localStorage === 'undefined') return;
+  const pid = panelInstanceId != null && String(panelInstanceId).trim() ? String(panelInstanceId).trim() : 'main';
+  if (pid === 'main') return;
+  const segRaw = panelOwnerSegment != null && String(panelOwnerSegment).trim() ? String(panelOwnerSegment).trim() : '';
+  const segForNs = segRaw || null;
+  const ns = dashboardWidgetConfigNamespace('panel', null, pid, segForNs);
+  const prefix = `panel|${ns}|`;
+  try {
+    const all = loadAllWidgetConfigs();
+    const next = { ...all };
+    for (const k of Object.keys(next)) {
+      if (String(k).startsWith(prefix)) delete next[k];
+    }
+    localStorage.setItem(BSD_VALUE_WIDGETS_STORAGE_KEY, JSON.stringify(next));
+  } catch {
+    /* ignore */
+  }
+  try {
+    const gridKey = dashboardGridLayoutStorageKey('panel', null, pid, segRaw || undefined);
+    localStorage.removeItem(gridKey);
+  } catch {
+    /* ignore */
+  }
+  try {
+    const raw = localStorage.getItem(VISIBILITY_STORAGE_KEY);
+    if (!raw) return;
+    const root = JSON.parse(raw);
+    if (segRaw) {
+      delete root[`panel:${segRaw}:${pid}`];
+    }
+    delete root[`panel:${pid}`];
+    localStorage.setItem(VISIBILITY_STORAGE_KEY, JSON.stringify(root));
+  } catch {
+    /* ignore */
+  }
+}
+
 export function applyPanelBsdBundle(panelOwnerSegment, panelInstanceId, bundle) {
   if (typeof localStorage === 'undefined' || !bundle || typeof bundle !== 'object') return;
   const pid = panelInstanceId != null && String(panelInstanceId).trim() ? String(panelInstanceId).trim() : 'main';

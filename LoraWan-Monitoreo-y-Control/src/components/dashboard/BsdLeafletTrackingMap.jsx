@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+import { createLeafletBaseTileLayer, normalizeMapBaseLayerId } from './mapWidgetLayers';
 
 const LAST_PIN_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="34" height="44" viewBox="0 0 24 32" aria-hidden="true">
   <path d="M12 2C7.58 2 4 5.58 4 10c0 6.5 8 14 8 14s8-7.5 8-14c0-4.42-3.58-8-8-8z" fill="#0ea5e9" stroke="#0369a1" stroke-width="1.1"/>
@@ -17,7 +18,7 @@ function makeLastPositionIcon() {
 }
 
 /** Abre Google Maps en modo Street View (si hay cobertura en esa ubicación). */
-export function googleStreetViewMapsUrl(lat, lng) {
+function googleStreetViewMapsUrl(lat, lng) {
   const la = Number(lat);
   const ln = Number(lng);
   if (!Number.isFinite(la) || !Number.isFinite(ln)) return 'https://www.google.com/maps';
@@ -74,21 +75,24 @@ function buildTrackingPointPopupEl(p, index, total) {
  * y pin decorativo en la última posición (no interactivo para no tapar el círculo).
  * @param {{ lat: number; lng: number; ts?: number }[]} latLngs
  * @param {string} [className]
+ * @param {string} [baseLayerId] id lógico de capa (`street`, `satellite`, …)
  */
-export default function BsdLeafletTrackingMap({ latLngs, className }) {
+export default function BsdLeafletTrackingMap({ latLngs, className, baseLayerId = 'street' }) {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
   const overlayRef = useRef(null);
+  const tileRef = useRef(null);
+  const baseLayerSwapReadyRef = useRef(false);
 
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return undefined;
     const map = L.map(el, { zoomControl: true, preferCanvas: true }).setView([20, 0], 2);
     mapRef.current = map;
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      maxZoom: 19,
-    }).addTo(map);
+    const tl = createLeafletBaseTileLayer(L, baseLayerId);
+    tileRef.current = tl;
+    tl.addTo(map);
+    baseLayerSwapReadyRef.current = false;
     const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(() => map.invalidateSize()) : null;
     if (ro) ro.observe(el);
     return () => {
@@ -96,8 +100,28 @@ export default function BsdLeafletTrackingMap({ latLngs, className }) {
       map.remove();
       mapRef.current = null;
       overlayRef.current = null;
+      tileRef.current = null;
+      baseLayerSwapReadyRef.current = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mapa Leaflet: init único; capa y trayectoria en otros effects
   }, []);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    if (!baseLayerSwapReadyRef.current) {
+      baseLayerSwapReadyRef.current = true;
+      return;
+    }
+    const nextId = normalizeMapBaseLayerId(baseLayerId);
+    if (tileRef.current) {
+      map.removeLayer(tileRef.current);
+      tileRef.current = null;
+    }
+    const tl = createLeafletBaseTileLayer(L, nextId);
+    tileRef.current = tl;
+    tl.addTo(map);
+  }, [baseLayerId]);
 
   useEffect(() => {
     const map = mapRef.current;

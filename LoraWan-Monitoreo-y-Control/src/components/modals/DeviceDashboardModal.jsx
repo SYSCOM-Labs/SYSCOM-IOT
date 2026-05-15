@@ -9,7 +9,8 @@ import BudgetSensorsDashboard from '../dashboard/BudgetSensorsDashboard';
 import './DeviceDashboardModal.css';
 
 /**
- * Vista detalle dispositivo: mismo dashboard premium que el Panel, con datos del equipo.
+ * Vista detalle dispositivo: mismo `BudgetSensorsDashboard` que Panel Control (`variant="panel"`),
+ * con `variant="device"` y datos del equipo; no es un tablero duplicado.
  */
 const DeviceDashboardModal = ({ device: initialDevice, onClose }) => {
   const { credentials, token } = useAuth();

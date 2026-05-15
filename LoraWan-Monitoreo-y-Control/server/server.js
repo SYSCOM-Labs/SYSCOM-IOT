@@ -2897,11 +2897,43 @@ app.post('/api/devices/assign', authMiddleware, (req, res) => {
   res.status(prevA ? 200 : 201).json({ ok: true, userDevice: row });
 });
 
+/**
+ * Borrado definitivo del equipo en SQLite: telemetría, **todas** las asignaciones (incl. superadmin), decode, licencia, etc.
+ * Para solo quitar el vínculo de una cuenta: `DELETE /api/user-devices/:deviceId` o `DELETE /api/users/:userId/devices/:deviceId`.
+ */
 app.delete('/api/devices/:deviceId/permanent', authMiddleware, superAdminOnlyMiddleware, (req, res) => {
   const did = decodeURIComponent(req.params.deviceId || '').trim();
   if (!did) return res.status(400).json({ error: 'deviceId requerido' });
   store.purgeDeviceGlobally(did);
   res.json({ ok: true });
+});
+
+/**
+ * Quita la asignación de un dispositivo a **un usuario concreto** (etiquetas/tablero BSD solo de esa cuenta).
+ * No borra telemetría global, decode-config, presets compartidos ni licencia; el superadmin u otros asignados conservan su vínculo.
+ * Permisos: `superadmin`, o usuario con módulos Usuarios + Dispositivos y objetivo descendiente en la jerarquía (`created_by`).
+ */
+app.delete('/api/users/:targetUserId/devices/:deviceId', authMiddleware, (req, res) => {
+  const actor = store.getUserById(req.user.id);
+  if (!actor) return res.status(401).json({ error: 'Usuario no encontrado' });
+  const targetUserId = decodeURIComponent(String(req.params.targetUserId || '').trim());
+  const did = decodeURIComponent(String(req.params.deviceId || '').trim());
+  if (!targetUserId || !did) {
+    return res.status(400).json({ error: 'targetUserId y deviceId requeridos' });
+  }
+  const canUnassignOther =
+    actor.role === 'superadmin' ||
+    (navPerm.userHasNav(actor, 'Users') &&
+      navPerm.userHasNav(actor, 'Devices') &&
+      store.isUserDescendantOf(req.user.id, targetUserId));
+  if (!canUnassignOther) {
+    return res.status(403).json({ error: 'Sin permiso para quitar este dispositivo a ese usuario' });
+  }
+  if (!store.getUserDevice(targetUserId, did)) {
+    return res.status(404).json({ error: 'El usuario no tiene este dispositivo asignado' });
+  }
+  store.deleteUserDevice(targetUserId, did);
+  res.json({ ok: true, unassignedUserId: targetUserId, deviceId: did });
 });
 
 app.get('/api/user-devices', authMiddleware, (req, res) => {
@@ -3228,6 +3260,7 @@ app.patch(
   }
 );
 
+/** Solo quita el vínculo del JWT actual (`user_devices` + etiquetas/tab BSD de esa cuenta); no afecta a otros asignados. */
 app.delete(
   '/api/user-devices/:deviceId',
   authMiddleware,

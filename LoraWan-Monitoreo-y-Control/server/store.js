@@ -773,6 +773,7 @@ class Store {
         VALUES (?, ?, ?, ?, ?, ?)
       `),
       lgwDelete: this.db.prepare('DELETE FROM lorawan_gateways WHERE id = ? AND user_id = ?'),
+      lgwDeleteAllForUser: this.db.prepare('DELETE FROM lorawan_gateways WHERE user_id = ?'),
       lgwExists: this.db.prepare(
         'SELECT 1 FROM lorawan_gateways WHERE user_id = ? AND lower(gateway_eui) = lower(?)'
       ),
@@ -1004,6 +1005,7 @@ class Store {
       `),
       dspDelete: this.db.prepare('DELETE FROM device_shared_presets WHERE device_id = ?'),
       udDelete: this.db.prepare('DELETE FROM user_devices WHERE user_id = ? AND device_id = ?'),
+      udDeleteAllForUser: this.db.prepare('DELETE FROM user_devices WHERE user_id = ?'),
       udUserIdsForDevice: this.db.prepare(
         'SELECT DISTINCT user_id FROM user_devices WHERE device_id = ?'
       ),
@@ -1033,6 +1035,7 @@ class Store {
         LIMIT 1
       `),
       labelsAll: this.db.prepare('SELECT user_id, device_id, display_name FROM device_labels'),
+      labelsDeleteAllForUser: this.db.prepare('DELETE FROM device_labels WHERE user_id = ?'),
       arList: this.db.prepare('SELECT rule_id, payload_json FROM automation_rules WHERE user_id = ?'),
       arDeleteUser: this.db.prepare('DELETE FROM automation_rules WHERE user_id = ?'),
       arInsert: this.db.prepare(
@@ -1044,6 +1047,7 @@ class Store {
       dlList: this.db.prepare(
         'SELECT id, user_id, created_at, body_json FROM downlink_log WHERE user_id = ? ORDER BY created_at DESC LIMIT ?'
       ),
+      dlDeleteAllForUser: this.db.prepare('DELETE FROM downlink_log WHERE user_id = ?'),
       ddGet: this.db.prepare(
         'SELECT widgets_json FROM device_dashboard WHERE user_id = ? AND device_id = ?'
       ),
@@ -1051,10 +1055,13 @@ class Store {
         INSERT OR REPLACE INTO device_dashboard (user_id, device_id, widgets_json, updated_at)
         VALUES (?, ?, ?, ?)
       `),
+      ddDeleteAllForUser: this.db.prepare('DELETE FROM device_dashboard WHERE user_id = ?'),
       telemetryDeleteByDevice: this.db.prepare('DELETE FROM telemetry WHERE device_id = ?'),
       udDeleteAllForDevice: this.db.prepare('DELETE FROM user_devices WHERE device_id = ?'),
       labelsDeleteByDevice: this.db.prepare('DELETE FROM device_labels WHERE device_id = ?'),
+      labelsDeleteForUserDevice: this.db.prepare('DELETE FROM device_labels WHERE user_id = ? AND device_id = ?'),
       ddDeleteByDevice: this.db.prepare('DELETE FROM device_dashboard WHERE device_id = ?'),
+      ddDeleteForUserDevice: this.db.prepare('DELETE FROM device_dashboard WHERE user_id = ? AND device_id = ?'),
       bsdPrefGet: this.db.prepare(
         'SELECT prefs_json, updated_at FROM device_bsd_preferences WHERE user_id = ? AND device_id = ?'
       ),
@@ -1066,6 +1073,7 @@ class Store {
       bsdPrefDeleteUserDevice: this.db.prepare(
         'DELETE FROM device_bsd_preferences WHERE user_id = ? AND device_id = ?'
       ),
+      bsdPrefDeleteAllForUser: this.db.prepare('DELETE FROM device_bsd_preferences WHERE user_id = ?'),
       bsdPrefDeleteNonSuperForDevice: this.db.prepare(`
         DELETE FROM device_bsd_preferences
         WHERE device_id = ?
@@ -1381,7 +1389,15 @@ class Store {
   }
 
   deleteUserById(id) {
-    this.st.deleteUser.run(id);
+    const uid = String(id || '').trim();
+    if (!uid) return;
+    this.deleteAllDeviceScopedDataForUser(uid);
+    try {
+      this.st.arDeleteUser.run(uid);
+    } catch {
+      /* ignore */
+    }
+    this.st.deleteUser.run(uid);
   }
 
   /**
@@ -1651,6 +1667,7 @@ class Store {
     );
   }
 
+  /** Solo borra la fila del gateway del usuario indicado (`id` + `user_id`); no modifica gateways de otras cuentas. */
   deleteLorawanGateway(userId, id) {
     const info = this.st.lgwDelete.run(id, userId);
     return Number(info.changes || 0) > 0;
@@ -2788,13 +2805,63 @@ class Store {
     const did = String(deviceId);
     this.st.udDelete.run(uid, did);
     try {
+      this.st.labelsDeleteForUserDevice.run(uid, did);
+    } catch {
+      /* ignore */
+    }
+    try {
+      this.st.ddDeleteForUserDevice.run(uid, did);
+    } catch {
+      /* ignore */
+    }
+    try {
       this.st.bsdPrefDeleteUserDevice.run(uid, did);
     } catch {
       /* tabla puede no existir en DB muy antigua */
     }
   }
 
-  /** Elimina el dispositivo de toda la base (telemetría, asignaciones, etiquetas, dashboards). */
+  /**
+   * Quita filas de dispositivo/tablas asociadas al usuario sin tocar otros usuarios ni datos globales del equipo
+   * (decode-config, presets compartidos, licencia, telemetría de otros).
+   * Útil antes de borrar la cuenta de usuario para no dejar `user_devices` huérfanos.
+   */
+  deleteAllDeviceScopedDataForUser(userId) {
+    const uid = String(userId || '').trim();
+    if (!uid) return;
+    try {
+      this.st.udDeleteAllForUser.run(uid);
+    } catch {
+      /* ignore */
+    }
+    try {
+      this.st.labelsDeleteAllForUser.run(uid);
+    } catch {
+      /* ignore */
+    }
+    try {
+      this.st.ddDeleteAllForUser.run(uid);
+    } catch {
+      /* ignore */
+    }
+    try {
+      this.st.bsdPrefDeleteAllForUser.run(uid);
+    } catch {
+      /* ignore */
+    }
+    try {
+      this.st.lgwDeleteAllForUser.run(uid);
+    } catch {
+      /* ignore */
+    }
+    try {
+      this.st.dlDeleteAllForUser.run(uid);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Elimina el dispositivo de toda la base (telemetría, asignaciones de todos los usuarios, etiquetas, dashboards, decode, licencia). */
   purgeDeviceGlobally(deviceId) {
     const did = String(deviceId);
     this.db.exec('BEGIN IMMEDIATE');

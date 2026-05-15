@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { X, Check, Image, MapPin, Route } from 'lucide-react';
 import ValueIndicator from './ValueIndicator';
 import { normalizeIndicatorType } from './valueIndicatorUtils';
@@ -30,17 +30,39 @@ import {
   normalizeStreamSeriesConfig,
   resolveTextWidgetRawScalar,
   dashboardWidgetBaseId,
+  MAX_WIDGET_IMAGE_DATA_URL_CHARS,
 } from './widgetConfigUtils';
 import { tryTelemetryDisplayLabel } from '../../utils/telemetryDisplayFormat';
 import { resolveMapCoords, openStreetMapEmbedUrl, toFloatCoord } from './mapWidgetCoords';
 import {
   PROPERTY_INFER_IGNORE_SET,
+  expandNestedGatewayTelemetry,
   isLikelyLorawanNetworkMetadataKey,
   sortTelemetryPickerKeys,
+  parseTelemetryScalar,
 } from '../../utils/gatewayPayload';
+import { fetchDeviceProperties } from '../../services/api';
 import './WidgetEditModal.css';
-import { useTheme } from '../../context/ThemeContext';
-import { applyWidgetFormula } from '../../utils/widgetFormula';
+import { applyWidgetFormula, transformWidgetNumeric } from '../../utils/widgetFormula';
+import {
+  BSD_CIRCULAR_GAUGE_R,
+  BSD_CIRCULAR_GAUGE_LEN,
+  MC_CX,
+  MC_CY,
+  MC_R,
+  MC_ARC_START,
+  MC_ARC_SWEEP,
+  MC_ARC_PATH_D,
+  MC_ARC_GEOM_LEN,
+  mcPoint,
+  buildMetricCircularTicksFromUi,
+  computeMetricCircularUi,
+  computeSatisfactionRingUi,
+  computeContainerTankUi,
+  computeBatteryLevelUi,
+} from './metricCircularUi';
+import BsdContainerTankView from './BsdContainerTankView';
+import BsdBatteryLevelView from './BsdBatteryLevelView';
 
 const MODAL_TELEMETRY_IGNORE = new Set([...PROPERTY_INFER_IGNORE_SET]);
 
@@ -75,6 +97,44 @@ function parseLiveNumber(val) {
   return null;
 }
 
+function modalTelemetryTsToMs(ts) {
+  if (ts == null) return null;
+  if (typeof ts === 'number' && Number.isFinite(ts)) return ts;
+  const n = new Date(ts).getTime();
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Igual que en el tablero: lecturas bajo `properties` visibles en el plano raíz. */
+function modalHoistTelemetryPropertiesLayer(src) {
+  if (!src || typeof src !== 'object' || Array.isArray(src)) return src;
+  const out = { ...src };
+  const nest = out.properties;
+  if (nest && typeof nest === 'object' && !Array.isArray(nest)) {
+    for (const [k, v] of Object.entries(nest)) {
+      const has = Object.prototype.hasOwnProperty.call(out, k);
+      if (
+        (!has || out[k] === undefined || out[k] === null) &&
+        v !== undefined &&
+        v !== null &&
+        !(typeof v === 'string' && !String(v).trim()) &&
+        !(typeof v === 'object' && !Array.isArray(v) && Object.keys(v).length === 0)
+      ) {
+        out[k] = v;
+      }
+    }
+  }
+  return out;
+}
+
+/** Último estado persistido (API) listo para mezclar con telemetría en memoria en la vista previa. */
+function normalizeStoredPropertiesForModalPreview(apiData, propertiesRaw) {
+  const props =
+    propertiesRaw && typeof propertiesRaw === 'object' && !Array.isArray(propertiesRaw) ? { ...propertiesRaw } : {};
+  const ts = modalTelemetryTsToMs(apiData?.lastTimestamp ?? apiData?.lastUpdateTime);
+  if (ts != null) props.lastUpdateTime = ts;
+  return expandNestedGatewayTelemetry(modalHoistTelemetryPropertiesLayer(props));
+}
+
 const TRANSLATION_LANGS = [
   { value: 'es', label: 'Español' },
   { value: 'en', label: 'inglés' },
@@ -102,6 +162,71 @@ function deepClone(c) {
   return JSON.parse(JSON.stringify(c));
 }
 
+/** Clave de telemetría de entrada para la fórmula (misma regla que el tablero). */
+function telemetryFieldKeyForFormulaModal(cfg, defaultKey) {
+  const fs = cfg?.data?.formulaSourceKey != null ? String(cfg.data.formulaSourceKey).trim() : '';
+  return fs || String(defaultKey ?? '').trim();
+}
+
+function formatModalLastUpdateLine(ts) {
+  if (ts == null) return '';
+  const n = typeof ts === 'number' ? ts : new Date(ts).getTime();
+  if (!Number.isFinite(n)) return '';
+  return `Última actualización: ${new Date(n).toLocaleString()}`;
+}
+
+/** Texto del widget «Texto» en la vista previa (misma lógica que `computeTextWidgetUiForSlot` del tablero). */
+function computeModalTextWidgetUi(liveProps, draft, liveDeviceModel, telemetryHintMap) {
+  const fkRaw = draft?.data?.fieldKey;
+  const fkStr = fkRaw != null ? String(fkRaw).trim() : '';
+  const readFk = telemetryFieldKeyForFormulaModal(draft, fkStr);
+  const rawScalar =
+    liveProps && typeof liveProps === 'object' && !Array.isArray(liveProps)
+      ? resolveTextWidgetRawScalar(liveProps, readFk, draft)
+      : undefined;
+  const useLive = Boolean(readFk) && !readFk.startsWith('__bsd_') && rawScalar !== undefined;
+  const raw = useLive ? rawScalar : undefined;
+  const decRaw = draft?.data?.decimals;
+  const dec =
+    decRaw != null && decRaw !== '' && Number.isFinite(Number(decRaw))
+      ? Math.min(20, Math.max(0, Number(decRaw)))
+      : 2;
+  const unit = draft?.data?.unit != null ? String(draft.data.unit) : '';
+  const lastAtLine = formatModalLastUpdateLine(liveProps?.lastUpdateTime);
+  const formulaActive =
+    Boolean(draft?.data?.formulaEnabled) && String(draft?.data?.formulaExpression ?? '').trim() !== '';
+
+  if (raw === undefined || raw === null) {
+    const hint = !fkStr || fkStr.startsWith('__bsd_') ? 'Configura el campo en edición' : 'Sin dato en vivo';
+    return { display: '—', hint, lastAtLine };
+  }
+  const friendly = formulaActive
+    ? null
+    : tryTelemetryDisplayLabel(liveDeviceModel, fkStr, raw, telemetryHintMap);
+  if (friendly != null && String(friendly).trim()) {
+    return { display: String(friendly).trim(), hint: fkStr, lastAtLine };
+  }
+  const n = parseTelemetryScalar(raw);
+  if (n !== null && Number.isFinite(n)) {
+    const nd = transformWidgetNumeric(draft, n);
+    return { display: `${nd.toFixed(dec)}${unit ? ` ${unit}` : ''}`.trim(), hint: fkStr, lastAtLine };
+  }
+  if (typeof raw === 'boolean') return { display: raw ? 'Sí' : 'No', hint: fkStr, lastAtLine };
+  if (typeof raw === 'object') {
+    try {
+      return { display: JSON.stringify(raw), hint: fkStr, lastAtLine };
+    } catch {
+      return { display: String(raw), hint: fkStr, lastAtLine };
+    }
+  }
+  const s = String(raw).trim();
+  return { display: s.length ? s : '—', hint: fkStr, lastAtLine };
+}
+
+function shellClassName(clear) {
+  return ['widget-edit-preview-root', clear ? 'bsd-widget-surface--clear' : ''].filter(Boolean).join(' ');
+}
+
 const GRID_PREVIEW_FALLBACK = [
   { label: 'Temperatura', value: 23.2, unitFb: '°C' },
   { label: 'Humedad', value: 55, unitFb: '%' },
@@ -113,10 +238,8 @@ const GRID_PREVIEW_FALLBACK = [
 function SensorGridWidgetPreview({
   draft,
   indicatorSelectValue,
-  previewSubtitle,
   liveProps,
   availableDataFields,
-  sensorTitleFallback,
   previewTheme = 'dark',
 }) {
   const demos = useMemo(() => {
@@ -148,21 +271,11 @@ function SensorGridWidgetPreview({
   const scaleMax = Number(draft.gauge?.scaleMax) || 50;
   const ranges = draft.gauge?.ranges || [];
   const titleColor = draft.appearance?.titleColor || '#f97316';
-  const gridTitle = draft.basics?.title || sensorTitleFallback || 'Cuadrícula de sensores';
   const indType = normalizeIndicatorType(indicatorSelectValue);
   const useNumeric = indType === 'numeric';
 
   return (
     <div className="widget-edit-sensor-grid-preview">
-      <div className="widget-edit-sensor-grid-preview__head">
-        <div className="widget-edit-sensor-grid-preview__title" style={{ color: titleColor }}>
-          {gridTitle}
-        </div>
-        <div className="widget-edit-sensor-grid-preview__sub">{previewSubtitle}</div>
-        <p className="widget-edit-sensor-grid-preview__hint">
-          Vista de ejemplo: cada sensor del dispositivo tendrá su tarjeta con este tipo de indicador, colores y escala.
-        </p>
-      </div>
       <div className="widget-edit-sensor-grid-preview__grid">
         {demos.map((d) => {
           const accent = colorForValueInRanges(d.value, ranges, scaleMin, scaleMax);
@@ -215,24 +328,14 @@ function SensorGridWidgetPreview({
 }
 
 /** Vista previa del control Switch (downlinks ON/OFF), sin confundir con un sensor numérico. */
-function SwitchWidgetPreview({ draft, previewSubtitle, downlinkSelectState, titleColor }) {
+function SwitchWidgetPreview({ downlinkSelectState }) {
   const [demoOn, setDemoOn] = useState(false);
-  const title = (draft.basics?.title || '').trim() || 'Switch';
-  const tc = titleColor || '#22d3ee';
   const { dlList, swOnN, swOffN } = downlinkSelectState;
   const onLine = resolveSwitchHexLine(dlList, swOnN);
   const offLine = resolveSwitchHexLine(dlList, swOffN);
 
   return (
     <div className="widget-edit-switch-preview">
-      <div className="widget-edit-switch-preview__title" style={{ color: tc }}>
-        {title}
-      </div>
-      <div className="widget-edit-switch-preview__sub">{previewSubtitle}</div>
-      <p className="widget-edit-switch-preview__desc">
-        En el tablero, cada cambio envía por LoRaWAN el downlink configurado en <strong>Datos</strong> (comandos de la
-        plantilla guardados en el dispositivo).
-      </p>
       <ul className="widget-edit-switch-preview__cmds">
         <li>
           <span className="widget-edit-switch-preview__tag">ON</span> {onLine}
@@ -250,16 +353,12 @@ function SwitchWidgetPreview({ draft, previewSubtitle, downlinkSelectState, titl
         <span className="widget-edit-switch-preview__knob" aria-hidden />
         <span className="widget-edit-switch-preview__label">{demoOn ? 'ON' : 'OFF'}</span>
       </button>
-      <p className="widget-edit-switch-preview__note">
-        Simulación visual: no envía comandos hasta usar el tablero tras guardar.
-      </p>
     </div>
   );
 }
 
 /** Vista previa de los botones de downlink del panel (solo maquetación). */
-function DownlinkWidgetPreview({ draft, previewSubtitle, downlinkSelectState }) {
-  const title = (draft.basics?.title || '').trim() || 'Downlink';
+function DownlinkWidgetPreview({ draft, downlinkSelectState }) {
   const tc = draft.appearance?.titleColor || '#818cf8';
   const { dlList, downlinkButtons } = downlinkSelectState;
   const rows = (downlinkButtons || [])
@@ -279,14 +378,6 @@ function DownlinkWidgetPreview({ draft, previewSubtitle, downlinkSelectState }) 
 
   return (
     <div className="widget-edit-downlink-preview">
-      <div className="widget-edit-switch-preview__title" style={{ color: tc }}>
-        {title}
-      </div>
-      <div className="widget-edit-switch-preview__sub">{previewSubtitle}</div>
-      <p className="widget-edit-switch-preview__desc">
-        Cada botón del tablero envía un comando de la plantilla del dispositivo. Lista en <strong>Datos</strong>; color
-        de fondo en <strong>Apariencia</strong>.
-      </p>
       {rows.length === 0 ? (
         <p className="widget-edit-switch-preview__desc">Añade al menos un comando con HEX válido en Datos.</p>
       ) : (
@@ -314,14 +405,128 @@ function DownlinkWidgetPreview({ draft, previewSubtitle, downlinkSelectState }) 
           })}
         </div>
       )}
-      <p className="widget-edit-switch-preview__note">Vista previa: el envío real ocurre solo en el tablero.</p>
     </div>
   );
 }
 
+const MAX_IMAGE_UPLOAD_BYTES = 2_500_000;
+const IMAGE_RESCALE_MAX_EDGE = 1400;
+const IMAGE_JPEG_QUALITY = 0.82;
+
+function isEmbeddedImageDataUrl(value) {
+  return typeof value === 'string' && /^data:image\//i.test(value.trim());
+}
+
+function isLikelyRasterImageFile(file) {
+  if (!file || typeof file !== 'object') return false;
+  const t = typeof file.type === 'string' ? file.type.trim().toLowerCase() : '';
+  if (t.startsWith('image/')) return true;
+  const n = typeof file.name === 'string' ? file.name : '';
+  return /\.(png|jpe?g|gif|webp|bmp|avif|heic|heif)$/i.test(n);
+}
+
+/** Clona el borrador tocando solo `data` (sin `JSON.stringify` completo: evita fallos con PNG/data URL grandes). */
+function draftWithDataPatch(d, patch) {
+  if (!d || typeof d !== 'object') return d;
+  const data = d.data && typeof d.data === 'object' ? d.data : {};
+  return {
+    ...d,
+    basics: d.basics && typeof d.basics === 'object' ? { ...d.basics } : {},
+    appearance:
+      d.appearance && typeof d.appearance === 'object'
+        ? {
+            ...d.appearance,
+            conditionalBackground:
+              d.appearance.conditionalBackground && typeof d.appearance.conditionalBackground === 'object'
+                ? { ...d.appearance.conditionalBackground }
+                : {},
+          }
+        : {},
+    data: { ...data, ...patch },
+    gauge:
+      d.gauge && typeof d.gauge === 'object'
+        ? {
+            ...d.gauge,
+            ranges: Array.isArray(d.gauge.ranges) ? d.gauge.ranges.map((r) => ({ ...r })) : d.gauge.ranges || [],
+          }
+        : {},
+    timeframe: d.timeframe && typeof d.timeframe === 'object' ? { ...d.timeframe } : {},
+  };
+}
+
+/** Codifica la imagen como JPEG en data URL y reduce tamaño hasta caber en `maxChars` (longitud de texto, no KB del archivo). */
+function jpegDataUrlFromImage(img, maxEdgePx, quality) {
+  const w0 = img.naturalWidth || img.width;
+  const h0 = img.naturalHeight || img.height;
+  if (!w0 || !h0) return null;
+  const scale = Math.min(1, maxEdgePx / Math.max(w0, h0));
+  const tw = Math.max(1, Math.round(w0 * scale));
+  const th = Math.max(1, Math.round(h0 * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = tw;
+  canvas.height = th;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+  try {
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, tw, th);
+    ctx.drawImage(img, 0, 0, tw, th);
+    return canvas.toDataURL('image/jpeg', quality);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Reduce la imagen incrustada para `localStorage`.
+ * El límite es la longitud del string `data:image/...` (base64), que suele ser ~30–40 % mayor que el peso en disco del PNG.
+ */
+async function compressImageDataUrlForStorage(dataUrl) {
+  try {
+    if (typeof document === 'undefined' || typeof Image === 'undefined') return dataUrl;
+    if (typeof dataUrl !== 'string' || !isEmbeddedImageDataUrl(dataUrl)) return dataUrl;
+    const trimmed = dataUrl.trim();
+    const maxChars = MAX_WIDGET_IMAGE_DATA_URL_CHARS;
+    if (trimmed.length <= maxChars) return trimmed;
+
+    const img = await new Promise((resolve, reject) => {
+      const el = new Image();
+      el.onload = () => resolve(el);
+      el.onerror = () => reject(new Error('image-decode'));
+      el.src = trimmed;
+    });
+
+    const qualities = [IMAGE_JPEG_QUALITY, 0.72, 0.62, 0.52, 0.42, 0.32, 0.24, 0.18, 0.14];
+    let best = trimmed;
+    let bestLen = trimmed.length;
+    let maxEdge = IMAGE_RESCALE_MAX_EDGE;
+
+    while (maxEdge >= 64) {
+      for (const q of qualities) {
+        const candidate = jpegDataUrlFromImage(img, maxEdge, q);
+        if (!candidate) continue;
+        if (candidate.length <= maxChars) return candidate;
+        if (candidate.length < bestLen) {
+          best = candidate;
+          bestLen = candidate.length;
+        }
+      }
+      maxEdge = Math.floor(maxEdge * 0.75);
+    }
+    return best;
+  } catch {
+    return typeof dataUrl === 'string' ? dataUrl.trim() : dataUrl;
+  }
+}
+
 function resolveDraftImageUrl(draft, liveProps) {
   const u = draft?.data?.uploadedImageDataUrl;
-  if (typeof u === 'string' && u.startsWith('data:image/')) return u;
+  if (isEmbeddedImageDataUrl(u)) return String(u).trim();
+  const staticUrl = draft?.data?.staticImageUrl;
+  if (typeof staticUrl === 'string' && staticUrl.trim()) {
+    const s = staticUrl.trim();
+    if (/^https?:\/\//i.test(s) || isEmbeddedImageDataUrl(s)) return s;
+  }
   const fk = draft?.data?.fieldKey;
   if (
     fk &&
@@ -332,31 +537,23 @@ function resolveDraftImageUrl(draft, liveProps) {
     liveProps[fk] != null
   ) {
     const s = String(liveProps[fk]).trim();
-    if (/^https?:\/\//i.test(s) || s.startsWith('data:image/')) return s;
+    if (/^https?:\/\//i.test(s) || isEmbeddedImageDataUrl(s)) return s;
   }
   return null;
 }
 
 /** Vista previa del widget Imagen del tablero (solo imagen centrada). */
-function ImageWidgetPreview({ draft, liveProps, previewSubtitle, titleColor }) {
+function ImageWidgetPreview({ draft, liveProps }) {
   const url = useMemo(() => resolveDraftImageUrl(draft, liveProps), [draft, liveProps]);
-  const title = (draft?.basics?.title || 'Imagen').trim() || 'Imagen';
-  const tc = titleColor || '#f97316';
   return (
     <div className="widget-edit-image-dash-preview">
-      <div className="widget-edit-image-dash-preview__head">
-        <div className="widget-edit-image-dash-preview__title" style={{ color: tc }}>
-          {title}
-        </div>
-        <div className="widget-edit-image-dash-preview__sub">{previewSubtitle}</div>
-      </div>
       <div className="widget-edit-image-dash-preview__frame">
         {url ? (
           <img src={url} alt="" className="widget-edit-image-dash-preview__img" />
         ) : (
           <div className="widget-edit-image-dash-preview__empty">
             <Image size={36} strokeWidth={1.25} aria-hidden />
-            <span>Sin imagen aún. Sube una en Datos o usa una URL desde telemetría.</span>
+            <span>Sin imagen aún. Elige un archivo o escribe una URL en Básicos.</span>
           </div>
         )}
       </div>
@@ -364,49 +561,76 @@ function ImageWidgetPreview({ draft, liveProps, previewSubtitle, titleColor }) {
   );
 }
 
-/** Pestaña Datos del widget Imagen: subir / quitar (sin otros campos). */
-function ImageWidgetDashDataTab({ draft, setDraft }) {
-  const hasUpload =
-    typeof draft.data?.uploadedImageDataUrl === 'string' && draft.data.uploadedImageDataUrl.startsWith('data:image/');
+/** Widget Imagen: solo archivo (PC) y URL; vive en la pestaña Básicos (sin Datos ni selector de dispositivo). */
+function ImageWidgetBasicsImageSource({ draft, setDraft }) {
+  const hasUpload = isEmbeddedImageDataUrl(draft.data?.uploadedImageDataUrl);
+  const urlVal = draft.data?.staticImageUrl != null ? String(draft.data.staticImageUrl) : '';
   const onFile = (e) => {
     const f = e.target.files?.[0];
     const input = e.target;
     if (input) input.value = '';
-    if (!f || !f.type.startsWith('image/')) return;
-    if (f.size > 1_200_000) {
-      window.alert('Imagen demasiado grande (máx. ~1,2 MB).');
+    if (!f) return;
+    if (!isLikelyRasterImageFile(f)) {
+      window.alert('Elija un archivo de imagen (PNG, JPEG, WebP, GIF…). Si ya es imagen y no la reconoce, renombre con extensión .png o .jpg.');
+      return;
+    }
+    if (f.size > MAX_IMAGE_UPLOAD_BYTES) {
+      window.alert('Imagen demasiado grande (máx. ~2,5 MB). Reduzca el archivo o use una URL https://.');
       return;
     }
     const reader = new FileReader();
+    reader.onerror = () => {
+      window.alert('No se pudo leer el archivo. Pruebe con PNG o JPEG, o use una URL https://.');
+    };
     reader.onload = () => {
-      const dataUrl = reader.result;
-      if (typeof dataUrl !== 'string') return;
-      setDraft((d) => {
-        const next = deepClone(d);
-        next.data = { ...next.data, uploadedImageDataUrl: dataUrl };
-        return next;
-      });
+      const raw = reader.result;
+      if (typeof raw !== 'string') return;
+      if (!isEmbeddedImageDataUrl(raw)) {
+        window.alert('El navegador no generó una vista previa de esta imagen. Use PNG/JPEG o una URL https://.');
+        return;
+      }
+      void (async () => {
+        try {
+          const dataUrl = await compressImageDataUrlForStorage(raw);
+          if (dataUrl.length > MAX_WIDGET_IMAGE_DATA_URL_CHARS) {
+            window.alert(
+              `Tras comprimir al máximo, la imagen incrustada sigue superando el límite del navegador (${MAX_WIDGET_IMAGE_DATA_URL_CHARS.toLocaleString(
+                'es'
+              )} caracteres de texto codificado, no el tamaño del archivo en KB). Use una imagen con menos píxeles, exporte un JPEG más pequeño, o una URL https://.`
+            );
+            return;
+          }
+          setDraft((d) => draftWithDataPatch(d, { uploadedImageDataUrl: dataUrl }));
+        } catch (err) {
+          console.error('[WidgetEditModal] imagen incrustada', err);
+          window.alert(
+            'No se pudo guardar la imagen en el borrador (p. ej. archivo demasiado grande para el navegador). Pruebe una imagen más pequeña, otra copia en PNG/JPEG, o use una URL https://.'
+          );
+        }
+      })();
     };
     reader.readAsDataURL(f);
   };
   const clearUpload = () => {
-    setDraft((d) => {
-      const next = deepClone(d);
-      next.data = { ...next.data, uploadedImageDataUrl: '' };
-      return next;
-    });
+    setDraft((d) => draftWithDataPatch(d, { uploadedImageDataUrl: '' }));
+  };
+  const setStaticUrl = (raw) => {
+    setDraft((d) => draftWithDataPatch(d, { staticImageUrl: raw }));
   };
   return (
-    <div className="widget-edit-image-dash-data">
+    <div className="widget-edit-image-dash-data widget-edit-image-basics-source">
       <label className="widget-edit-label">Imagen del tablero</label>
       <p className="widget-edit-hint">
-        Sube un PNG o JPEG (máx. ~1,2 MB). Los cambios se aplican al pulsar <strong>Guardar</strong>. Si el dispositivo
-        publica una URL de imagen en telemetría, puede mostrarse cuando no hay imagen subida.
+        Elige PNG o JPEG (máx. ~2,5 MB al subir) o pega una URL <code>https://</code>. Al guardar en el tablero, la
+        imagen se convierte en texto (base64): el límite seguro es unos{' '}
+        <strong>{MAX_WIDGET_IMAGE_DATA_URL_CHARS.toLocaleString('es')} caracteres</strong> de cadena codificada (un PNG
+        de varios cientos de KB en disco puede superarlo; se comprime automáticamente a JPEG). Para fotos muy grandes
+        use siempre una URL. Pulsa <strong>Guardar</strong> para aplicar.
       </p>
       <div className="widget-edit-image-dash-data__actions">
         <label className="widget-edit-btn widget-edit-btn--secondary widget-edit-image-file-btn">
           <input type="file" accept="image/*" className="widget-edit-file-input-hidden" onChange={onFile} />
-          Subir imagen
+          Buscar imagen en el equipo
         </label>
         {hasUpload ? (
           <button type="button" className="widget-edit-btn widget-edit-btn--secondary" onClick={clearUpload}>
@@ -414,23 +638,26 @@ function ImageWidgetDashDataTab({ draft, setDraft }) {
           </button>
         ) : null}
       </div>
+      <label className="widget-edit-label widget-edit-label--mt">
+        URL de la imagen
+        <input
+          type="url"
+          className="widget-edit-input"
+          placeholder="https://ejemplo.com/imagen.png"
+          value={urlVal}
+          onChange={(e) => setStaticUrl(e.target.value)}
+          autoComplete="off"
+        />
+      </label>
     </div>
   );
 }
 
 /** Vista previa del widget Mapa (iframe OSM si hay coordenadas). */
-function MapWidgetPreview({ draft, liveProps, previewSubtitle, titleColor }) {
+function MapWidgetPreview({ draft, liveProps }) {
   const coords = useMemo(() => resolveMapCoords(liveProps || {}, draft), [draft, liveProps]);
-  const title = (draft?.basics?.title || 'Mapa').trim() || 'Mapa';
-  const tc = titleColor || '#f97316';
   return (
     <div className="widget-edit-image-dash-preview">
-      <div className="widget-edit-image-dash-preview__head">
-        <div className="widget-edit-image-dash-preview__title" style={{ color: tc }}>
-          {title}
-        </div>
-        <div className="widget-edit-image-dash-preview__sub">{previewSubtitle}</div>
-      </div>
       <div className="widget-edit-image-dash-preview__frame widget-edit-map-dash-preview__frame">
         {coords ? (
           <iframe
@@ -444,7 +671,8 @@ function MapWidgetPreview({ draft, liveProps, previewSubtitle, titleColor }) {
           <div className="widget-edit-image-dash-preview__empty">
             <MapPin size={36} strokeWidth={1.25} aria-hidden />
             <span>
-              Indica latitud y longitud en <strong>Datos</strong> o publica coordenadas en telemetría para ver el mapa.
+              Indica <strong>latitud</strong> y <strong>longitud</strong> en Básicos para ver el mapa (o deja vacío y
+              usa telemetría si el dispositivo publica coordenadas).
             </span>
           </div>
         )}
@@ -453,8 +681,8 @@ function MapWidgetPreview({ draft, liveProps, previewSubtitle, titleColor }) {
   );
 }
 
-/** Pestaña Datos: coordenadas fijas opcionales para el mapa estático. */
-function MapWidgetDashDataTab({ draft, setDraft }) {
+/** Widget Mapa estático: lat/long en Básicos (sin pestaña Datos ni selector de dispositivo en panel). */
+function MapWidgetBasicsCoords({ draft, setDraft }) {
   const latVal =
     draft.data?.savedLatitude != null && draft.data.savedLatitude !== ''
       ? String(draft.data.savedLatitude)
@@ -465,10 +693,11 @@ function MapWidgetDashDataTab({ draft, setDraft }) {
       : '';
   return (
     <div className="widget-edit-image-dash-data">
-      <label className="widget-edit-label">Coordenadas fijas (opcional)</label>
+      <label className="widget-edit-label">Ubicación del mapa</label>
       <p className="widget-edit-hint">
-        Si las dejas vacías, el mapa usa <code>latitude</code> y <code>longitude</code> de la telemetría en vivo. Pulsa{' '}
-        <strong>Guardar</strong> para aplicar.
+        Escribe la latitud y la longitud en grados decimales (p. ej. 19.4326, -99.1332). Pulsa <strong>Guardar</strong>{' '}
+        para aplicar. Si las dejas vacías, el tablero puede seguir usando <code>latitude</code> y <code>longitude</code>{' '}
+        de la telemetría.
       </p>
       <div className="widget-edit-map-coords-row">
         <input
@@ -514,33 +743,656 @@ function MapWidgetDashDataTab({ draft, setDraft }) {
             });
           }}
         >
-          Usar solo telemetría
+          Borrar coordenadas
         </button>
       </div>
     </div>
   );
 }
 
-function TrackingMapWidgetPreview({ draft, previewSubtitle, titleColor }) {
-  const title = (draft?.basics?.title || 'Mapa de rastreo').trim() || 'Mapa de rastreo';
-  const tc = titleColor || '#ffffff';
+function TrackingMapWidgetPreview() {
   return (
     <div className="widget-edit-image-dash-preview">
-      <div className="widget-edit-image-dash-preview__head">
-        <div className="widget-edit-image-dash-preview__title" style={{ color: tc }}>
-          {title}
-        </div>
-        <div className="widget-edit-image-dash-preview__sub">{previewSubtitle}</div>
-      </div>
-      <div className="widget-edit-image-dash-preview__frame">
+      <div
+        className="widget-edit-image-dash-preview__frame"
+        role="region"
+        aria-label="Mapa de rastreo: la trayectoria se muestra en el tablero tras guardar"
+      >
         <div className="widget-edit-image-dash-preview__empty">
           <Route size={36} strokeWidth={1.25} aria-hidden />
-          <span>
-            En el tablero se muestra la trayectoria según el historial (Día / Semana / Mes) y el último punto con icono
-            de ubicación. En Datos elige qué campo de telemetría alimenta el mapa.
-          </span>
+          <span>Mapa de rastreo</span>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** Vista previa del medidor semicircular (misma estructura DOM/CSS que el tablero). */
+function ModalMetricCircularPreview({
+  draft,
+  previewMergedLiveProps,
+  previewLiveDeviceModel,
+  previewTelemetryHints,
+  title,
+  titleColor,
+  mergedSurface,
+  previewShellClear,
+  previewVisualKey,
+}) {
+  const gid = useId().replace(/:/g, '');
+  const ui = useMemo(
+    () => computeMetricCircularUi(draft, previewMergedLiveProps, previewLiveDeviceModel, previewTelemetryHints),
+    [draft, previewMergedLiveProps, previewLiveDeviceModel, previewTelemetryHints]
+  );
+  const mcTicks = useMemo(() => buildMetricCircularTicksFromUi(ui), [ui]);
+  const mcRanges = Array.isArray(ui?.ranges) ? ui.ranges : [];
+  const mcUseRangeColors = mcRanges.length > 0;
+  const mcT = ui?.needleT != null ? ui.needleT : 0;
+  const mcHasLive = ui?.rawValue != null && Number.isFinite(ui.rawValue);
+  const mcRangeStroke =
+    mcUseRangeColors && mcHasLive
+      ? colorForValueInRanges(ui.rawValue, mcRanges, ui.scaleLo, ui.scaleHi) || '#a5b4fc'
+      : null;
+  const mcArcStroke = mcUseRangeColors
+    ? mcRangeStroke || 'rgba(255,255,255,0.22)'
+    : ui?.gradientMode === 'thermal'
+      ? `url(#bsd-mc-thermal-${gid})`
+      : `url(#bsd-mc-traffic-${gid})`;
+  const arcProgressT = mcHasLive ? Math.min(1, Math.max(0, mcT)) : 0;
+  const mcArcDash = MC_ARC_GEOM_LEN;
+  const mcArcDashOff = MC_ARC_GEOM_LEN * (1 - arcProgressT);
+  const mcArcFilterStyle = mcUseRangeColors ? { filter: 'drop-shadow(0 2px 10px rgba(15,23,42,0.28))' } : undefined;
+  const mcNeedleFill = mcUseRangeColors && mcRangeStroke ? mcRangeStroke : undefined;
+
+  return (
+    <div
+      key={`bsd-mc-preview-${previewVisualKey}`}
+      className={['widget', 'widget--metric-circular', previewShellClear ? 'bsd-widget-surface--clear' : ''].filter(Boolean).join(' ')}
+      style={{ width: '100%', ...mergedSurface }}
+    >
+      <div className="widget-header">
+        <div className="widget-title" style={{ color: titleColor }}>
+          <span aria-hidden>◔</span> {title}
+        </div>
+      </div>
+      <div className="bsd-metric-circular">
+        <div className="bsd-metric-circular__chart">
+          <svg
+            className="bsd-metric-circular__svg"
+            viewBox="0 0 240 152"
+            preserveAspectRatio="xMidYMid meet"
+            width="100%"
+            aria-hidden
+          >
+            {!mcUseRangeColors ? (
+              <defs>
+                <linearGradient
+                  id={`bsd-mc-traffic-${gid}`}
+                  x1="4%"
+                  y1="92%"
+                  x2="96%"
+                  y2="8%"
+                  gradientUnits="userSpaceOnUse"
+                >
+                  <stop offset="0%" stopColor="#ff4d2d" />
+                  <stop offset="28%" stopColor="#ff9f1c" />
+                  <stop offset="52%" stopColor="#ffd60a" />
+                  <stop offset="78%" stopColor="#84cc16" />
+                  <stop offset="100%" stopColor="#16a34a" />
+                </linearGradient>
+                <linearGradient
+                  id={`bsd-mc-thermal-${gid}`}
+                  x1="8%"
+                  y1="88%"
+                  x2="92%"
+                  y2="12%"
+                  gradientUnits="userSpaceOnUse"
+                >
+                  <stop offset="0%" stopColor="#1d4ed8" />
+                  <stop offset="30%" stopColor="#22d3ee" />
+                  <stop offset="55%" stopColor="#facc15" />
+                  <stop offset="82%" stopColor="#fb923c" />
+                  <stop offset="100%" stopColor="#dc2626" />
+                </linearGradient>
+              </defs>
+            ) : null}
+            <path className="bsd-metric-circular__track" d={MC_ARC_PATH_D} fill="none" strokeWidth={17} strokeLinecap="round" />
+            <path
+              className="bsd-metric-circular__arc"
+              d={MC_ARC_PATH_D}
+              fill="none"
+              strokeWidth={17}
+              strokeLinecap="round"
+              stroke={mcArcStroke}
+              strokeDasharray={mcArcDash}
+              strokeDashoffset={mcArcDashOff}
+              style={mcArcFilterStyle}
+            />
+            {mcTicks.map((tk) => {
+              const inner = mcPoint(MC_CX, MC_CY, MC_R + 10, tk.theta);
+              const outer = mcPoint(MC_CX, MC_CY, MC_R + 20, tk.theta);
+              const lab = mcPoint(MC_CX, MC_CY, MC_R + 34, tk.theta);
+              return (
+                <g key={tk.f}>
+                  <line className="bsd-metric-circular__tick" x1={inner.x} y1={inner.y} x2={outer.x} y2={outer.y} />
+                  <text
+                    className="bsd-metric-circular__tick-label"
+                    x={lab.x}
+                    y={lab.y}
+                    dominantBaseline="middle"
+                    textAnchor="middle"
+                  >
+                    {tk.label}
+                  </text>
+                </g>
+              );
+            })}
+            {(() => {
+              const t = ui?.needleT != null ? ui.needleT : 0;
+              const th = MC_ARC_START + t * MC_ARC_SWEEP;
+              const deg = (th * 180) / Math.PI;
+              const fade = ui?.needleT != null ? 1 : 0.38;
+              return (
+                <g
+                  className="bsd-metric-circular__needle"
+                  style={{ opacity: fade }}
+                  transform={`translate(${MC_CX},${MC_CY}) rotate(${deg})`}
+                >
+                  <polygon points="58,-5 78,0 58,5" className="bsd-metric-circular__needle-shape" fill={mcNeedleFill} />
+                </g>
+              );
+            })()}
+            <text className="bsd-metric-circular__center-val" x={MC_CX} y={MC_CY - 4} textAnchor="middle">
+              {ui?.centerMain}
+            </text>
+            {ui?.svgSubtitleLine ? (
+              <text className="bsd-metric-circular__center-sub" x={MC_CX} y={MC_CY + 16} textAnchor="middle">
+                {ui.svgSubtitleLine}
+              </text>
+            ) : null}
+          </svg>
+        </div>
+        {ui?.lastAtLine ? (
+          <div className="bsd-metric-circular__lastat" style={{ color: titleColor }}>
+            {ui.lastAtLine}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** Vista previa del widget Circular (anillo), alineada con el tablero. */
+function ModalSatisfactionRingPreview({
+  draft,
+  previewMergedLiveProps,
+  previewLiveDeviceModel,
+  previewTelemetryHints,
+  title,
+  titleColor,
+  mergedSurface,
+  previewShellClear,
+}) {
+  const gid = useId().replace(/:/g, '');
+  const satUi = useMemo(
+    () => computeSatisfactionRingUi(draft, previewMergedLiveProps, previewLiveDeviceModel, previewTelemetryHints),
+    [draft, previewMergedLiveProps, previewLiveDeviceModel, previewTelemetryHints]
+  );
+  const satArcStroke =
+    satUi.ranges?.length > 0 && satUi.rawValue != null && Number.isFinite(satUi.rawValue)
+      ? colorForValueInRanges(satUi.rawValue, satUi.ranges, satUi.scaleMin, satUi.scaleMax) || `url(#bsd-circ-grad-${gid})`
+      : `url(#bsd-circ-grad-${gid})`;
+  const satArcDashOffset = BSD_CIRCULAR_GAUGE_LEN - (satUi.ringPct / 100) * BSD_CIRCULAR_GAUGE_LEN;
+
+  return (
+    <div
+      className={['widget', previewShellClear ? 'bsd-widget-surface--clear' : ''].filter(Boolean).join(' ')}
+      style={{ width: '100%', ...mergedSurface }}
+    >
+      <div className="widget-header">
+        <div className="widget-title" style={{ color: titleColor }}>
+          <span aria-hidden>◎</span> {title}
+        </div>
+      </div>
+      <div className="bsd-circular-gauge">
+        <svg className="bsd-circular-gauge__svg" viewBox="0 0 200 200" width="100%" height="100%" aria-hidden>
+          <defs>
+            <linearGradient id={`bsd-circ-grad-${gid}`} x1="28%" y1="12%" x2="72%" y2="92%">
+              <stop offset="0%" stopColor="#ff9a8b" />
+              <stop offset="45%" stopColor="#ff7b7a" />
+              <stop offset="100%" stopColor="#ff5569" />
+            </linearGradient>
+          </defs>
+          <circle
+            className="bsd-circular-gauge__track"
+            cx="100"
+            cy="100"
+            r={BSD_CIRCULAR_GAUGE_R}
+            fill="none"
+            stroke="#e4e4ec"
+            strokeWidth="18"
+          />
+          <circle
+            className="bsd-circular-gauge__arc"
+            cx="100"
+            cy="100"
+            r={BSD_CIRCULAR_GAUGE_R}
+            fill="none"
+            stroke={satArcStroke}
+            strokeWidth="18"
+            strokeLinecap="round"
+            strokeDasharray={BSD_CIRCULAR_GAUGE_LEN}
+            strokeDashoffset={satArcDashOffset}
+          />
+        </svg>
+        <div className="bsd-circular-gauge__hub">
+          <span className="bsd-circular-gauge__value">{satUi.centerLabel}</span>
+        </div>
+      </div>
+      {satUi.lastAtLine ? (
+        <div className="bsd-circular-gauge__foot-at" style={{ color: titleColor }}>
+          {satUi.lastAtLine}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Vista previa del widget Contenedor (tanque), misma lógica de valor que Circular. */
+function ModalContainerTankPreview({
+  draft,
+  previewMergedLiveProps,
+  previewLiveDeviceModel,
+  previewTelemetryHints,
+  title,
+  titleColor,
+  mergedSurface,
+  previewShellClear,
+}) {
+  const tankUi = useMemo(
+    () => computeContainerTankUi(draft, previewMergedLiveProps, previewLiveDeviceModel, previewTelemetryHints),
+    [draft, previewMergedLiveProps, previewLiveDeviceModel, previewTelemetryHints]
+  );
+  const liquidColor = useMemo(() => {
+    const lo = tankUi.scaleMin;
+    const hi = tankUi.scaleMax;
+    const span = hi - lo;
+    const val =
+      tankUi.rawValue != null && Number.isFinite(tankUi.rawValue)
+        ? tankUi.rawValue
+        : lo + (tankUi.ringPct / 100) * span;
+    return colorForValueInRanges(val, tankUi.ranges, lo, hi) || '#22c55e';
+  }, [tankUi]);
+
+  return (
+    <div
+      className={['widget', previewShellClear ? 'bsd-widget-surface--clear' : ''].filter(Boolean).join(' ')}
+      style={{ width: '100%', ...mergedSurface }}
+    >
+      <div className="widget-header">
+        <div className="widget-title" style={{ color: titleColor }}>
+          <span aria-hidden>🛢</span> {title}
+        </div>
+      </div>
+      <BsdContainerTankView
+        fillPct={tankUi.ringPct}
+        fillColor={liquidColor}
+        centerLabel={tankUi.centerLabel}
+        lastAtLine={tankUi.lastAtLine}
+        titleColor={titleColor}
+      />
+    </div>
+  );
+}
+
+/** Vista previa del widget Nivel Batería, misma lógica de valor que Circular. */
+function ModalBatteryLevelPreview({
+  draft,
+  previewMergedLiveProps,
+  previewLiveDeviceModel,
+  previewTelemetryHints,
+  title,
+  titleColor,
+  mergedSurface,
+  previewShellClear,
+}) {
+  const batUi = useMemo(
+    () => computeBatteryLevelUi(draft, previewMergedLiveProps, previewLiveDeviceModel, previewTelemetryHints),
+    [draft, previewMergedLiveProps, previewLiveDeviceModel, previewTelemetryHints]
+  );
+  const fillColor = useMemo(() => {
+    const lo = batUi.scaleMin;
+    const hi = batUi.scaleMax;
+    const span = hi - lo;
+    const val =
+      batUi.rawValue != null && Number.isFinite(batUi.rawValue)
+        ? batUi.rawValue
+        : lo + (batUi.ringPct / 100) * span;
+    return colorForValueInRanges(val, batUi.ranges, lo, hi) || '#f97316';
+  }, [batUi]);
+
+  return (
+    <div
+      className={['widget', previewShellClear ? 'bsd-widget-surface--clear' : ''].filter(Boolean).join(' ')}
+      style={{ width: '100%', ...mergedSurface }}
+    >
+      <div className="widget-header">
+        <div className="widget-title" style={{ color: titleColor }}>
+          <span aria-hidden>🔋</span> {title}
+        </div>
+      </div>
+      <BsdBatteryLevelView
+        fillPct={batUi.ringPct}
+        fillColor={fillColor}
+        centerLabel={batUi.centerLabel}
+        lastAtLine={batUi.lastAtLine}
+        titleColor={titleColor}
+      />
+    </div>
+  );
+}
+
+/**
+ * Vista previa alineada con el tablero BSD: misma tarjeta cristal / sensor-card / widget shell que al guardar.
+ */
+function ModalLivePreviewBlock({
+  sensor,
+  draft,
+  showSensorGridPreview,
+  previewDashWidgetId,
+  previewBaseDashId,
+  previewVisualKey,
+  indicatorSelectValue,
+  previewMergedLiveProps,
+  previewValue,
+  previewShellSurfaceStyle,
+  previewShellClear,
+  previewRangeAccent,
+  previewTelemetryDisplayLabel,
+  previewSensorSubtitle,
+  modalTextWidgetUi,
+  effectiveAvailableDataFields,
+  downlinkSelectState,
+  previewLiveDeviceModel,
+  previewTelemetryHints,
+}) {
+  const surfaceStyle = previewShellSurfaceStyle || undefined;
+  const accentBox =
+    previewRangeAccent != null
+      ? { borderColor: `${previewRangeAccent}aa`, boxShadow: `0 0 26px ${previewRangeAccent}40` }
+      : undefined;
+  const mergedSurface = surfaceStyle && accentBox ? { ...surfaceStyle, ...accentBox } : accentBox || surfaceStyle;
+
+  const title = draft.basics?.title || sensor?.name || '';
+  const titleColor = draft.appearance?.titleColor || '#f97316';
+  const unit = draft.data?.unit != null ? String(draft.data.unit) : '';
+  const decRaw = draft.data?.decimals;
+  const decimals = decRaw != null && decRaw !== '' && Number.isFinite(Number(decRaw)) ? Number(decRaw) : 1;
+  const ranges = draft.gauge?.ranges || [];
+  const scaleMin = Number(draft.gauge?.scaleMin) || 0;
+  const scaleMax = Number(draft.gauge?.scaleMax) || 50;
+  const valueSensor = sensor && !isDashboardFixedWidgetSensor(sensor);
+  const numericValue = indicatorSelectValue === 'numeric';
+
+  if (showSensorGridPreview) {
+    return (
+      <div className={shellClassName(previewShellClear)} style={mergedSurface}>
+        <SensorGridWidgetPreview
+          draft={draft}
+          indicatorSelectValue={indicatorSelectValue}
+          liveProps={previewMergedLiveProps}
+          availableDataFields={effectiveAvailableDataFields}
+          previewTheme="dark"
+        />
+      </div>
+    );
+  }
+  if (previewDashWidgetId === DASH_WIDGET.SWITCH) {
+    return (
+      <div className={shellClassName(previewShellClear)} style={mergedSurface}>
+        <SwitchWidgetPreview key={previewVisualKey} downlinkSelectState={downlinkSelectState} />
+      </div>
+    );
+  }
+  if (previewDashWidgetId === DASH_WIDGET.DOWNLINK) {
+    return (
+      <div className={shellClassName(previewShellClear)} style={mergedSurface}>
+        <DownlinkWidgetPreview key={previewVisualKey} draft={draft} downlinkSelectState={downlinkSelectState} />
+      </div>
+    );
+  }
+  if (previewDashWidgetId === DASH_WIDGET.IMAGE) {
+    return (
+      <div className={shellClassName(previewShellClear)} style={mergedSurface}>
+        <ImageWidgetPreview key={previewVisualKey} draft={draft} liveProps={previewMergedLiveProps} />
+      </div>
+    );
+  }
+  if (previewDashWidgetId === DASH_WIDGET.MAP) {
+    return (
+      <div className={shellClassName(previewShellClear)} style={mergedSurface}>
+        <MapWidgetPreview key={previewVisualKey} draft={draft} liveProps={previewMergedLiveProps} />
+      </div>
+    );
+  }
+  if (previewDashWidgetId === DASH_WIDGET.TRACKING_MAP) {
+    return (
+      <div className={shellClassName(previewShellClear)} style={mergedSurface}>
+        <TrackingMapWidgetPreview key={previewVisualKey} />
+      </div>
+    );
+  }
+
+  if (previewBaseDashId === DASH_WIDGET.METRIC_CIRCULAR) {
+    return (
+      <ModalMetricCircularPreview
+        draft={draft}
+        previewMergedLiveProps={previewMergedLiveProps}
+        previewLiveDeviceModel={previewLiveDeviceModel}
+        previewTelemetryHints={previewTelemetryHints}
+        title={title}
+        titleColor={titleColor}
+        mergedSurface={mergedSurface}
+        previewShellClear={previewShellClear}
+        previewVisualKey={previewVisualKey}
+      />
+    );
+  }
+
+  if (previewBaseDashId === DASH_WIDGET.SATISFACTION) {
+    return (
+      <ModalSatisfactionRingPreview
+        draft={draft}
+        previewMergedLiveProps={previewMergedLiveProps}
+        previewLiveDeviceModel={previewLiveDeviceModel}
+        previewTelemetryHints={previewTelemetryHints}
+        title={title}
+        titleColor={titleColor}
+        mergedSurface={mergedSurface}
+        previewShellClear={previewShellClear}
+      />
+    );
+  }
+
+  if (previewBaseDashId === DASH_WIDGET.CONTAINER) {
+    return (
+      <ModalContainerTankPreview
+        draft={draft}
+        previewMergedLiveProps={previewMergedLiveProps}
+        previewLiveDeviceModel={previewLiveDeviceModel}
+        previewTelemetryHints={previewTelemetryHints}
+        title={title}
+        titleColor={titleColor}
+        mergedSurface={mergedSurface}
+        previewShellClear={previewShellClear}
+      />
+    );
+  }
+
+  if (previewBaseDashId === DASH_WIDGET.BATTERY_LEVEL) {
+    return (
+      <ModalBatteryLevelPreview
+        draft={draft}
+        previewMergedLiveProps={previewMergedLiveProps}
+        previewLiveDeviceModel={previewLiveDeviceModel}
+        previewTelemetryHints={previewTelemetryHints}
+        title={title}
+        titleColor={titleColor}
+        mergedSurface={mergedSurface}
+        previewShellClear={previewShellClear}
+      />
+    );
+  }
+
+  if (valueSensor && numericValue) {
+    const v =
+      typeof previewValue === 'number' && !Number.isInteger(previewValue)
+        ? previewValue.toFixed(decimals)
+        : previewValue;
+    const hasCustomLabel = previewTelemetryDisplayLabel != null && String(previewTelemetryDisplayLabel).trim();
+    const displayMain = hasCustomLabel ? String(previewTelemetryDisplayLabel).trim() : v;
+    return (
+      <div
+        className={['sensor-card', previewShellClear ? 'bsd-widget-surface--clear' : ''].filter(Boolean).join(' ')}
+        style={{ width: '100%', ...mergedSurface }}
+      >
+        <div className="sensor-icon" aria-hidden>
+          {sensor?.icon || '📟'}
+        </div>
+        <div className="sensor-name">{title}</div>
+        <div className="sensor-value">
+          {displayMain}
+          {!hasCustomLabel && unit ? <span className="sensor-unit">{unit}</span> : null}
+        </div>
+        <div className="sensor-status status-normal">✓ NORMAL</div>
+      </div>
+    );
+  }
+
+  if (valueSensor) {
+    return (
+      <div
+        className={['sensor-card', previewShellClear ? 'bsd-widget-surface--clear' : ''].filter(Boolean).join(' ')}
+        style={{ width: '100%', ...mergedSurface }}
+      >
+        <ValueIndicator
+          key={`${previewVisualKey}-${indicatorSelectValue}`}
+          type={indicatorSelectValue}
+          value={previewValue}
+          unit={unit}
+          decimals={decimals}
+          scaleMin={scaleMin}
+          scaleMax={scaleMax}
+          ranges={ranges}
+          inverseFill={Boolean(draft.gauge?.inverseFill)}
+          title={title}
+          titleColor={titleColor}
+          subtitle={previewSensorSubtitle}
+          valueLabel={
+            previewTelemetryDisplayLabel != null && String(previewTelemetryDisplayLabel).trim()
+              ? String(previewTelemetryDisplayLabel).trim()
+              : undefined
+          }
+          compact
+          theme="dark"
+        />
+        <div className="sensor-status status-normal">✓ NORMAL</div>
+      </div>
+    );
+  }
+
+  if (previewBaseDashId === DASH_WIDGET.TEXT) {
+    const tw = modalTextWidgetUi;
+    return (
+      <div
+        className={['widget', 'bsd-text-widget', previewShellClear ? 'bsd-widget-surface--clear' : ''].filter(Boolean).join(' ')}
+        style={{ width: '100%', ...mergedSurface }}
+      >
+        <div className="widget-header bsd-text-widget__header">
+          <div className="widget-title bsd-text-widget__title" style={{ color: titleColor }}>
+            <span className="bsd-text-widget__title-icon" aria-hidden>
+              📶
+            </span>{' '}
+          {title}
+        </div>
+      </div>
+        <div className="bsd-text-widget__body">
+          <div className="bsd-text-widget__value">{tw?.display ?? '—'}</div>
+          {tw?.hint && tw.display !== tw.hint ? <div className="bsd-text-widget__hint">{tw.hint}</div> : null}
+        </div>
+        {tw?.lastAtLine ? (
+          <div className="bsd-text-widget__footer" style={{ color: titleColor }}>
+            {tw.lastAtLine}
+      </div>
+        ) : null}
+      </div>
+    );
+  }
+
+  if (previewBaseDashId === DASH_WIDGET.STREAM) {
+    return (
+      <div
+        className={['widget', 'bsd-stream-widget-wrap', previewShellClear ? 'bsd-widget-surface--clear' : ''].filter(Boolean).join(
+          ' '
+        )}
+        style={{ width: '100%', ...mergedSurface }}
+      >
+        <div className="widget-header bsd-stream-widget-header">
+          <div className="bsd-stream-widget-head-main">
+            <div className="widget-title" style={{ color: titleColor }}>
+              <span aria-hidden>📡</span> {title}
+            </div>
+            <div className="bsd-stream-status" style={{ color: titleColor }}>
+              <span className="live-badge" aria-hidden />
+              <span>En vivo · vista previa</span>
+            </div>
+          </div>
+        </div>
+        <div className="widget-edit-preview-dash-note">
+          El gráfico interactivo se muestra en el tablero; aquí solo se reflejan título, fondo y estilo.
+        </div>
+      </div>
+    );
+  }
+
+  if (previewBaseDashId === DASH_WIDGET.BAR_CHART) {
+    return (
+      <div
+        className={['widget', 'bsd-bar-chart-widget', previewShellClear ? 'bsd-widget-surface--clear' : ''].filter(Boolean).join(
+          ' '
+        )}
+        style={{ width: '100%', ...mergedSurface }}
+      >
+        <div className="widget-header bsd-bar-chart-widget__header">
+          <div className="widget-title" style={{ color: titleColor }}>
+            <span aria-hidden>📊</span> {title}
+          </div>
+        </div>
+        <div className="widget-edit-preview-dash-note">
+          Las barras y el historial se renderizan en el tablero; la vista previa muestra el aspecto del marco.
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={shellClassName(previewShellClear)} style={mergedSurface}>
+      <ValueIndicator
+        key={`${previewVisualKey}-${indicatorSelectValue}`}
+        type={indicatorSelectValue}
+        value={previewValue}
+        unit={unit}
+        decimals={decimals}
+        scaleMin={scaleMin}
+        scaleMax={scaleMax}
+        ranges={ranges}
+        inverseFill={Boolean(draft.gauge?.inverseFill)}
+        title={title}
+        titleColor={titleColor}
+        subtitle={previewSensorSubtitle}
+        compact
+        theme="dark"
+      />
     </div>
   );
 }
@@ -618,9 +1470,6 @@ export default function WidgetEditModal({
   /** Panel: claves conocidas del objeto dispositivo (API lista) mientras llega el merge en vivo. */
   panelPreviewExtraDataKeys = [],
 }) {
-  const { isDarkMode } = useTheme();
-  const previewTheme = isDarkMode ? 'dark' : 'light';
-
   const [tab, setTab] = useState(() => {
     if (!sensor) return 'data';
     return editScope === 'value' ? (isDashboardFixedWidgetSensor(sensor) ? 'basics' : 'data') : 'basics';
@@ -650,10 +1499,18 @@ export default function WidgetEditModal({
     return base;
   });
 
+  /** Propiedades persistidas (GET /devices/:id/properties) para vista previa con datos reales del servidor. */
+  const [dbPreviewProps, setDbPreviewProps] = useState({});
+
   const fixedDashWidgetId = useMemo(() => {
     if (!sensor || !isDashboardFixedWidgetSensor(sensor)) return null;
     return dashWidgetIdFromPropertyKey(sensor.propertyKey);
   }, [sensor]);
+
+  const previewDashWidgetId = useMemo(() => {
+    if (fixedDashWidgetId) return fixedDashWidgetId;
+    return dashWidgetIdFromPropertyKey(sensor?.propertyKey);
+  }, [sensor, fixedDashWidgetId]);
 
   const showPanelDevicePicker = useMemo(
     () =>
@@ -662,7 +1519,9 @@ export default function WidgetEditModal({
       panelDeviceSelectOptions.length > 0 &&
       Boolean(sensor && isDashboardFixedWidgetSensor(sensor)) &&
       fixedDashWidgetId &&
-      fixedDashWidgetId !== DASH_WIDGET.PANEL_DEVICE_BAR,
+      fixedDashWidgetId !== DASH_WIDGET.PANEL_DEVICE_BAR &&
+      fixedDashWidgetId !== DASH_WIDGET.IMAGE &&
+      fixedDashWidgetId !== DASH_WIDGET.MAP,
     [bsdDashboardVariant, panelDeviceSelectOptions, sensor, fixedDashWidgetId]
   );
 
@@ -672,6 +1531,43 @@ export default function WidgetEditModal({
     if (raw != null && String(raw).trim()) return String(raw).trim();
     return panelFallbackDeviceId != null ? String(panelFallbackDeviceId) : null;
   }, [showPanelDevicePicker, draft.data?.panelBoundDeviceId, panelFallbackDeviceId]);
+
+  /** Dispositivo cuyo último registro guardado alimenta la vista previa (API). */
+  const previewFetchDeviceId = useMemo(() => {
+    if (showPanelDevicePicker && previewBoundDeviceId) return previewBoundDeviceId;
+    const sid = sensor?.sourceDeviceId;
+    if (sid && sid !== 'dashboard' && sid !== 'demo') return String(sid);
+    if (bsdDashboardVariant === 'panel' && panelFallbackDeviceId != null && String(panelFallbackDeviceId).trim()) {
+      return String(panelFallbackDeviceId).trim();
+    }
+    return null;
+  }, [showPanelDevicePicker, previewBoundDeviceId, sensor?.sourceDeviceId, bsdDashboardVariant, panelFallbackDeviceId]);
+
+  useEffect(() => {
+    if (!open || !previewFetchDeviceId) {
+      queueMicrotask(() => {
+        setDbPreviewProps({});
+      });
+      return undefined;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const propsResp = await fetchDeviceProperties(previewFetchDeviceId, null, null);
+        if (cancelled) return;
+        const apiData = propsResp.data?.data || {};
+        const rawProps = apiData.properties ?? propsResp.data?.properties ?? {};
+        const normalized = normalizeStoredPropertiesForModalPreview(apiData, rawProps);
+        setDbPreviewProps(normalized);
+      } catch {
+        if (cancelled) return;
+        setDbPreviewProps({});
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, previewFetchDeviceId]);
 
   useEffect(() => {
     if (typeof onPanelPreviewDeviceIdChange !== 'function') return undefined;
@@ -725,10 +1621,23 @@ export default function WidgetEditModal({
   const previewTelemetryHints = previewTelemetrySlice.hints;
   const previewDownlinks = previewTelemetrySlice.downlinks;
 
+  /** Telemetría en memoria + último snapshot persistido (servidor tiene prioridad en solapes). */
+  const previewMergedLiveProps = useMemo(() => {
+    const live =
+      previewLiveProps && typeof previewLiveProps === 'object' && !Array.isArray(previewLiveProps)
+        ? previewLiveProps
+        : {};
+    const db =
+      dbPreviewProps && typeof dbPreviewProps === 'object' && !Array.isArray(dbPreviewProps) ? dbPreviewProps : {};
+    const hasDb = db && Object.keys(db).length > 0;
+    if (!hasDb) return live;
+    return { ...live, ...db };
+  }, [previewLiveProps, dbPreviewProps]);
+
   /** Panel: lista de campos en «Datos» según el dispositivo elegido (telemetría de ese equipo). */
   const effectiveAvailableDataFields = useMemo(() => {
     if (!showPanelDevicePicker) return availableDataFields;
-    const props = previewLiveProps;
+    const props = previewMergedLiveProps;
     const propsOk = props && typeof props === 'object' && !Array.isArray(props);
     const extras = Array.isArray(panelPreviewExtraDataKeys) ? panelPreviewExtraDataKeys : [];
     if (!propsOk && extras.length === 0) return availableDataFields;
@@ -756,7 +1665,7 @@ export default function WidgetEditModal({
     return sortTelemetryPickerKeys([...set]);
   }, [
     showPanelDevicePicker,
-    previewLiveProps,
+    previewMergedLiveProps,
     availableDataFields,
     showLorawanMetaInPicker,
     draft.data?.fieldKey,
@@ -783,7 +1692,7 @@ export default function WidgetEditModal({
       fk = `__bsd_${fixedDashWidgetId}`;
     }
     return fk;
-  }, [draft.data?.fieldKey, draft.data?.streamSeries, draft.data, sensor?.propertyKey, fixedDashWidgetId]);
+  }, [draft.data, sensor, fixedDashWidgetId]);
 
   /** Clave de telemetría de entrada para la fórmula (vista previa); si no hay fórmula activa, coincide con el campo principal. */
   const previewNumericSourceKey = useMemo(() => {
@@ -807,19 +1716,23 @@ export default function WidgetEditModal({
   }, [sensor, fixedDashWidgetId]);
 
   useEffect(() => {
-    if (!open) setFormulaProbeLine('');
+    if (open) return undefined;
+    queueMicrotask(() => setFormulaProbeLine(''));
+    return undefined;
   }, [open]);
 
   useEffect(() => {
-    if (tab !== 'formula') setFormulaProbeLine('');
+    if (tab === 'formula') return undefined;
+    queueMicrotask(() => setFormulaProbeLine(''));
+    return undefined;
   }, [tab]);
 
   /** Número base para la fórmula (misma entrada que usa el tablero al evaluar). */
   const previewFormulaBaseNumber = useMemo(() => {
     const key = previewNumericSourceKey;
     let base = null;
-    if (previewLiveProps && key && previewLiveProps[key] !== undefined) {
-      base = parseLiveNumber(previewLiveProps[key]);
+    if (previewMergedLiveProps && key && previewMergedLiveProps[key] !== undefined) {
+      base = parseLiveNumber(previewMergedLiveProps[key]);
     }
     if (base == null) {
       const fromSensor = parseLiveNumber(sensor?.value);
@@ -835,7 +1748,7 @@ export default function WidgetEditModal({
     return base;
   }, [
     previewNumericSourceKey,
-    previewLiveProps,
+    previewMergedLiveProps,
     sensor?.value,
     draft.gauge?.scaleMin,
     draft.gauge?.scaleMax,
@@ -869,27 +1782,6 @@ export default function WidgetEditModal({
     setFormulaProbeLine(`Entrada: ${base} → resultado que verá el widget: ${t}`);
   }, [draft.data?.formulaExpression, previewFormulaBaseNumber]);
 
-  const previewUsesLiveValue = useMemo(() => {
-    const key = previewNumericSourceKey;
-    if (previewLiveProps && key && previewLiveProps[key] !== undefined) {
-      const n = parseLiveNumber(previewLiveProps[key]);
-      if (n != null) return true;
-    }
-    return parseLiveNumber(sensor?.value) != null;
-  }, [previewNumericSourceKey, previewLiveProps, sensor?.propertyKey, sensor?.value]);
-
-  const previewSubtitle = useMemo(() => {
-    if (sensor?.sourceDeviceId === 'dashboard' && isDashboardFixedWidgetSensor(sensor)) {
-      if (previewUsesLiveValue) return 'Vista previa · refleja cambios al instante';
-      return showPanelDevicePicker
-        ? 'Vista previa · elige dispositivo y campo con telemetría (o valor de ejemplo)'
-        : 'Vista previa · sin telemetría para este campo (valor de ejemplo)';
-    }
-    if (!previewUsesLiveValue) return 'Vista previa · valor de ejemplo (ajusta escala y rangos)';
-    if (editScope !== 'value') return 'Vista previa';
-    return 'Valor en vivo';
-  }, [sensor, previewUsesLiveValue, editScope, showPanelDevicePicker]);
-
   const indicatorSelectValue = useMemo(() => {
     const raw = draft.gauge?.indicatorType || 'numeric';
     const n = normalizeIndicatorType(raw);
@@ -921,11 +1813,6 @@ export default function WidgetEditModal({
     return sortTelemetryPickerKeys([...set]);
   }, [effectiveAvailableDataFields, draft.data?.fieldKey, draft.data?.formulaSourceKey]);
 
-  const previewDashWidgetId = useMemo(() => {
-    if (fixedDashWidgetId) return fixedDashWidgetId;
-    return dashWidgetIdFromPropertyKey(sensor?.propertyKey);
-  }, [sensor, fixedDashWidgetId]);
-
   const showDownlinkDataSection =
     previewDashWidgetId === DASH_WIDGET.SWITCH || previewDashWidgetId === DASH_WIDGET.DOWNLINK;
 
@@ -956,6 +1843,8 @@ export default function WidgetEditModal({
     const base = dashboardWidgetBaseId(previewDashWidgetId);
     const withFormula = new Set([
       DASH_WIDGET.SATISFACTION,
+      DASH_WIDGET.CONTAINER,
+      DASH_WIDGET.BATTERY_LEVEL,
       DASH_WIDGET.METRIC_CIRCULAR,
       DASH_WIDGET.TEXT,
       DASH_WIDGET.STREAM,
@@ -969,6 +1858,8 @@ export default function WidgetEditModal({
     return (
       circ ||
       previewDashWidgetId === DASH_WIDGET.SATISFACTION ||
+      previewDashWidgetId === DASH_WIDGET.CONTAINER ||
+      previewDashWidgetId === DASH_WIDGET.BATTERY_LEVEL ||
       previewDashWidgetId === DASH_WIDGET.METRIC_CIRCULAR
     );
   }, [draft.gauge?.indicatorType, previewDashWidgetId]);
@@ -977,10 +1868,13 @@ export default function WidgetEditModal({
     let tabs = tabsForScope(editScope);
     if (hideGaugeForWidget) tabs = tabs.filter((t) => t.id !== 'gauge');
     if (hideFormulaTabForWidget) tabs = tabs.filter((t) => t.id !== 'formula');
+    if (previewDashWidgetId === DASH_WIDGET.IMAGE || previewDashWidgetId === DASH_WIDGET.MAP) {
+      tabs = tabs.filter((t) => t.id !== 'data');
+    }
     return tabs;
-  }, [editScope, hideGaugeForWidget, hideFormulaTabForWidget]);
+  }, [editScope, hideGaugeForWidget, hideFormulaTabForWidget, previewDashWidgetId]);
 
-  /** Panel Control: [Básicos] [Dispositivo ▼] [Datos] [Apariencia] […] según tipo de widget. */
+  /** Panel Control: [Básicos] [Dispositivo ▼] [Datos] […] según tipo (Imagen/Mapa: sin dispositivo ni Datos). */
   const panelToolbarTabs = useMemo(() => {
     if (!showPanelDevicePicker) return null;
     const basics = visibleTabs.find((t) => t.id === 'basics');
@@ -998,6 +1892,8 @@ export default function WidgetEditModal({
         ? 'data'
         : tab;
 
+  const activeTabResolved = visibleTabs.some((t) => t.id === activeTab) ? activeTab : 'basics';
+
   const downlinkSelectState = useMemo(() => {
     const dlList = Array.isArray(previewDownlinks) ? previewDownlinks : [];
     const swOnN = normalizeDownlinkHex(draft.data?.switchHexOn);
@@ -1012,7 +1908,7 @@ export default function WidgetEditModal({
       swOnListed: listed(swOnN),
       swOffListed: listed(swOffN),
     };
-  }, [previewDownlinks, draft.data?.switchHexOn, draft.data?.switchHexOff, draft.data?.downlinkButtons]);
+  }, [previewDownlinks, draft.data]);
 
   const streamSeriesFieldOptions = useMemo(() => {
     const set = new Set((effectiveAvailableDataFields || []).filter((k) => k && !String(k).startsWith('__bsd_')));
@@ -1033,12 +1929,12 @@ export default function WidgetEditModal({
     const key = previewTelemetryKey;
     const fallback =
       sensor?.value !== undefined && sensor?.value !== null ? sensor.value : previewValue;
-    if (!key || String(key).startsWith('__bsd_') || !previewLiveProps || typeof previewLiveProps !== 'object') {
+    if (!key || String(key).startsWith('__bsd_') || !previewMergedLiveProps || typeof previewMergedLiveProps !== 'object') {
       return { primary: fallback, alternate: undefined };
     }
     const cfg = draft;
     if (previewDashWidgetId === DASH_WIDGET.TEXT) {
-      const scalar = resolveTextWidgetRawScalar(previewLiveProps, key, cfg);
+      const scalar = resolveTextWidgetRawScalar(previewMergedLiveProps, key, cfg);
       if (scalar !== undefined && scalar !== null) {
         if (previewLiveDeviceModel) {
           const friendly = tryTelemetryDisplayLabel(
@@ -1053,21 +1949,21 @@ export default function WidgetEditModal({
         }
         return { primary: scalar, alternate: undefined };
       }
-      const r = resolveTelemetryDisplaySource(previewLiveProps, key);
+      const r = resolveTelemetryDisplaySource(previewMergedLiveProps, key);
       if (r !== undefined) return { primary: r, alternate: undefined };
     } else {
-      const r = resolveTelemetryDisplaySource(previewLiveProps, key);
+      const r = resolveTelemetryDisplaySource(previewMergedLiveProps, key);
       if (r !== undefined) return { primary: r, alternate: undefined };
     }
     return { primary: fallback, alternate: undefined };
   }, [
     previewTelemetryKey,
-    previewLiveProps,
+    previewMergedLiveProps,
     draft,
     previewDashWidgetId,
     previewLiveDeviceModel,
     previewTelemetryHints,
-    sensor?.value,
+    sensor,
     previewValue,
   ]);
 
@@ -1087,6 +1983,68 @@ export default function WidgetEditModal({
   const previewShellClear = useMemo(
     () => isWidgetBackgroundTransparent(previewEffectiveAppearance),
     [previewEffectiveAppearance]
+  );
+
+  const previewBaseDashId = useMemo(() => {
+    if (!previewDashWidgetId) return null;
+    return dashboardWidgetBaseId(previewDashWidgetId);
+  }, [previewDashWidgetId]);
+
+  const previewCardFieldKey = useMemo(() => {
+    const fk = String(draft.data?.fieldKey ?? '').trim();
+    if (fk && !fk.startsWith('__bsd_')) return fk;
+    if (sensor?.propertyKey && !String(sensor.propertyKey).startsWith('__bsd_')) {
+      return String(sensor.propertyKey).trim();
+    }
+    return previewTelemetryKey;
+  }, [draft.data?.fieldKey, sensor, previewTelemetryKey]);
+
+  const previewRangeAccent = useMemo(
+    () =>
+      colorForValueInRanges(
+        previewValue,
+        draft.gauge?.ranges || [],
+        Number(draft.gauge?.scaleMin) || 0,
+        Number(draft.gauge?.scaleMax) || 50
+      ),
+    [previewValue, draft.gauge?.ranges, draft.gauge?.scaleMin, draft.gauge?.scaleMax]
+  );
+
+  const previewTelemetryDisplayLabel = useMemo(() => {
+    if (!previewMergedLiveProps || typeof previewMergedLiveProps !== 'object') return null;
+    const fieldForDisplay = previewCardFieldKey;
+    if (!fieldForDisplay || String(fieldForDisplay).startsWith('__bsd_')) return null;
+    const rawForLabel = resolveTelemetryDisplaySource(previewMergedLiveProps, fieldForDisplay);
+    if (rawForLabel !== undefined && rawForLabel !== null) {
+      return tryTelemetryDisplayLabel(
+        previewLiveDeviceModel,
+        fieldForDisplay,
+        rawForLabel,
+        previewTelemetryHints
+      );
+    }
+    return tryTelemetryDisplayLabel(
+      previewLiveDeviceModel,
+      fieldForDisplay,
+      previewValue,
+      previewTelemetryHints
+    );
+  }, [
+    previewMergedLiveProps,
+    previewCardFieldKey,
+    previewLiveDeviceModel,
+    previewTelemetryHints,
+    previewValue,
+  ]);
+
+  const previewSensorSubtitle = useMemo(() => {
+    const gran = draft.timeframe?.granularity;
+    return draft.timeframe?.mode === 'interval' ? (gran ? `Historial (${gran})` : 'Intervalo') : 'En vivo';
+  }, [draft.timeframe?.mode, draft.timeframe?.granularity]);
+
+  const modalTextWidgetUi = useMemo(
+    () => computeModalTextWidgetUi(previewMergedLiveProps, draft, previewLiveDeviceModel, previewTelemetryHints),
+    [previewMergedLiveProps, draft, previewLiveDeviceModel, previewTelemetryHints]
   );
 
   if (!open || !sensor) return null;
@@ -1166,6 +2124,10 @@ export default function WidgetEditModal({
       delete cfg.data.longitudeKey;
       delete cfg.data.historyKey;
     }
+    if (dashWid === DASH_WIDGET.IMAGE) {
+      cfg.data = cfg.data || {};
+      cfg.data.staticImageUrl = String(cfg.data.staticImageUrl ?? '').trim();
+    }
     onSave(cfg);
     onClose();
   };
@@ -1184,82 +2146,34 @@ export default function WidgetEditModal({
           </button>
         </div>
 
+        <div className="widget-edit-modal-scroll">
         <div className="widget-edit-preview-wrap">
-          <div className="widget-edit-preview-heading">
-            <span className="widget-edit-preview-heading__title">Vista previa</span>
-            <span className="widget-edit-preview-heading__hint">
-              Se actualiza al instante mientras editas; pulsa Guardar para aplicar en el tablero.
-            </span>
-          </div>
           <div
-            className={`widget-edit-preview${previewShellClear ? ' bsd-widget-surface--clear' : ''}`}
-            style={previewShellSurfaceStyle || undefined}
+            className="widget-edit-preview widget-edit-preview--chrome-pass"
+            role="region"
+            aria-label="Vista previa del widget"
           >
-            {showSensorGridPreview ? (
-              <SensorGridWidgetPreview
+            <ModalLivePreviewBlock
+              sensor={sensor}
                 draft={draft}
+              showSensorGridPreview={showSensorGridPreview}
+              previewDashWidgetId={previewDashWidgetId}
+              previewBaseDashId={previewBaseDashId}
+              previewVisualKey={previewVisualKey}
                 indicatorSelectValue={indicatorSelectValue}
-                previewSubtitle={previewSubtitle}
-                liveProps={previewLiveProps}
-                availableDataFields={effectiveAvailableDataFields}
-                sensorTitleFallback={sensor.name}
-                previewTheme={previewTheme}
-              />
-            ) : previewDashWidgetId === DASH_WIDGET.SWITCH ? (
-              <SwitchWidgetPreview
-                key={previewVisualKey}
-                draft={draft}
-                previewSubtitle={previewSubtitle}
+              previewMergedLiveProps={previewMergedLiveProps}
+              previewValue={previewValue}
+              previewShellSurfaceStyle={previewShellSurfaceStyle}
+              previewShellClear={previewShellClear}
+              previewRangeAccent={previewRangeAccent}
+              previewTelemetryDisplayLabel={previewTelemetryDisplayLabel}
+              previewSensorSubtitle={previewSensorSubtitle}
+              modalTextWidgetUi={modalTextWidgetUi}
+              effectiveAvailableDataFields={effectiveAvailableDataFields}
                 downlinkSelectState={downlinkSelectState}
-                titleColor={draft.appearance?.titleColor}
-              />
-            ) : previewDashWidgetId === DASH_WIDGET.DOWNLINK ? (
-              <DownlinkWidgetPreview
-                key={previewVisualKey}
-                draft={draft}
-                previewSubtitle={previewSubtitle}
-                downlinkSelectState={downlinkSelectState}
-              />
-            ) : previewDashWidgetId === DASH_WIDGET.IMAGE ? (
-              <ImageWidgetPreview
-                key={previewVisualKey}
-                draft={draft}
-                liveProps={previewLiveProps}
-                previewSubtitle={previewSubtitle}
-                titleColor={draft.appearance?.titleColor}
-              />
-            ) : previewDashWidgetId === DASH_WIDGET.MAP ? (
-              <MapWidgetPreview
-                key={previewVisualKey}
-                draft={draft}
-                liveProps={previewLiveProps}
-                previewSubtitle={previewSubtitle}
-                titleColor={draft.appearance?.titleColor}
-              />
-            ) : previewDashWidgetId === DASH_WIDGET.TRACKING_MAP ? (
-              <TrackingMapWidgetPreview
-                key={previewVisualKey}
-                draft={draft}
-                previewSubtitle={previewSubtitle}
-                titleColor={draft.appearance?.titleColor}
-              />
-            ) : (
-              <ValueIndicator
-                key={`${previewVisualKey}-${indicatorSelectValue}`}
-                type={indicatorSelectValue}
-                value={previewValue}
-                unit={draft.data?.unit || ''}
-                decimals={Number(draft.data?.decimals) || 0}
-                scaleMin={Number(draft.gauge?.scaleMin) || 0}
-                scaleMax={Number(draft.gauge?.scaleMax) || 50}
-                ranges={draft.gauge?.ranges || []}
-                inverseFill={Boolean(draft.gauge?.inverseFill)}
-                title={draft.basics?.title || sensor.name}
-                titleColor={draft.appearance?.titleColor || '#f97316'}
-                subtitle={previewSubtitle}
-                theme={previewTheme}
-              />
-            )}
+              previewLiveDeviceModel={previewLiveDeviceModel}
+              previewTelemetryHints={previewTelemetryHints}
+            />
           </div>
         </div>
 
@@ -1273,8 +2187,8 @@ export default function WidgetEditModal({
                   key={panelToolbarTabs.basics.id}
                   type="button"
                   role="tab"
-                  aria-selected={activeTab === panelToolbarTabs.basics.id}
-                  className={`widget-edit-tab ${activeTab === panelToolbarTabs.basics.id ? 'active' : ''}`}
+                  aria-selected={activeTabResolved === panelToolbarTabs.basics.id}
+                  className={`widget-edit-tab ${activeTabResolved === panelToolbarTabs.basics.id ? 'active' : ''}`}
                   onClick={() => setTab(panelToolbarTabs.basics.id)}
                 >
                   {panelToolbarTabs.basics.label}
@@ -1316,8 +2230,8 @@ export default function WidgetEditModal({
                     key={t.id}
                     type="button"
                     role="tab"
-                    aria-selected={activeTab === t.id}
-                    className={`widget-edit-tab ${activeTab === t.id ? 'active' : ''}`}
+                    aria-selected={activeTabResolved === t.id}
+                    className={`widget-edit-tab ${activeTabResolved === t.id ? 'active' : ''}`}
                     onClick={() => setTab(t.id)}
                   >
                     {t.label}
@@ -1332,8 +2246,8 @@ export default function WidgetEditModal({
                   key={t.id}
                   type="button"
                   role="tab"
-                  aria-selected={activeTab === t.id}
-                  className={`widget-edit-tab ${activeTab === t.id ? 'active' : ''}`}
+                  aria-selected={activeTabResolved === t.id}
+                  className={`widget-edit-tab ${activeTabResolved === t.id ? 'active' : ''}`}
                   onClick={() => setTab(t.id)}
                 >
                   {t.label}
@@ -1344,7 +2258,7 @@ export default function WidgetEditModal({
         </div>
 
         <div className="widget-edit-body">
-          {activeTab === 'basics' && (
+          {activeTabResolved === 'basics' && (
             <div className="widget-edit-fields">
               {editScope === 'value' && !isDashboardFixedWidgetSensor(sensor) && (
                 <>
@@ -1399,6 +2313,12 @@ export default function WidgetEditModal({
                   onChange={(e) => update('basics.title', e.target.value)}
                 />
               </label>
+              {previewDashWidgetId === DASH_WIDGET.IMAGE && (
+                <ImageWidgetBasicsImageSource draft={draft} setDraft={setDraft} />
+              )}
+              {previewDashWidgetId === DASH_WIDGET.MAP && (
+                <MapWidgetBasicsCoords draft={draft} setDraft={setDraft} />
+              )}
               {editScope === 'value' && (
                 <div className="widget-edit-translations">
                   <div className="widget-edit-label">Traducciones del título</div>
@@ -1484,13 +2404,9 @@ export default function WidgetEditModal({
             </div>
           )}
 
-          {activeTab === 'data' && (
+          {activeTabResolved === 'data' && (
             <div className="widget-edit-fields">
-              {showImageDataSection ? (
-                <ImageWidgetDashDataTab draft={draft} setDraft={setDraft} />
-              ) : showMapDataSection ? (
-                <MapWidgetDashDataTab draft={draft} setDraft={setDraft} />
-              ) : showTrackingMapDataSection ? (
+              {showTrackingMapDataSection ? (
                 <TrackingMapWidgetDashDataTab
                   draft={draft}
                   setDraft={setDraft}
@@ -2151,7 +3067,7 @@ export default function WidgetEditModal({
             </div>
           )}
 
-          {activeTab === 'appearance' && (
+          {activeTabResolved === 'appearance' && (
             <div className="widget-edit-fields">
               <div className="widget-edit-appearance-twin">
                 <label className="widget-edit-label">
@@ -2370,7 +3286,7 @@ export default function WidgetEditModal({
             </div>
           )}
 
-          {activeTab === 'gauge' && (
+          {activeTabResolved === 'gauge' && (
             <div className="widget-edit-fields">
               <p className="widget-edit-hint">
                 El tipo de widget (numérico, circular, etc.) se configura en <strong>Básicos</strong>. Aquí defines
@@ -2460,7 +3376,7 @@ export default function WidgetEditModal({
             </div>
           )}
 
-          {activeTab === 'formula' && editScope === 'value' && (
+          {activeTabResolved === 'formula' && editScope === 'value' && (
             <div className="widget-edit-fields">
               <p className="widget-edit-hint">
                 Usa el valor de telemetría como <strong>Valor</strong> o <strong>(Valor)</strong> en la expresión.
@@ -2521,6 +3437,7 @@ export default function WidgetEditModal({
             </div>
           )}
 
+        </div>
         </div>
 
         <div className="widget-edit-footer">

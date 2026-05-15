@@ -23,6 +23,8 @@ import {
   Grid3X3,
   PieChart,
   Gauge,
+  Cylinder,
+  Battery,
   Type,
   Route,
 } from 'lucide-react';
@@ -47,18 +49,18 @@ import {
   GATEWAY_TOGGLE_KEY_HINTS,
 } from '../../utils/gatewayPayload';
 import { formatTelemetryChartTooltipValue, tryTelemetryDisplayLabel } from '../../utils/telemetryDisplayFormat';
-import { getTelemetryPropertyValue } from '../../utils/telemetryPropertyPath';
 import { transformWidgetNumeric } from '../../utils/widgetFormula';
 import {
   applyDeviceBsdBundle,
   collectDeviceBsdBundle,
   deviceBsdBundleIsEmpty,
 } from '../../utils/deviceBsdPreferencesBundle';
-import { applyPanelBsdBundle, collectPanelBsdBundle } from '../../utils/panelBsdPreferencesBundle';
+import { applyPanelBsdBundle, collectPanelBsdBundle, purgePanelInstanceStorage } from '../../utils/panelBsdPreferencesBundle';
 import { applyStaleOfflineConnectStatus, isDeviceVisuallyOnline } from '../../utils/deviceConnectionStatus';
 import { SYSCOM_REALTIME_TELEMETRY } from '../../constants/realtimeEvents';
 import { pushAppActivityLog } from '../../utils/appActivityLog';
 import WidgetEditModal from './WidgetEditModal';
+import CenteredAlertModal from '../CenteredAlertModal';
 import ValueIndicator from './ValueIndicator';
 import { normalizeIndicatorType } from './valueIndicatorUtils';
 import {
@@ -104,6 +106,24 @@ import {
   isDashboardMultiLayoutSlotId,
 } from './widgetConfigUtils';
 import {
+  BSD_CIRCULAR_GAUGE_R,
+  BSD_CIRCULAR_GAUGE_LEN,
+  MC_CX,
+  MC_CY,
+  MC_R,
+  MC_ARC_START,
+  MC_ARC_SWEEP,
+  MC_ARC_PATH_D,
+  MC_ARC_GEOM_LEN,
+  mcPoint,
+  buildMetricCircularTicksFromUi,
+  computeMetricCircularUiForSlot,
+  computeContainerTankUi,
+  computeBatteryLevelUi,
+} from './metricCircularUi';
+import BsdContainerTankView from './BsdContainerTankView';
+import BsdBatteryLevelView from './BsdBatteryLevelView';
+import {
   applyBsdDragChainPushLayout,
   buildDefaultBsdGridLayout,
   compactBsdGridLayoutTopLeft,
@@ -123,18 +143,15 @@ import {
 } from './bsdDashboardLayout';
 import { readDownlinksFromLocalStorage, getTelemetryLabelHintsForDevice } from '../../services/deviceTemplates';
 import BsdLeafletTrackingMap from './BsdLeafletTrackingMap';
-import { resolveMapCoords, openStreetMapEmbedUrl } from './mapWidgetCoords';
+import BsdLeafletStaticMap from './BsdLeafletStaticMap';
+import BsdMapLayerMenu from './BsdMapLayerMenu';
+import { resolveMapCoords } from './mapWidgetCoords';
+import { normalizeMapBaseLayerId } from './mapWidgetLayers';
 import {
   collectTrackingPointsFromTelemetryRows,
   trackingWindowEndMs,
 } from './trackingMapPoints';
 import './BudgetSensorsDashboard.css';
-
-function normalizeDeui16(v) {
-  if (v == null) return '';
-  const s = String(v).replace(/[^0-9a-fA-F]/g, '').toLowerCase();
-  return s.length === 16 ? s : '';
-}
 
 /** Icono del catálogo modal «Agregar widget» (Lucide). */
 function widgetGalleryLucideIcon(widgetId) {
@@ -154,6 +171,10 @@ function widgetGalleryLucideIcon(widgetId) {
       return Route;
     case DASH_WIDGET.SATISFACTION:
       return PieChart;
+    case DASH_WIDGET.CONTAINER:
+      return Cylinder;
+    case DASH_WIDGET.BATTERY_LEVEL:
+      return Battery;
     case DASH_WIDGET.METRIC_CIRCULAR:
       return Gauge;
     case DASH_WIDGET.TEXT:
@@ -297,50 +318,6 @@ function panelDeviceDeuiLabel(d) {
 const PANEL_LIVE_REFRESH_MS = 2500;
 /** Consultas de historial de gráficos (línea / barras): <5 s respecto a un evento en backend + red. */
 const DASH_CHART_HISTORY_POLL_MS = 4000;
-
-/** Anillo del widget Circular: radio en viewBox 200×200 (debe coincidir con el SVG). */
-const BSD_CIRCULAR_GAUGE_R = 76;
-const BSD_CIRCULAR_GAUGE_LEN = 2 * Math.PI * BSD_CIRCULAR_GAUGE_R;
-
-/** Medidor «Métrica circular»: arco ~240° (mismo convenio que ángulos matemáticos en el plano SVG, y+ abajo). */
-const MC_CX = 120;
-const MC_CY = 108;
-const MC_R = 72;
-const MC_ARC_START = (150 * Math.PI) / 180;
-const MC_ARC_SWEEP = (240 * Math.PI) / 180;
-
-function mcPoint(cx, cy, r, theta) {
-  return { x: cx + r * Math.cos(theta), y: cy + r * Math.sin(theta) };
-}
-
-function mcArcPathD(cx, cy, r, theta0, theta1) {
-  const p0 = mcPoint(cx, cy, r, theta0);
-  const p1 = mcPoint(cx, cy, r, theta1);
-  const delta = theta1 - theta0;
-  const large = Math.abs(delta) > Math.PI ? 1 : 0;
-  const sweep = delta > 0 ? 1 : 0;
-  return `M ${p0.x} ${p0.y} A ${r} ${r} 0 ${large} ${sweep} ${p1.x} ${p1.y}`;
-}
-
-const MC_ARC_PATH_D = mcArcPathD(MC_CX, MC_CY, MC_R, MC_ARC_START, MC_ARC_START + MC_ARC_SWEEP);
-/** Longitud del trazo del arco (≈ r·Δθ) para stroke-dasharray / offset. */
-const MC_ARC_GEOM_LEN = MC_R * MC_ARC_SWEEP;
-
-function buildMetricCircularTicksFromUi(ui) {
-  const lo = ui.scaleLo;
-  const hi = ui.scaleHi;
-  const span = hi - lo;
-  const d = ui.tickDec;
-  return [0, 1 / 3, 2 / 3, 1].map((f) => {
-    const val = lo + f * span;
-    return {
-      f,
-      val,
-      label: val.toFixed(d),
-      theta: MC_ARC_START + f * MC_ARC_SWEEP,
-    };
-  });
-}
 
 const DEFAULT_SENSORS = [
   { id: 1, name: 'Temperatura', value: 23.5, unit: '°C', icon: '🌡️', threshold: 30, propertyKey: 'temperature', sourceDeviceId: 'demo' },
@@ -668,115 +645,6 @@ function pointValueAfterWidgetFormula(cfg, seriesFieldKey, numericVal) {
   return t != null && Number.isFinite(t) ? t : numericVal;
 }
 
-function computeMetricCircularUiForSlot(
-  dk,
-  widgetConfigs,
-  slotWid,
-  telemetryLiveProps,
-  liveDeviceModel,
-  telemetryHintMap
-) {
-  const key = dk(slotWid);
-  const cfg = widgetConfigs[key];
-  const fkRaw = cfg?.data?.fieldKey;
-  const fkStr = fkRaw != null ? String(fkRaw).trim() : '';
-  const readFk = telemetryFieldKeyForFormula(cfg, fkStr);
-  const rawLiveScalar =
-    telemetryLiveProps && typeof telemetryLiveProps === 'object' && !Array.isArray(telemetryLiveProps)
-      ? resolveTelemetryDisplaySource(telemetryLiveProps, readFk)
-      : undefined;
-  const useLive =
-    Boolean(readFk) &&
-    !readFk.startsWith('__bsd_') &&
-    telemetryLiveProps &&
-    typeof telemetryLiveProps === 'object' &&
-    rawLiveScalar !== undefined;
-  const nParsed = useLive ? parseNumeric(rawLiveScalar) : null;
-  const n = transformWidgetNumeric(cfg, nParsed);
-  const formulaActive =
-    Boolean(cfg?.data?.formulaEnabled) && String(cfg?.data?.formulaExpression ?? '').trim() !== '';
-
-  const decRaw = cfg?.data?.decimals;
-  const dec =
-    decRaw != null && decRaw !== '' && Number.isFinite(Number(decRaw))
-      ? Math.min(20, Math.max(0, Number(decRaw)))
-      : 1;
-  const unit = cfg?.data?.unit != null ? String(cfg.data.unit) : '';
-  const min = Number(cfg?.gauge?.scaleMin);
-  const max = Number(cfg?.gauge?.scaleMax);
-  const lo = Number.isFinite(min) ? min : 0;
-  let hi = Number.isFinite(max) && max > lo ? max : lo + 60;
-  const ranges = Array.isArray(cfg?.gauge?.ranges) ? cfg.gauge.ranges : [];
-  const rangeMax = ranges.length
-    ? Math.max(...ranges.map((r) => Number(r.value)).filter((x) => Number.isFinite(x)))
-    : -Infinity;
-  const unitLc = unit.toLowerCase();
-  const fieldLc = fkStr.toLowerCase();
-  /** Batería / humedad / % suelen ser 0–100; el stub del widget usaba 60 y 88 % llenaba el arco al 100 %. */
-  const preferHundredScale =
-    unitLc.includes('%') ||
-    /\bpercent|por\s*ciento/.test(unitLc) ||
-    fieldLc.includes('battery') ||
-    fieldLc.includes('bater') ||
-    fieldLc.includes('humidity') ||
-    fieldLc.includes('humedad');
-  if (Number.isFinite(rangeMax) && rangeMax > hi) hi = rangeMax;
-  if (preferHundredScale) hi = Math.max(hi, 100);
-  const span = hi - lo;
-  const gradMode = cfg?.data?.metricGradient === 'thermal' ? 'thermal' : 'traffic';
-  const userSub = cfg?.data?.metricSubtitle != null ? String(cfg.data.metricSubtitle).trim() : '';
-  const tickDec = span >= 20 ? 1 : 2;
-  const lastAtLine = formatLastTelemetryUpdateLine(telemetryLiveProps?.lastUpdateTime);
-
-  const inverseFill = Boolean(cfg?.gauge?.inverseFill);
-
-  if (n !== null && Number.isFinite(n)) {
-    const t = Math.min(1, Math.max(0, gaugeFillProgressT(n, lo, hi, inverseFill)));
-    const rawLive = useLive ? rawLiveScalar : undefined;
-    const friendly =
-      !formulaActive && useLive && rawLive !== undefined
-        ? tryTelemetryDisplayLabel(liveDeviceModel, fkStr, rawLive, telemetryHintMap)
-        : null;
-    const centerMain = friendly || `${n.toFixed(dec)}${unit ? ` ${unit}` : ''}`.trim();
-    const svgSubtitleLine = userSub;
-    return {
-      hasValue: true,
-      rawValue: n,
-      centerMain,
-      svgSubtitleLine,
-      lastAtLine,
-      needleT: t,
-      scaleLo: lo,
-      scaleHi: hi,
-      gradientMode: gradMode,
-      tickDec,
-      unitDisplay: unit,
-      ranges,
-    };
-  }
-
-  const centerMain = '—';
-  let svgSubtitleLine = userSub;
-  if (!svgSubtitleLine) {
-    if (!fkStr || fkStr.startsWith('__bsd_')) svgSubtitleLine = 'Configura el campo en edición';
-    else svgSubtitleLine = 'Sin lectura en vivo';
-  }
-  return {
-    hasValue: false,
-    rawValue: null,
-    centerMain,
-    svgSubtitleLine,
-    lastAtLine,
-    needleT: null,
-    scaleLo: lo,
-    scaleHi: hi,
-    gradientMode: gradMode,
-    tickDec,
-    unitDisplay: unit,
-    ranges,
-  };
-}
-
 function computeTextWidgetUiForSlot(
   dk,
   widgetConfigs,
@@ -1024,10 +892,15 @@ function pickImageUrl(props) {
   return null;
 }
 
-/** Imagen subida (data URL) o URL en telemetría. */
+/** Imagen subida (data URL), URL guardada en el widget, o (legado) URL en telemetría. */
 function resolveImageDisplayUrl(liveProps, imageCfg) {
   const u = imageCfg?.data?.uploadedImageDataUrl;
-  if (typeof u === 'string' && u.startsWith('data:image/')) return u;
+  if (typeof u === 'string' && /^data:image\//i.test(u.trim())) return u.trim();
+  const staticUrl = imageCfg?.data?.staticImageUrl;
+  if (typeof staticUrl === 'string' && staticUrl.trim()) {
+    const s = staticUrl.trim();
+    if (/^https?:\/\//i.test(s) || /^data:image\//i.test(s)) return s;
+  }
   return pickImageUrl(liveProps);
 }
 
@@ -1999,6 +1872,11 @@ function BsdTextWidgetSignalIcon({ className }) {
 }
 
 /**
+ * Única implementación del tablero BSD: Panel Control (`variant="panel"`, página Dashboard)
+ * y dashboard por dispositivo (`variant="device"`, modal desde Dispositivos). Rejilla,
+ * galería «Agregar widget» y persistencia son las mismas para todos los usuarios y equipos;
+ * no hay otra copia del grid que deba parchearse aparte.
+ *
  * @param {{ variant?: 'panel' | 'device', device?: object | null, embedded?: boolean, loadingExternal?: boolean, onRefresh?: () => void, refreshing?: boolean }} props
  */
 export default function BudgetSensorsDashboard({
@@ -2022,6 +1900,10 @@ export default function BudgetSensorsDashboard({
     panels: [{ id: 'main', name: 'Panel principal' }],
     activePanelId: 'main',
   }));
+  const panelWorkspaceRef = useRef(panelWorkspace);
+  panelWorkspaceRef.current = panelWorkspace;
+  /** `{ id, name }` mientras el modal de confirmación de borrado de panel está abierto. */
+  const [panelDelete, setPanelDelete] = useState(null);
 
   useEffect(() => {
     if (variant !== 'panel') return;
@@ -2081,6 +1963,68 @@ export default function BudgetSensorsDashboard({
       return next;
     });
   }, [variant, panelInstanceId, panelWorkspace.panels, panelOwnerSegment]);
+
+  const closePanelDeleteDialog = useCallback(() => {
+    setPanelDelete(null);
+  }, []);
+
+  const requestPanelDelete = useCallback(
+    (panelId) => {
+      if (variant !== 'panel') return;
+      const pid = String(panelId || '').trim();
+      if (!pid || pid === 'main') return;
+      const ws = panelWorkspaceRef.current;
+      if (ws.panels.length <= 1) return;
+      const victim = ws.panels.find((p) => p.id === pid);
+      if (!victim) return;
+      setPanelDelete({ id: pid, name: victim.name });
+    },
+    [variant]
+  );
+
+  const commitPanelDelete = useCallback(async () => {
+    if (!panelDelete || variant !== 'panel') return;
+    const pid = String(panelDelete.id || '').trim();
+    if (!pid || pid === 'main') return;
+    const ws = panelWorkspaceRef.current;
+    if (ws.panels.length <= 1) return;
+
+    purgePanelInstanceStorage(panelOwnerSegment, pid);
+    const filtered = ws.panels.filter((p) => p.id !== pid);
+    const safeFiltered = filtered.length ? filtered : [{ id: 'main', name: 'Panel principal' }];
+    let activePanelId = ws.activePanelId;
+    if (activePanelId === pid) {
+      const ix = ws.panels.findIndex((p) => p.id === pid);
+      const pick = safeFiltered[Math.max(0, ix - 1)] || safeFiltered[0];
+      activePanelId = pick.id;
+    }
+    const next = { panels: safeFiltered, activePanelId };
+    setPanelWorkspace(next);
+    savePanelWorkspace(next, panelOwnerSegment);
+
+    const seg =
+      panelOwnerSegment != null && String(panelOwnerSegment).trim()
+        ? String(panelOwnerSegment).trim()
+        : '';
+    const uid = String((user && user.id) || (userProfile && userProfile.id) || '').trim();
+    if (token && uid) {
+      try {
+        await putPanelBsdPreferences(seg, pid, {
+          valueWidgets: {},
+          gridLayout: [],
+          visibility: {},
+        });
+      } catch {
+        /* ignore */
+      }
+      try {
+        const markerKey = `sycom_bsd_panel_remote_rev_${uid}_${encodeURIComponent(seg)}_${encodeURIComponent(pid)}`;
+        localStorage.removeItem(markerKey);
+      } catch {
+        /* ignore */
+      }
+    }
+  }, [panelDelete, variant, panelOwnerSegment, token, user?.id, userProfile?.id]);
   const gradId = useId().replace(/:/g, '');
   const metricCircularDomId = useId().replace(/:/g, '');
 
@@ -2631,6 +2575,8 @@ export default function BudgetSensorsDashboard({
   const ignoreNextGridLayoutChangeFromDragRef = useRef(false);
   /** Durante el arrastre no compactamos en `onLayoutChange` (RGL emite muchas veces; el reempaque al soltar lo hace `persistDashboardGridLayoutNow`). */
   const gridRglDraggingRef = useRef(false);
+  /** Durante el resize de una celda: igual que drag, no adoptar `onLayoutChange` «fantasma» cuando es false. */
+  const gridRglResizingRef = useRef(false);
 
   const innerRef = useRef(null);
   const gridWidthMeasureRef = useRef(null);
@@ -2664,7 +2610,8 @@ export default function BudgetSensorsDashboard({
   useEffect(() => {
     const stored = readStoredBsdGridLayout(dashboardGridLayoutKey);
     const vis = visibilityMapRef.current;
-    const defaults = buildDefaultBsdGridLayout(variant, panelDevices.length > 0 ? 1 : 0, vis);
+    const panelLen = variant === 'panel' && (panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0;
+    const defaults = buildDefaultBsdGridLayout(variant, panelLen, vis);
     /** Unir disco + layout en vivo: evita perder celdas que aún no se escribieron en localStorage. */
     const hybridById = new Map((stored || []).map((it) => [String(it.i), it]));
     const live = normalizeLayoutForPersistence(gridLayoutLatestRef.current || []);
@@ -2675,10 +2622,8 @@ export default function BudgetSensorsDashboard({
     const hybrid = normalizeLayoutForPersistence([...hybridById.values()]);
     const merged = normalizeLayoutForPersistence(mergeStoredBsdGridLayout(hybrid, defaults));
     const filtered = filterLayoutToAllowedDashboardItems(merged, defaults);
-    let sizeSafe = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(filtered));
-    if (bsdDashboardLayoutHasOverlap(sizeSafe)) {
-      sizeSafe = compactBsdGridLayoutTopLeft(sizeSafe);
-    }
+    /** Sin reempaque global: `compactBsdGridLayoutTopLeft` aquí movía widgets solos (p. ej. al cargar lista de dispositivos del panel o al redimensionar). */
+    const sizeSafe = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(filtered));
     /**
      * No reinyectar la plantilla por defecto cuando el filtro deja el grid vacío: eso mostraba widgets
      * que el usuario no había colocado manualmente (p. ej. desincronía transitoria). Se conserva el resultado filtrado.
@@ -2698,14 +2643,37 @@ export default function BudgetSensorsDashboard({
       gridLayoutLatestRef.current = nextLayout;
       return nextLayout;
     });
-  }, [dashboardGridLayoutKey, variant, panelDevices.length > 0, persistBsdGridLayoutDisk]);
+  }, [dashboardGridLayoutKey, variant, persistBsdGridLayoutDisk]);
 
-  /** Solo estado en vivo; localStorage en drag/resize stop y «Listo» (evita E/S en cada frame y ref desfasado). */
+  /**
+   * Cuando el panel pasa a tener dispositivos y la barra superior está visible, insertar **una vez** esa fila
+   * desplazando el resto hacia abajo — sin `compactBsdGridLayoutTopLeft` (no reordenar todo el tablero).
+   */
+  const panelDeviceCount = panelDevices.length;
+  useEffect(() => {
+    if (variant !== 'panel') return;
+    if (panelDeviceCount === 0) return;
+    const vis = visibilityMapRef.current;
+    if (!vis || vis[DASH_WIDGET.PANEL_DEVICE_BAR] === false) return;
+    const prev = normalizeLayoutForPersistence(gridLayoutLatestRef.current || []);
+    if (prev.some((it) => String(it.i) === DASH_WIDGET.PANEL_DEVICE_BAR)) return;
+    const bar = { i: DASH_WIDGET.PANEL_DEVICE_BAR, x: 0, y: 0, w: 12, h: 5, minW: 4, minH: 3 };
+    const shifted = prev.map((it) => ({ ...it, y: (Math.round(Number(it.y)) || 0) + 5 }));
+    const merged = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins([bar, ...shifted]));
+    gridLayoutLatestRef.current = merged;
+    setGridLayout(merged);
+    persistBsdGridLayoutDisk(merged);
+  }, [variant, panelDeviceCount, dashboardGridLayoutKey, persistBsdGridLayoutDisk]);
+
+  /** Solo adoptar posiciones que entrega RGL mientras el usuario arrastra o redimensiona; si no, RGL+merge pueden mover celdas solas (p. ej. Switch, gráficos). */
   const handleGridLayoutChange = useCallback(
     (next) => {
       if (dashboardLayoutLocked) return;
       if (ignoreNextGridLayoutChangeFromDragRef.current) {
         ignoreNextGridLayoutChangeFromDragRef.current = false;
+        return;
+      }
+      if (!gridRglDraggingRef.current && !gridRglResizingRef.current) {
         return;
       }
       const normalized = computeBsdDashboardNormalizedLayout(
@@ -2716,16 +2684,12 @@ export default function BudgetSensorsDashboard({
         visibilityMapRef.current
       );
       if (!normalized) return;
-      /** Mantener x/y que entrega RGL: compactar aquí movía todo el tablero en cada `onLayoutChange` (resize, montaje, etc.). */
       const out = normalized;
       if (layoutsEqualStable(gridLayoutLatestRef.current, out)) return;
       gridLayoutLatestRef.current = out;
       setGridLayout(out);
-      if (!gridRglDraggingRef.current) {
-        persistBsdGridLayoutDisk(out);
-      }
     },
-    [dashboardGridLayoutKey, dashboardLayoutLocked, persistBsdGridLayoutDisk, variant]
+    [dashboardLayoutLocked, variant]
   );
 
   /** Escribe en localStorage el layout ya normalizado (misma geometría que RGL). */
@@ -2754,6 +2718,18 @@ export default function BudgetSensorsDashboard({
     gridRglDraggingRef.current = true;
     gridDragSnapshotRef.current = normalizeLayoutForPersistence(gridLayoutLatestRef.current);
   }, []);
+
+  const handleGridResizeStart = useCallback(() => {
+    gridRglResizingRef.current = true;
+  }, []);
+
+  const handleGridResizeStop = useCallback(
+    (layout) => {
+      gridRglResizingRef.current = false;
+      persistDashboardGridLayoutNow(layout, { compact: false });
+    },
+    [persistDashboardGridLayoutNow]
+  );
 
   const handleGridDragStop = useCallback(
     (layout, oldItem, newItem) => {
@@ -3328,6 +3304,42 @@ export default function BudgetSensorsDashboard({
     resolveTelemetryHintsForPanelWidget,
   ]);
 
+  /** Contenedor (tanque): misma lógica de escala / telemetría / fórmula que Circular. */
+  const containerUi = useMemo(() => {
+    const key = dk(DASH_WIDGET.CONTAINER);
+    const cfg = widgetConfigs[key];
+    return computeContainerTankUi(
+      cfg,
+      telemetryLivePropsForPanelWidget(DASH_WIDGET.CONTAINER),
+      resolveLiveDeviceModelForPanelWidget(DASH_WIDGET.CONTAINER),
+      resolveTelemetryHintsForPanelWidget(DASH_WIDGET.CONTAINER)
+    );
+  }, [
+    widgetConfigs,
+    dk,
+    telemetryLivePropsForPanelWidget,
+    resolveLiveDeviceModelForPanelWidget,
+    resolveTelemetryHintsForPanelWidget,
+  ]);
+
+  /** Nivel Batería (pila): misma lógica de escala / telemetría / fórmula que Circular. */
+  const batteryLevelUi = useMemo(() => {
+    const key = dk(DASH_WIDGET.BATTERY_LEVEL);
+    const cfg = widgetConfigs[key];
+    return computeBatteryLevelUi(
+      cfg,
+      telemetryLivePropsForPanelWidget(DASH_WIDGET.BATTERY_LEVEL),
+      resolveLiveDeviceModelForPanelWidget(DASH_WIDGET.BATTERY_LEVEL),
+      resolveTelemetryHintsForPanelWidget(DASH_WIDGET.BATTERY_LEVEL)
+    );
+  }, [
+    widgetConfigs,
+    dk,
+    telemetryLivePropsForPanelWidget,
+    resolveLiveDeviceModelForPanelWidget,
+    resolveTelemetryHintsForPanelWidget,
+  ]);
+
   const textDashSlotIds = useMemo(() => {
     if (visibilityMap[DASH_WIDGET.TEXT] === false) return [];
     return (gridLayout || [])
@@ -3469,6 +3481,28 @@ export default function BudgetSensorsDashboard({
 
   const satisfactionArcDashOffset =
     BSD_CIRCULAR_GAUGE_LEN - (satisfactionUi.ringPct / 100) * BSD_CIRCULAR_GAUGE_LEN;
+
+  const containerLiquidColor = useMemo(() => {
+    const lo = containerUi.scaleMin;
+    const hi = containerUi.scaleMax;
+    const span = hi - lo;
+    const val =
+      containerUi.rawValue != null && Number.isFinite(containerUi.rawValue)
+        ? containerUi.rawValue
+        : lo + (containerUi.ringPct / 100) * span;
+    return colorForValueInRanges(val, containerUi.ranges, lo, hi) || '#22c55e';
+  }, [containerUi]);
+
+  const batteryFillColor = useMemo(() => {
+    const lo = batteryLevelUi.scaleMin;
+    const hi = batteryLevelUi.scaleMax;
+    const span = hi - lo;
+    const val =
+      batteryLevelUi.rawValue != null && Number.isFinite(batteryLevelUi.rawValue)
+        ? batteryLevelUi.rawValue
+        : lo + (batteryLevelUi.ringPct / 100) * span;
+    return colorForValueInRanges(val, batteryLevelUi.ranges, lo, hi) || '#f97316';
+  }, [batteryLevelUi]);
 
   useLayoutEffect(() => {
     if (visibilityMap[DASH_WIDGET.STREAM] === false) {
@@ -4834,11 +4868,6 @@ export default function BudgetSensorsDashboard({
     streamCfgStore?.data?.unit != null && String(streamCfgStore.data.unit).length > 0
       ? streamCfgStore.data.unit
       : '°C';
-  const streamDecRaw = streamCfgStore?.data?.decimals;
-  const streamDec =
-    streamDecRaw != null && streamDecRaw !== '' && Number.isFinite(Number(streamDecRaw))
-      ? Number(streamDecRaw)
-      : 1;
 
   const openDashWidgetEdit = (wid, buildSensor, editScope = 'value') => {
     if (!canEditDashboard) return;
@@ -4890,6 +4919,19 @@ export default function BudgetSensorsDashboard({
       setWidgetConfigs(loadAllWidgetConfigs());
     },
     [widgetConfigs, dk]
+  );
+
+  const applyMapBaseLayer = useCallback(
+    (wid, layerId) => {
+      const k = dk(wid);
+      const prev = widgetConfigsRef.current[k];
+      const draft = mergeWidgetConfig(dashboardWidgetSensorStub(wid), prev || {});
+      draft.data = { ...draft.data, mapBaseLayer: normalizeMapBaseLayerId(layerId) };
+      saveWidgetConfig(k, draft);
+      scheduleBsdServerPersistRef.current?.();
+      setWidgetConfigs(loadAllWidgetConfigs());
+    },
+    [dk]
   );
 
   const removeDashWidget = useCallback(
@@ -5138,6 +5180,16 @@ export default function BudgetSensorsDashboard({
     [telemetryLivePropsForPanelWidget, widgetConfigs, dk]
   );
 
+  const mapBaseLayerId = useMemo(
+    () => normalizeMapBaseLayerId(widgetConfigs[dk(DASH_WIDGET.MAP)]?.data?.mapBaseLayer),
+    [widgetConfigs, dk]
+  );
+
+  const trackingMapBaseLayerId = useMemo(
+    () => normalizeMapBaseLayerId(widgetConfigs[dk(DASH_WIDGET.TRACKING_MAP)]?.data?.mapBaseLayer),
+    [widgetConfigs, dk]
+  );
+
   /** Botones del widget Downlink: filas con HEX válido → etiqueta opcional o nombre del comando. */
   const panelDownlinkActions = useMemo(() => {
     const cfgData = widgetConfigs[dk(DASH_WIDGET.DOWNLINK)]?.data || {};
@@ -5342,7 +5394,6 @@ export default function BudgetSensorsDashboard({
     if (hex == null || String(hex).trim() === '') {
       hex = dls.length >= 2 ? (switchOn ? dls[1].hex : dls[0].hex) : dls[0].hex;
     }
-    const wasOn = switchOn;
     setSwitchProcessing(true);
     try {
       await sendDownlink(switchTargetDeviceId, hex, credentials, token);
@@ -5480,6 +5531,28 @@ export default function BudgetSensorsDashboard({
             propertyKey: pk,
             sourceDeviceId: 'dashboard',
           };
+        case DASH_WIDGET.CONTAINER:
+          return {
+            id: 0,
+            name: 'Contenedor',
+            value: containerUi.rawValue != null ? containerUi.rawValue : containerUi.ringPct,
+            unit: '%',
+            icon: '🛢',
+            threshold: 100,
+            propertyKey: pk,
+            sourceDeviceId: 'dashboard',
+          };
+        case DASH_WIDGET.BATTERY_LEVEL:
+          return {
+            id: 0,
+            name: 'Nivel Batería',
+            value: batteryLevelUi.rawValue != null ? batteryLevelUi.rawValue : batteryLevelUi.ringPct,
+            unit: '%',
+            icon: '🔋',
+            threshold: 100,
+            propertyKey: pk,
+            sourceDeviceId: 'dashboard',
+          };
         case DASH_WIDGET.METRIC_CIRCULAR: {
           const ui = metricCircularUiBySlot[wid];
           return {
@@ -5544,6 +5617,10 @@ export default function BudgetSensorsDashboard({
       trackingPathPoints.length,
       satisfactionUi.rawValue,
       satisfactionUi.ringPct,
+      containerUi.rawValue,
+      containerUi.ringPct,
+      batteryLevelUi.rawValue,
+      batteryLevelUi.ringPct,
       metricCircularUiBySlot,
       widgetConfigs,
       variant,
@@ -5769,6 +5846,7 @@ export default function BudgetSensorsDashboard({
       : 'Monitoreo inteligente | Alertas en tiempo real | Análisis predictivo';
 
   return (
+    <>
     <div
       className={`bsd-root ${embedded ? 'bsd-root--embedded' : ''} ${dashboardLayoutLocked ? 'bsd-dashboard-edit-off' : ''}`}
     >
@@ -5785,18 +5863,37 @@ export default function BudgetSensorsDashboard({
             {variant === 'panel' && (
               <div className="bsd-panel-workspace-bar bsd-panel-workspace-bar--below-title">
                 <div className="bsd-panel-workspace-tabs" role="tablist" aria-label="Paneles de control">
-                  {panelWorkspace.panels.map((p) => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={p.id === panelInstanceId}
-                      className={`bsd-panel-tab ${p.id === panelInstanceId ? 'bsd-panel-tab--active' : ''}`}
-                      onClick={() => selectPanelTab(p.id)}
-                    >
-                      {p.name}
-                    </button>
-                  ))}
+                  {panelWorkspace.panels.map((p) => {
+                    const canRemove =
+                      dashboardEditMode && panelWorkspace.panels.length > 1 && p.id !== 'main';
+                    return (
+                      <div key={p.id} className="bsd-panel-tab-with-actions">
+                        <button
+                          type="button"
+                          role="tab"
+                          aria-selected={p.id === panelInstanceId}
+                          className={`bsd-panel-tab ${p.id === panelInstanceId ? 'bsd-panel-tab--active' : ''}`}
+                          onClick={() => selectPanelTab(p.id)}
+                        >
+                          {p.name}
+                        </button>
+                        {canRemove ? (
+                          <button
+                            type="button"
+                            className="bsd-panel-tab-delete"
+                            title={`Eliminar panel «${p.name}»`}
+                            aria-label={`Eliminar panel ${p.name}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              requestPanelDelete(p.id);
+                            }}
+                          >
+                            <X size={14} strokeWidth={2.25} aria-hidden />
+                          </button>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
                 <div className="bsd-panel-workspace-actions">
                   <button type="button" className="bsd-panel-workspace-btn" onClick={addPanelTab}>
@@ -6030,19 +6127,19 @@ export default function BudgetSensorsDashboard({
               ) : (
                 <div className="bsd-image-placeholder">
                   <ImageIcon size={40} strokeWidth={1} />
-                  <span>Configura la imagen en el widget (Datos) o publica una URL en telemetría.</span>
+                  <span>
+                    Configura la imagen en <strong>Básicos</strong> (archivo o URL) o publica una URL en telemetría.
+                  </span>
                 </div>
               )}
             </div>
-            {lastTelemetryAtLabel ? (
-              <div className="bsd-widget-footnote" style={wTitleStyle(DASH_WIDGET.IMAGE)}>
-                {lastTelemetryAtLabel}
-              </div>
-            ) : null}
           </div>
           )}
           {isVis(DASH_WIDGET.MAP) && (
-          <div key={DASH_WIDGET.MAP} {...mergeShell(DASH_WIDGET.MAP, 'widget bsd-control-widget bsd-widget-editable')}>
+          <div
+            key={DASH_WIDGET.MAP}
+            {...mergeShell(DASH_WIDGET.MAP, 'widget bsd-control-widget bsd-widget-editable bsd-map-widget')}
+          >
             {dashWidgetChrome(DASH_WIDGET.MAP, (e) => {
               e.stopPropagation();
               openDashWidgetEdit(DASH_WIDGET.MAP, () => ({
@@ -6063,28 +6160,25 @@ export default function BudgetSensorsDashboard({
             </div>
             <div className="bsd-map-widget-body">
               {mapCoords ? (
-                <iframe
-                  title="Mapa dispositivo"
-                  className="bsd-map-iframe"
-                  src={openStreetMapEmbedUrl(mapCoords.lat, mapCoords.lng)}
-                  loading="lazy"
-                  referrerPolicy="no-referrer-when-downgrade"
-                />
+                <>
+                  <BsdMapLayerMenu value={mapBaseLayerId} onChange={(id) => applyMapBaseLayer(DASH_WIDGET.MAP, id)} />
+                  <BsdLeafletStaticMap
+                    lat={mapCoords.lat}
+                    lng={mapCoords.lng}
+                    baseLayerId={mapBaseLayerId}
+                    className="bsd-map-leaflet"
+                  />
+                </>
               ) : (
                 <div className="bsd-map-placeholder">
                   <MapPin size={40} strokeWidth={1} />
                   <span>
-                    Configura coordenadas en el widget (Datos) o envía <code>latitude</code> / <code>longitude</code> en
-                    telemetría.
+                    Indica latitud y longitud en <strong>Básicos</strong> o envía <code>latitude</code> /{' '}
+                    <code>longitude</code> en telemetría.
                   </span>
                 </div>
               )}
             </div>
-            {lastTelemetryAtLabel ? (
-              <div className="bsd-widget-footnote" style={wTitleStyle(DASH_WIDGET.MAP)}>
-                {lastTelemetryAtLabel}
-              </div>
-            ) : null}
           </div>
           )}
 
@@ -6140,7 +6234,15 @@ export default function BudgetSensorsDashboard({
                     .join(' · ')}
             </div>
             <div className="bsd-tracking-map-body">
-              <BsdLeafletTrackingMap latLngs={trackingPathPoints} className="bsd-tracking-map-leaflet" />
+              <BsdMapLayerMenu
+                value={trackingMapBaseLayerId}
+                onChange={(id) => applyMapBaseLayer(DASH_WIDGET.TRACKING_MAP, id)}
+              />
+              <BsdLeafletTrackingMap
+                latLngs={trackingPathPoints}
+                className="bsd-tracking-map-leaflet"
+                baseLayerId={trackingMapBaseLayerId}
+              />
             </div>
           </div>
           )}
@@ -6211,6 +6313,66 @@ export default function BudgetSensorsDashboard({
                 {satisfactionUi.lastAtLine}
               </div>
             ) : null}
+          </div>
+          )}
+
+          {isVis(DASH_WIDGET.CONTAINER) && (
+          <div key={DASH_WIDGET.CONTAINER} {...mergeShell(DASH_WIDGET.CONTAINER, 'widget bsd-widget-editable')}>
+            {dashWidgetChrome(DASH_WIDGET.CONTAINER, (e) => {
+              e.stopPropagation();
+              openDashWidgetEdit(DASH_WIDGET.CONTAINER, () => ({
+                id: 0,
+                name: 'Contenedor',
+                value: containerUi.rawValue != null ? containerUi.rawValue : containerUi.ringPct,
+                unit: '%',
+                icon: '🛢',
+                threshold: 100,
+                propertyKey: `__bsd_${DASH_WIDGET.CONTAINER}`,
+                sourceDeviceId: 'dashboard',
+              }));
+            })}
+            <div className="widget-header">
+              <div className="widget-title" style={wTitleStyle(DASH_WIDGET.CONTAINER)}>
+                <span aria-hidden>🛢</span> {wTitle(DASH_WIDGET.CONTAINER, 'Contenedor')}
+              </div>
+            </div>
+            <BsdContainerTankView
+              fillPct={containerUi.ringPct}
+              fillColor={containerLiquidColor}
+              centerLabel={containerUi.centerLabel}
+              lastAtLine={containerUi.lastAtLine}
+              titleColor={wTitleStyle(DASH_WIDGET.CONTAINER)?.color}
+            />
+          </div>
+          )}
+
+          {isVis(DASH_WIDGET.BATTERY_LEVEL) && (
+          <div key={DASH_WIDGET.BATTERY_LEVEL} {...mergeShell(DASH_WIDGET.BATTERY_LEVEL, 'widget bsd-widget-editable')}>
+            {dashWidgetChrome(DASH_WIDGET.BATTERY_LEVEL, (e) => {
+              e.stopPropagation();
+              openDashWidgetEdit(DASH_WIDGET.BATTERY_LEVEL, () => ({
+                id: 0,
+                name: 'Nivel Batería',
+                value: batteryLevelUi.rawValue != null ? batteryLevelUi.rawValue : batteryLevelUi.ringPct,
+                unit: '%',
+                icon: '🔋',
+                threshold: 100,
+                propertyKey: `__bsd_${DASH_WIDGET.BATTERY_LEVEL}`,
+                sourceDeviceId: 'dashboard',
+              }));
+            })}
+            <div className="widget-header">
+              <div className="widget-title" style={wTitleStyle(DASH_WIDGET.BATTERY_LEVEL)}>
+                <span aria-hidden>🔋</span> {wTitle(DASH_WIDGET.BATTERY_LEVEL, 'Nivel Batería')}
+              </div>
+            </div>
+            <BsdBatteryLevelView
+              fillPct={batteryLevelUi.ringPct}
+              fillColor={batteryFillColor}
+              centerLabel={batteryLevelUi.centerLabel}
+              lastAtLine={batteryLevelUi.lastAtLine}
+              titleColor={wTitleStyle(DASH_WIDGET.BATTERY_LEVEL)?.color}
+            />
           </div>
           )}
 
@@ -6769,13 +6931,15 @@ export default function BudgetSensorsDashboard({
               onLayoutChange={handleGridLayoutChange}
               onDragStart={handleGridDragStart}
               onDragStop={handleGridDragStop}
-              onResizeStop={(layout) => persistDashboardGridLayoutNow(layout, { compact: false })}
+              onResizeStart={handleGridResizeStart}
+              onResizeStop={handleGridResizeStop}
               isDraggable={!dashboardLayoutLocked}
               isResizable={!dashboardLayoutLocked}
-              draggableCancel=".bsd-widget-actions,.bsd-widget-edit-btn,.bsd-widget-remove-btn,.bsd-widget-menu-summary,.bsd-widget-menu-panel,.bsd-widget-gallery-overlay,.bsd-widget-gallery-modal,.bsd-widget-gallery-card,.bsd-widget-gallery-filters,.bsd-widget-gallery-search,input,textarea,select,option,button,.bsd-switch-track,.bsd-downlink-btn,.bsd-emergency-body,.sensor-card,.alert-item,.year-btn,.bsd-stream-preset,canvas,.bsd-map-iframe,.leaflet-container,.leaflet-pane,.bsd-tracking-map-leaflet,.bsd-panel-device-bar-inner label,.bsd-file-label"
+              draggableCancel=".bsd-widget-actions,.bsd-widget-edit-btn,.bsd-widget-remove-btn,.bsd-widget-menu-summary,.bsd-widget-menu-panel,.bsd-widget-gallery-overlay,.bsd-widget-gallery-modal,.bsd-widget-gallery-card,.bsd-widget-gallery-filters,.bsd-widget-gallery-search,input,textarea,select,option,button,.bsd-switch-track,.bsd-downlink-btn,.bsd-emergency-body,.sensor-card,.alert-item,.year-btn,.bsd-stream-preset,canvas,.bsd-map-iframe,.leaflet-container,.leaflet-pane,.bsd-map-leaflet,.bsd-tracking-map-leaflet,.bsd-map-layer-menu,.bsd-map-layer-menu__trigger,.bsd-map-layer-menu__list,.bsd-map-layer-menu__opt,.bsd-panel-device-bar-inner label,.bsd-file-label"
               compactType={null}
               preventCollision
-              allowOverlap={false}
+              /** En modo lectura: sin empujes automáticos al redimensionar el contenedor (RGL + solapamiento prohibido movían celdas solas). */
+              allowOverlap={dashboardLayoutLocked}
               useCSSTransforms={false}
             >
               {gridBody}
@@ -6970,5 +7134,21 @@ export default function BudgetSensorsDashboard({
           )}
       </div>
     </div>
+    <CenteredAlertModal
+      open={panelDelete != null}
+      title="Eliminar panel"
+      message={
+        panelDelete
+          ? `¿Seguro que deseas eliminar el panel **${panelDelete.name}**? Se borrarán sus widgets y el diseño de esta pestaña.`
+          : ''
+      }
+      variant="warning"
+      cancelLabel="Cancelar"
+      confirmLabel="Eliminar"
+      confirmDanger
+      onClose={closePanelDeleteDialog}
+      onConfirm={commitPanelDelete}
+    />
+    </>
   );
 }

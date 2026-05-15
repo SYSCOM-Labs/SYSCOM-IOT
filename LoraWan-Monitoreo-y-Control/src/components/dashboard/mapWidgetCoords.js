@@ -1,3 +1,5 @@
+import { osmEmbedLayerParam } from './mapWidgetLayers';
+
 /** @param {unknown} v */
 export function toFloatCoord(v) {
   if (typeof v === 'number' && Number.isFinite(v)) return v;
@@ -42,11 +44,12 @@ export function resolveMapCoords(liveProps, mapCfg) {
   return pickMapCoordinates(liveProps);
 }
 
-export function openStreetMapEmbedUrl(lat, lng) {
+export function openStreetMapEmbedUrl(lat, lng, layerId) {
   const pad = 0.04;
   const minLon = lng - pad;
   const minLat = lat - pad;
   const maxLon = lng + pad;
   const maxLat = lat + pad;
-  return `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(`${minLon},${minLat},${maxLon},${maxLat}`)}&layer=mapnik&marker=${encodeURIComponent(`${lat},${lng}`)}`;
+  const layer = osmEmbedLayerParam(layerId);
+  return `https://www.openstreetmap.org/export/embed.html?bbox=${encodeURIComponent(`${minLon},${minLat},${maxLon},${maxLat}`)}&layer=${encodeURIComponent(layer)}&marker=${encodeURIComponent(`${lat},${lng}`)}`;
 }

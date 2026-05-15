@@ -1,11 +1,12 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
-/** Vista panel: sin segundo canal de scroll (el scroll vive en `html`/`body` vía `.page-content--budget-dashboard`). */
+/** Vista panel: un solo scroll vertical en `.page-content.page-content--budget-dashboard` (sin scroll anidado en `.bsd-root`). */
 .page-budget-dashboard {
   margin: -8px 0 0;
   padding-right: max(20px, env(safe-area-inset-right, 0px));
   padding-left: max(8px, env(safe-area-inset-left, 0px));
-  scrollbar-gutter: auto;
+  /** El scroll vertical vive en `.page-content--budget-dashboard`; sin gutter aquí (evita doble canal). */
+  scrollbar-gutter: unset;
   box-sizing: border-box;
   overflow-x: hidden;
   max-width: 100%;
@@ -14,6 +15,7 @@
 
 .page-budget-dashboard .bsd-root {
   overflow-x: hidden;
+  overflow-y: visible;
   max-width: 100%;
   /** Evita min-height 100% + scrollbar-gutter dentro del scroll de `.page-content` (segunda barra). */
   min-height: 0;
@@ -21,8 +23,28 @@
 }
 
 html.syscom-scroll-lock-dashboard .page-budget-dashboard > .bsd-root {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-height: 0;
+  overflow-x: hidden;
+  overflow-y: visible;
+}
+
+/** Panel Control (scroll-lock): ancho útil del main sin tope 1600px; menos relleno lateral para acercarse al borde del área de trabajo. */
+html.syscom-scroll-lock-dashboard .page-budget-dashboard > .bsd-root:not(.bsd-root--embedded) .dashboard-container {
+  max-width: none;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+html.syscom-scroll-lock-dashboard .page-budget-dashboard > .bsd-root:not(.bsd-root--embedded) {
+  padding-top: 16px;
+  padding-bottom: 20px;
+  padding-left: max(6px, calc(6px + env(safe-area-inset-left, 0px)));
+  padding-right: max(6px, calc(6px + env(safe-area-inset-right, 0px)));
+}
+
+html.syscom-scroll-lock-dashboard .page-budget-dashboard .bsd-panel-widgets-canvas {
+  padding: 14px 10px 22px;
 }
 
 .bsd-root,
@@ -296,13 +318,24 @@ body.theme-dark .bsd-panel-widgets-canvas {
 
 .bsd-dash-grid-layout .react-grid-item > .widget > .bsd-image-widget-body,
 .bsd-dash-static-cell > .widget > .bsd-image-widget-body {
-  flex: 1 1 auto;
+  flex: 1 1 0%;
   min-height: 0;
   width: 100%;
 }
 
 .bsd-dash-grid-layout .react-grid-item > .widget > .bsd-map-widget-body,
-.bsd-dash-static-cell > .widget > .bsd-map-widget-body,
+.bsd-dash-static-cell > .widget > .bsd-map-widget-body {
+  flex: 1 1 0%;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: stretch;
+  gap: 0;
+  overflow: hidden;
+}
+
 .bsd-dash-grid-layout .react-grid-item > .widget > .bsd-tracking-map-body,
 .bsd-dash-static-cell > .widget > .bsd-tracking-map-body {
   flex: 1 1 0%;
@@ -321,8 +354,15 @@ body.theme-dark .bsd-panel-widgets-canvas {
   flex: 1 1 0%;
   min-height: 0;
   width: 100%;
-  min-height: 120px;
   border: 0;
+}
+
+.bsd-dash-grid-layout .react-grid-item > .widget > .bsd-map-widget-body .bsd-map-leaflet,
+.bsd-dash-static-cell > .widget > .bsd-map-widget-body .bsd-map-leaflet {
+  flex: 1 1 0%;
+  min-height: 0;
+  width: 100%;
+  min-height: 120px;
 }
 
 .bsd-dash-grid-layout .react-grid-item > .widget > .bsd-tracking-map-body .bsd-tracking-map-leaflet,
@@ -335,12 +375,12 @@ body.theme-dark .bsd-panel-widgets-canvas {
 
 .bsd-dash-grid-layout .react-grid-item > .widget > .bsd-circular-gauge,
 .bsd-dash-static-cell > .widget > .bsd-circular-gauge {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   min-width: 0;
-  width: min(100%, clamp(160px, 42vmin, 360px));
-  max-width: 100%;
-  max-height: none;
+  width: min(100%, min(94cqw, 94cqh));
+  max-width: min(100%, min(94cqw, 94cqh));
+  max-height: min(100%, min(94cqw, 94cqh));
   aspect-ratio: 1;
   margin: auto;
   align-self: center;
@@ -349,7 +389,69 @@ body.theme-dark .bsd-panel-widgets-canvas {
 @supports (width: 1cqh) {
   .bsd-dash-grid-layout .react-grid-item > .widget > .bsd-circular-gauge,
   .bsd-dash-static-cell > .widget > .bsd-circular-gauge {
-    width: min(100%, max(160px, min(76cqh, 76cqw)), 400px);
+    width: min(100%, min(96cqw, 96cqh));
+    max-width: min(100%, min(96cqw, 96cqh));
+    max-height: min(100%, min(96cqw, 96cqh));
+  }
+}
+
+.bsd-dash-grid-layout .react-grid-item > .widget > .bsd-circular-gauge__foot-at,
+.bsd-dash-static-cell > .widget > .bsd-circular-gauge__foot-at {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.bsd-dash-grid-layout .react-grid-item > .widget > .bsd-container-tank,
+.bsd-dash-static-cell > .widget > .bsd-container-tank,
+.bsd-dash-grid-layout .react-grid-item > .widget > .bsd-battery-level,
+.bsd-dash-static-cell > .widget > .bsd-battery-level {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  max-height: none;
+  margin: 0;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+}
+
+/** Menos relleno interno en tarjetas Contenedor / Batería para maximizar el dibujo. */
+.bsd-dash-grid-layout .react-grid-item > .widget:has(> .bsd-container-tank),
+.bsd-dash-static-cell > .widget:has(> .bsd-container-tank),
+.bsd-dash-grid-layout .react-grid-item > .widget:has(> .bsd-battery-level),
+.bsd-dash-static-cell > .widget:has(> .bsd-battery-level) {
+  padding: clamp(6px, 1vmin, 10px);
+}
+
+.bsd-dash-grid-layout .react-grid-item > .widget:has(> .bsd-container-tank) > .widget-header,
+.bsd-dash-static-cell > .widget:has(> .bsd-container-tank) > .widget-header,
+.bsd-dash-grid-layout .react-grid-item > .widget:has(> .bsd-battery-level) > .widget-header,
+.bsd-dash-static-cell > .widget:has(> .bsd-battery-level) > .widget-header {
+  margin-bottom: clamp(2px, 0.5vmin, 6px);
+  padding-bottom: clamp(2px, 0.4vmin, 6px);
+}
+
+.bsd-dash-grid-layout .react-grid-item > .widget > .bsd-container-tank__foot-at,
+.bsd-dash-static-cell > .widget > .bsd-container-tank__foot-at,
+.bsd-dash-grid-layout .react-grid-item > .widget > .bsd-battery-level__foot-at,
+.bsd-dash-static-cell > .widget > .bsd-battery-level__foot-at {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  text-align: center;
+}
+
+@supports (width: 1cqh) {
+  .bsd-dash-grid-layout .react-grid-item > .widget > .bsd-container-tank,
+  .bsd-dash-static-cell > .widget > .bsd-container-tank,
+  .bsd-dash-grid-layout .react-grid-item > .widget > .bsd-battery-level,
+  .bsd-dash-static-cell > .widget > .bsd-battery-level {
+    min-height: min(100%, 96cqh);
   }
 }
 
@@ -366,6 +468,14 @@ body.theme-dark .bsd-panel-widgets-canvas {
   align-items: center;
   justify-content: flex-start;
   overflow: hidden;
+}
+
+@supports (width: 1cqh) {
+  .bsd-dash-grid-layout .react-grid-item > .widget > .bsd-metric-circular,
+  .bsd-dash-static-cell > .widget > .bsd-metric-circular {
+    width: min(100%, min(100cqw, 88cqh));
+    max-width: min(100%, min(100cqw, 88cqh));
+  }
 }
 
 .bsd-dash-grid-layout .react-grid-item > .widget > .bsd-metric-circular .bsd-metric-circular__chart,
@@ -388,13 +498,6 @@ body.theme-dark .bsd-panel-widgets-canvas {
   aspect-ratio: 240 / 152;
   flex: 0 1 auto;
   min-height: 0;
-}
-
-@supports (width: 1cqh) {
-  .bsd-dash-grid-layout .react-grid-item > .widget > .bsd-metric-circular,
-  .bsd-dash-static-cell > .widget > .bsd-metric-circular {
-    width: min(100%, max(180px, min(80cqh, 100cqw)), 440px);
-  }
 }
 
 .bsd-dash-grid-layout .react-grid-item > .widget > .bsd-text-widget__body,
@@ -1165,6 +1268,185 @@ body.theme-dark .bsd-root .bsd-circular-gauge__value {
   color: #ffffff;
   font-weight: 800;
   text-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
+}
+
+/* Widget Contenedor (tanque): nivel + textura; ocupa todo el alto útil bajo la cabecera */
+.bsd-root .bsd-container-tank {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.bsd-root .bsd-container-tank__texture {
+  position: absolute;
+  inset: 2% 4% 12%;
+  background: url(/assets/bsd-widget-container-tank.png) center / contain no-repeat;
+  opacity: 0.22;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.bsd-root .bsd-container-tank__stage {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bsd-root .bsd-container-tank__svg {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+  max-width: 100%;
+}
+
+.bsd-root .bsd-container-tank__hub {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  max-width: min(92%, 9.5rem);
+  padding: 0.35rem 0.85rem;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #ffffff 0%, #f4f4f5 100%);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  box-shadow:
+    0 2px 10px rgba(15, 23, 42, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+
+.bsd-root .bsd-container-tank__value {
+  font-size: clamp(1rem, 3.5vmin + 0.35rem, 1.65rem);
+  font-weight: 800;
+  line-height: 1.1;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+
+.bsd-root .bsd-container-tank__foot-at {
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: 0.88;
+  text-align: center;
+}
+
+body.theme-dark .bsd-root .bsd-container-tank__texture {
+  opacity: 0.16;
+}
+
+body.theme-dark .bsd-root .bsd-container-tank__hub {
+  background: linear-gradient(180deg, #fafafa 0%, #e4e4e7 100%);
+  border-color: rgba(15, 23, 42, 0.2);
+  box-shadow:
+    0 4px 16px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+body.theme-dark .bsd-root .bsd-container-tank__value {
+  color: #020617;
+  font-weight: 900;
+}
+
+/* Widget Nivel Batería: pila + textura; máximo área útil */
+.bsd-root .bsd-battery-level {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.bsd-root .bsd-battery-level__texture {
+  position: absolute;
+  inset: 2% 6% 10%;
+  background: url(/assets/bsd-widget-battery-level.png) center / contain no-repeat;
+  opacity: 0.22;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.bsd-root .bsd-battery-level__stage {
+  position: relative;
+  z-index: 1;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bsd-root .bsd-battery-level__svg {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
+  max-width: 100%;
+}
+
+.bsd-root .bsd-battery-level__hub {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  max-width: min(90%, 9rem);
+  padding: 0.4rem 0.9rem;
+  border-radius: 14px;
+  background: linear-gradient(165deg, rgba(15, 23, 42, 0.92) 0%, rgba(3, 7, 18, 0.94) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.bsd-root .bsd-battery-level__value {
+  font-size: clamp(1.05rem, 3.6vmin + 0.35rem, 1.7rem);
+  font-weight: 800;
+  line-height: 1.05;
+  color: #ffffff;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+}
+
+.bsd-root .bsd-battery-level__foot-at {
+  margin-top: 4px;
+  font-size: 11px;
+  opacity: 0.88;
+  text-align: center;
+}
+
+body.theme-dark .bsd-root .bsd-battery-level__texture {
+  opacity: 0.16;
+}
+
+body.theme-dark .bsd-root .bsd-battery-level__hub {
+  background: linear-gradient(165deg, rgba(12, 18, 32, 0.94) 0%, rgba(3, 6, 14, 0.96) 100%);
+  border-color: rgba(251, 146, 60, 0.28);
+}
+
+body.theme-dark .bsd-root .bsd-battery-level__value {
+  color: #fffbeb;
 }
 
 /* Métrica circular: mismo contenedor azul; contraste en el SVG */
@@ -2680,6 +2962,16 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   min-height: 0;
 }
 
+.bsd-root .bsd-map-widget {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.bsd-root .bsd-map-widget .widget-header {
+  margin-bottom: 6px;
+}
+
 .bsd-root .bsd-control-hint {
   font-size: 12px;
   color: var(--text-muted);
@@ -3097,15 +3389,14 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
 }
 
 .bsd-root .bsd-image-widget-body {
-  flex: 1;
+  flex: 1 1 0%;
   min-height: 0;
   display: flex;
-  align-items: center;
-  justify-content: center;
+  align-items: stretch;
+  justify-content: stretch;
   border-radius: 14px;
   overflow: hidden;
-  min-height: 100px;
-  padding: 4px;
+  padding: 0;
   background: rgba(15, 23, 42, 0.28);
   border: 1px solid rgba(99, 102, 241, 0.14);
 }
@@ -3117,10 +3408,12 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
 .bsd-root .bsd-preview-img {
   display: block;
   width: 100%;
+  align-self: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
   height: 100%;
   max-height: none;
-  min-height: 0;
-  object-fit: contain;
+  object-fit: cover;
   object-position: center;
 }
 
@@ -3129,8 +3422,12 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-height: 0;
+  width: 100%;
   gap: 10px;
-  padding: 16px 12px;
+  padding: 12px;
   color: var(--text-muted);
   text-align: center;
   font-size: 12px;
@@ -3144,9 +3441,14 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
 }
 
 .bsd-root .bsd-map-widget-body {
+  position: relative;
+  flex: 1 1 0%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
   border-radius: 12px;
   overflow: hidden;
-  min-height: 140px;
   background: rgba(15, 15, 26, 0.6);
   border: 1px solid rgba(99, 102, 241, 0.2);
 }
@@ -3154,9 +3456,9 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
 .bsd-root .bsd-map-iframe {
   display: block;
   width: 100%;
-  min-height: 140px;
-  height: 100%;
   flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
   border: 0;
   background: #1a1a2e;
 }
@@ -3191,6 +3493,7 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
 }
 
 .bsd-root .bsd-tracking-map-body {
+  position: relative;
   border-radius: 12px;
   overflow: hidden;
   min-height: 140px;
@@ -3199,6 +3502,106 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   flex: 1 1 0%;
   display: flex;
   flex-direction: column;
+}
+
+.bsd-root .bsd-map-layer-menu {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.bsd-root .bsd-map-layer-menu__trigger,
+.bsd-root .bsd-map-layer-menu__list {
+  pointer-events: auto;
+}
+
+.bsd-root .bsd-map-layer-menu__trigger {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  background: rgba(15, 15, 26, 0.82);
+  color: #e0e7ff;
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(8px);
+}
+
+.bsd-root .bsd-map-layer-menu__trigger:hover:not(:disabled) {
+  background: rgba(30, 30, 48, 0.92);
+  border-color: rgba(129, 140, 248, 0.55);
+}
+
+.bsd-root .bsd-map-layer-menu__trigger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.bsd-root .bsd-map-layer-menu__list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  min-width: 160px;
+  border-radius: 10px;
+  border: 1px solid rgba(99, 102, 241, 0.25);
+  background: rgba(15, 15, 26, 0.94);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(10px);
+}
+
+.bsd-root .bsd-map-layer-menu__opt {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary, #e2e8f0);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.bsd-root .bsd-map-layer-menu__opt:hover {
+  background: rgba(99, 102, 241, 0.2);
+}
+
+.bsd-root .bsd-map-layer-menu__opt.is-active {
+  background: rgba(99, 102, 241, 0.35);
+  font-weight: 600;
+}
+
+body:not(.theme-dark) .bsd-root .bsd-map-layer-menu__trigger {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: var(--border-color);
+  color: var(--text-primary);
+}
+
+body:not(.theme-dark) .bsd-root .bsd-map-layer-menu__list {
+  background: rgba(255, 255, 255, 0.96);
+  border-color: var(--border-color);
+}
+
+body:not(.theme-dark) .bsd-root .bsd-map-layer-menu__opt {
+  color: var(--text-primary);
+}
+
+body:not(.theme-dark) .bsd-root .bsd-map-layer-menu__opt:hover {
+  background: rgba(99, 102, 241, 0.12);
+}
+
+body:not(.theme-dark) .bsd-root .bsd-map-layer-menu__opt.is-active {
+  background: rgba(99, 102, 241, 0.18);
 }
 
 /* Marcador última posición (Leaflet divIcon): sin caja por defecto de Leaflet */
@@ -3270,8 +3673,12 @@ body.theme-dark .bsd-root .bsd-tracking-map-popup__street {
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-height: 0;
+  width: 100%;
   gap: 10px;
-  padding: 28px 16px;
+  padding: 16px;
   color: var(--text-muted);
   text-align: center;
   font-size: 12px;
@@ -4269,6 +4676,44 @@ body:not(.theme-dark) .bsd-widget-gallery-card__desc {
   min-width: 0;
 }
 
+.bsd-panel-tab-with-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.bsd-panel-tab-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid rgba(248, 113, 113, 0.42);
+  background: rgba(127, 29, 29, 0.22);
+  color: #fecaca;
+  cursor: pointer;
+  font-family: inherit;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.bsd-panel-tab-delete:hover {
+  border-color: rgba(252, 165, 165, 0.65);
+  background: rgba(185, 28, 28, 0.38);
+  color: #fff;
+}
+
+.bsd-panel-tab-delete:focus-visible {
+  outline: 2px solid rgba(248, 113, 113, 0.75);
+  outline-offset: 2px;
+}
+
 .bsd-panel-tab {
   border: 1px solid rgba(148, 163, 184, 0.38);
   background: rgba(15, 23, 42, 0.35);
@@ -4354,6 +4799,17 @@ body:not(.theme-dark) .bsd-panel-tab {
   background: #ffffff;
   border: 1px solid #e2e8f0;
   color: #64748b;
+}
+
+body:not(.theme-dark) .bsd-panel-tab-delete {
+  border-color: rgba(248, 113, 113, 0.55);
+  background: #fff1f2;
+  color: #b91c1c;
+}
+
+body:not(.theme-dark) .bsd-panel-tab-delete:hover {
+  background: #fee2e2;
+  color: #991b1b;
 }
 
 body:not(.theme-dark) .bsd-panel-tab:hover {

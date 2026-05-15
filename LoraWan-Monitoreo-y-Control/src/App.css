@@ -316,14 +316,27 @@ body.theme-dark .logout-btn {
 
 /**
  * Panel de control (`App.jsx` añade `syscom-scroll-lock-dashboard` en `html`/`body`):
- * cadena de altura fija hasta `.page-content` para que solo esa zona haga scroll vertical (no `body`).
+ * altura fija hasta `.page-content`; el dashboard crece con el contenido y solo `.page-content` hace scroll vertical.
  */
 html.syscom-scroll-lock-dashboard,
 html.syscom-scroll-lock-dashboard body {
   height: 100%;
   max-height: 100%;
   margin: 0;
-  overflow: hidden;
+  overflow: hidden !important;
+}
+
+/** Evita segundo scroll del documento (body tenía `min-height: 100vh` en `index.css`). */
+html.syscom-scroll-lock-dashboard body {
+  min-height: 0 !important;
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+}
+
+html.syscom-scroll-lock-dashboard {
+  height: 100dvh !important;
+  max-height: 100dvh !important;
+  overflow: hidden !important;
 }
 
 html.syscom-scroll-lock-dashboard #root {
@@ -337,7 +350,7 @@ html.syscom-scroll-lock-dashboard #root {
 
 html.syscom-scroll-lock-dashboard #root > .app-container {
   flex: 1 1 auto;
-  min-height: 0;
+  min-height: 0 !important;
   max-height: 100%;
   overflow: hidden;
   display: flex;
@@ -358,18 +371,29 @@ html.syscom-scroll-lock-dashboard .page-content.page-content--budget-dashboard {
   min-height: 0 !important;
   overflow-y: auto !important;
   overflow-x: hidden !important;
-  scrollbar-gutter: stable;
+  scrollbar-gutter: unset !important;
   overscroll-behavior-y: contain;
   display: flex;
   flex-direction: column;
+  align-items: stretch;
+  padding: 10px max(10px, env(safe-area-inset-right, 0px)) 20px max(14px, env(safe-area-inset-left, 0px));
 }
 
-/** El wrapper del dashboard ocupa el alto útil y delega scroll al hijo interno si hace falta. */
+/**
+ * El dashboard define la altura por su contenido (widgets). Sin flex-grow aquí, no queda
+ * «caja a altura de viewport + scroll interno»: solo hace scroll `.page-content`.
+ */
 html.syscom-scroll-lock-dashboard .page-budget-dashboard {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
+  width: 100%;
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;
+  overflow-y: visible;
+  padding-left: 0;
+  padding-right: 0;
+  scrollbar-gutter: unset;
 }
 
 @keyframes fadeIn {

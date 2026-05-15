@@ -244,10 +244,22 @@ export const renewDeviceLicense = async (deviceId) => {
   return response.data;
 };
 
-/** Quita el dispositivo solo de la cuenta del usuario autenticado. */
+/** Quita el dispositivo solo de la cuenta del usuario autenticado (no borra el equipo ni a otros asignados). */
 export const unassignMyDevice = async (deviceId) => {
   const response = await axios.delete(
     `${SERVER_API}/user-devices/${encodeURIComponent(deviceId)}`,
+    { headers: authHeaders() }
+  );
+  return response.data;
+};
+
+/**
+ * Quita el dispositivo solo del usuario `targetUserId` (superadmin o jerarquía Usuarios+Dispositivos).
+ * No ejecuta borrado global; el superadmin u otros asignados conservan el vínculo.
+ */
+export const unassignDeviceFromUser = async (targetUserId, deviceId) => {
+  const response = await axios.delete(
+    `${SERVER_API}/users/${encodeURIComponent(String(targetUserId || '').trim())}/devices/${encodeURIComponent(String(deviceId || '').trim())}`,
     { headers: authHeaders() }
   );
   return response.data;

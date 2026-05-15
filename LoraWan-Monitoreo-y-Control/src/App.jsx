@@ -253,8 +253,8 @@ function App() {
   }, [currentPage, loading, user, hasNavPage, isSuperAdmin]);
 
   /**
-   * Panel de control: un solo scroll en `.page-content` (clase en `html`/`body`; más fiable que `:has()` con la
-   * cadena Provider → `#root` → `.app-container` sin altura explícita).
+   * Panel de control: un solo scroll en `.page-content.page-content--budget-dashboard`. El wrapper del dashboard
+   * no usa flex-grow para no quedar a altura fija con scroll interno (doble barra).
    */
   useEffect(() => {
     const cl = 'syscom-scroll-lock-dashboard';
