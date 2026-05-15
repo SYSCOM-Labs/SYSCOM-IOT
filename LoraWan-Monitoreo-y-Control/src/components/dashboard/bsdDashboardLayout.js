@@ -572,6 +572,51 @@ function bsdAnyPairOverlaps(list) {
   return false;
 }
 
+/** @param {BsdGridItem[] | null | undefined} layout */
+export function bsdDashboardLayoutHasOverlap(layout) {
+  const list = normalizeLayoutForPersistence(layout || []);
+  if (list.length < 2) return false;
+  return bsdAnyPairOverlaps(list);
+}
+
+/**
+ * Si el tile `itemId` se solapa con otro (p. ej. tras `clampLayoutItemsToModerateMins`), lo mueve a la primera
+ * celda libre con la misma lógica que la galería (`placeNewBsdGridItem`).
+ *
+ * @param {BsdGridItem[] | null | undefined} layout
+ * @param {string} itemId
+ * @returns {BsdGridItem[]}
+ */
+export function relocateBsdGridItemIfOverlapping(layout, itemId) {
+  const id = String(itemId);
+  let items = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(layout || []));
+  const toRect = (it) => ({
+    x: Math.round(Number(it.x)) || 0,
+    y: Math.round(Number(it.y)) || 0,
+    w: Math.round(Number(it.w)) || 1,
+    h: Math.round(Number(it.h)) || 1,
+  });
+  for (let pass = 0; pass < 3; pass += 1) {
+    const self = items.find((it) => String(it.i) === id);
+    if (!self) return items;
+    const rest = items.filter((it) => String(it.i) !== id);
+    const rs = toRect(self);
+    const overlaps = rest.some((o) => bsdGridRectsOverlap(rs, toRect(o)));
+    if (!overlaps) return items;
+    const moved = placeNewBsdGridItem(rest, {
+      i: id,
+      w: rs.w,
+      h: rs.h,
+      ...(self.minW != null && Number.isFinite(Number(self.minW)) ? { minW: Math.round(Number(self.minW)) } : {}),
+      ...(self.minH != null && Number.isFinite(Number(self.minH)) ? { minH: Math.round(Number(self.minH)) } : {}),
+    });
+    items = normalizeLayoutForPersistence(
+      clampLayoutItemsToModerateMins([...rest, { ...self, x: moved.x, y: moved.y, w: moved.w, h: moved.h }])
+    );
+  }
+  return items;
+}
+
 /**
  * Arrastre en **un solo paso** de rejilla (±1 en el eje dominante del gesto):
  * - Si hay un vecino que comparte borde en esa dirección y el mismo tamaño → **intercambian** posiciones.

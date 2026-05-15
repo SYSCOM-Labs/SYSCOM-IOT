@@ -30,7 +30,7 @@ function envFloat(name, def) {
 const RX1_DELAY_US_DEFAULT = 5_000_000;
 const RX2_AFTER_RX1_SEC_DEFAULT = 1;
 /** Espacio mínimo entre `imme` clase C al mismo GW (SX130x); defecto 1200 ms (subir si TOO_LATE). */
-const CLASS_C_TX_GAP_MS_DEFAULT = 1200;
+const CLASS_C_TX_GAP_MS_DEFAULT = 0;
 const TX_ACK_TIMEOUT_MS_DEFAULT = 5000;
 
 function getRx2AfterRx1Sec() {
@@ -725,7 +725,8 @@ function createLorawanLnsEngine(ctx) {
   /**
    * Siguiente `not_before_ms` (epoch) para downlinks clase C al mismo GW+usuario.
    * Sin esto, varios `imme` seguidos → GW_TX_ACK **TOO_LATE** o **TOO_EARLY** (SX130x aún TX, cola HW o guard time tras RX).
-   * Ajuste típico UG65 / ráfagas: `SYSCOM_LNS_CLASS_C_TX_GAP_MS=1200`–`2200`. Desactivar: `=0` (no recomendado).
+   * Ajuste típico UG65 / ráfagas si hay **TOO_LATE / TOO_EARLY**: `SYSCOM_LNS_CLASS_C_TX_GAP_MS=1200`–`2200`.
+   * Predeterminado **0** (máxima inmediatez); suba el valor si el concentrador rechaza TX en ráfaga.
    */
   const classCNextEligibleMsByGw = new Map();
 

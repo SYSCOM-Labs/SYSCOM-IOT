@@ -7,20 +7,26 @@
   background: rgba(15, 15, 26, 0.72);
   backdrop-filter: blur(12px);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
-  padding: clamp(16px, 3vw, 28px) clamp(14px, 2.5vw, 32px);
+  box-sizing: border-box;
+  padding: max(12px, env(safe-area-inset-top, 0px)) max(14px, env(safe-area-inset-right, 0px))
+    max(16px, env(safe-area-inset-bottom, 0px)) max(14px, env(safe-area-inset-left, 0px));
   overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .widget-edit-modal {
   width: 100%;
   max-width: min(720px, calc(100vw - 28px));
-  height: min(94vh, 940px);
-  max-height: min(94vh, 940px);
+  /* Cabe en el viewport con margen; el área central hace scroll (nunca se recorta el pie) */
+  max-height: min(940px, calc(100vh - 32px));
+  max-height: min(940px, calc(100dvh - 32px));
+  height: auto;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
   overflow: hidden;
   font-family: 'Inter', system-ui, sans-serif;
   color: #f4f4f5;
@@ -89,7 +95,8 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-height: 0;
 }
 
 .widget-edit-preview-heading {
@@ -572,8 +579,11 @@
 .widget-edit-body {
   padding: 20px 24px;
   overflow-y: auto;
-  flex: 1;
+  overflow-x: hidden;
+  flex: 1 1 auto;
   min-height: 0;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .widget-edit-fields {

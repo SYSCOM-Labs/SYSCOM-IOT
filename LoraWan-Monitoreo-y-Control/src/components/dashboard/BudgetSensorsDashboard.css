@@ -1,6 +1,6 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 
-/** Vista panel: reserva espacio ante la barra de scroll del layout padre */
+/** Vista panel: sin segundo canal de scroll (el scroll vive en `html`/`body` vía `.page-content--budget-dashboard`). */
 .page-budget-dashboard {
   margin: -8px 0 0;
   padding-right: max(20px, env(safe-area-inset-right, 0px));
@@ -15,6 +15,14 @@
 .page-budget-dashboard .bsd-root {
   overflow-x: hidden;
   max-width: 100%;
+  /** Evita min-height 100% + scrollbar-gutter dentro del scroll de `.page-content` (segunda barra). */
+  min-height: 0;
+  scrollbar-gutter: unset;
+}
+
+html.syscom-scroll-lock-dashboard .page-budget-dashboard > .bsd-root {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .bsd-root,
@@ -131,6 +139,7 @@
   box-sizing: border-box;
   margin-top: 8px;
   padding: 20px 22px 28px;
+  /** Altura mínima amplia solo con muchos widgets; si no, el lienzo sigue al grid y no empuja el scroll del layout */
   min-height: min(58vh, 560px);
   border-radius: 24px;
   border: 1px solid rgba(148, 163, 184, 0.45);
@@ -141,6 +150,11 @@
     0 4px 24px -8px rgba(15, 23, 42, 0.08);
   position: relative;
   z-index: 0;
+}
+
+/** Pocos widgets en el grid: el lienzo no fuerza ~58vh de alto vacío (reduce scroll espurio en `.page-content`). */
+.bsd-panel-widgets-canvas.bsd-panel-widgets-canvas--compact {
+  min-height: 0;
 }
 
 body:not(.theme-dark) .bsd-panel-widgets-canvas {

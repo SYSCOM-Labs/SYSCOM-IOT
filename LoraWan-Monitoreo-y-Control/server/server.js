@@ -695,6 +695,20 @@ function canRunAutomationsForUser(user) {
   return navPerm.userHasNav(user, 'Automations');
 }
 
+/**
+ * Superadmin puede no tener fila en `user_devices` pero operar el equipo; la sesión LNS suele estar bajo el
+ * usuario que recibió el join (gateway). Opciones extra para `tryLnsAppDownlinkEnqueue`.
+ */
+function downlinkRequestContext(req, deviceIdStr) {
+  const idStr = String(deviceIdStr || '').trim();
+  const allowGlobal = req.user && req.user.role === 'superadmin';
+  const ud = store.getUserDeviceForLnsDownlink(req.user.id, idStr, { allowUnassignedCross: allowGlobal });
+  return {
+    ud,
+    lnsOpts: { allowGlobalSessionFallback: allowGlobal },
+  };
+}
+
 /** Super admin puede operar con cualquier deviceId; resto solo si consta en user_devices. */
 function assertDeviceAssignedToUser(req, res, deviceIdParam) {
   const role = req.user.role;
@@ -1229,7 +1243,7 @@ function shouldInsertDeferredDownlink(body, lnsEnqueueExtras, deferralCode) {
 
 /**
  * Encola downlink LoRaWAN de aplicación (cola → PULL_RESP → packet forwarder).
- * @param {{ skipTxAckTrack?: boolean, priority?: number, delayMs?: number, deferUntilUplink?: boolean }} [lnsEnqueueExtras] Solo uso interno (p. ej. automatización). No se toma de `req.body` en la API HTTP salvo defer explícito.
+ * @param {{ skipTxAckTrack?: boolean, priority?: number, delayMs?: number, deferUntilUplink?: boolean, allowGlobalSessionFallback?: boolean }} [lnsEnqueueExtras] Solo uso interno (p. ej. automatización). `allowGlobalSessionFallback`: superadmin, sesión en otra fila `lorawan_lns_sessions` por DevEUI.
  * @returns {{ ok: true, out: object, fPort: number, confirmedDl: boolean, deviceIdStr: string, deui: string, hex: string, deferred?: false } | { ok: true, deferred: true, pendingId: number, pendingQueueLength: number, deferredReason: string, fPort: number, confirmedDl: boolean, deviceIdStr: string, deui: string, hex: string } | { ok: false, status: number, json: object }}
  */
 function tryLnsAppDownlinkEnqueue(userId, idStr, ud, body, lnsEnqueueExtras = {}) {
@@ -1250,6 +1264,9 @@ function tryLnsAppDownlinkEnqueue(userId, idStr, ud, body, lnsEnqueueExtras = {}
   if (deui.length !== 16) {
     return { ok: false, status: 400, json: { error: 'El dispositivo debe tener DevEUI (16 hex) para downlink LoRaWAN' } };
   }
+  const sessionUserId = store.lnsResolveSessionUserIdForDevice(String(idStr), userId, deui, {
+    allowGlobalSessionFallback: Boolean(lnsEnqueueExtras && lnsEnqueueExtras.allowGlobalSessionFallback),
+  });
   const fPort = resolveLnsDownlinkFPort(body, idStr);
   if (fPort == null || !Number.isInteger(fPort) || fPort < 1 || fPort > 223) {
     return {
@@ -1268,10 +1285,10 @@ function tryLnsAppDownlinkEnqueue(userId, idStr, ud, body, lnsEnqueueExtras = {}
   const hex = pay.hex;
   const confirmedDl = Boolean(body?.confirmed);
 
-  const sess = store.lnsGetSessionByDevEui(userId, deui);
+  const sess = store.lnsGetSessionByDevEui(sessionUserId, deui);
   const dlClass = resolveDownlinkDeviceClass(body, idStr, ud, sess?.deviceClass, userId);
   if (sess) {
-    store.lnsSyncSessionDeviceClass(userId, deui, dlClass);
+    store.lnsSyncSessionDeviceClass(sessionUserId, deui, dlClass);
   }
   const gwOptRaw = body?.gatewayEui ?? body?.gateway_eui;
   const gwOpt =
@@ -1280,13 +1297,13 @@ function tryLnsAppDownlinkEnqueue(userId, idStr, ud, body, lnsEnqueueExtras = {}
           .replace(/[^0-9a-fA-F]/g, '')
           .toLowerCase()
       : '';
-  if (gwOpt && gwOpt.length === 16 && !store.lorawanGatewayExists(userId, gwOpt)) {
+  if (gwOpt && gwOpt.length === 16 && !store.lorawanGatewayExists(sessionUserId, gwOpt)) {
     return {
       ok: false,
       status: 400,
       json: {
         error:
-          'gatewayEui no coincide con un gateway LoRaWAN dado de alta en su cuenta. Dé de alta el gateway o omita el campo para usar el último visto por el nodo.',
+          'gatewayEui no coincide con un gateway LoRaWAN dado de alta en la cuenta del vínculo LNS (dueño de sesión). Dé de alta el gateway o omita el campo para usar el último visto por el nodo.',
         code: 'UNKNOWN_GATEWAY',
       },
     };
@@ -1307,7 +1324,7 @@ function tryLnsAppDownlinkEnqueue(userId, idStr, ud, body, lnsEnqueueExtras = {}
   }
 
   try {
-    const out = eng.enqueueAppDownlink(userId, deui, fPort, payloadBuf, {
+    const out = eng.enqueueAppDownlink(sessionUserId, deui, fPort, payloadBuf, {
       confirmed: confirmedDl,
       delayMs,
       priority,
@@ -1319,7 +1336,7 @@ function tryLnsAppDownlinkEnqueue(userId, idStr, ud, body, lnsEnqueueExtras = {}
   } catch (e) {
     const code = typeof e.code === 'string' && e.code ? e.code : 'LNS_DOWNLINK';
     if (shouldInsertDeferredDownlink(body, lnsEnqueueExtras, code)) {
-      const ins = store.lnsInsertDeferredAppDownlink(userId, deui, fPort, hex, {
+      const ins = store.lnsInsertDeferredAppDownlink(sessionUserId, deui, fPort, hex, {
         confirmed: confirmedDl,
         priority,
         delayMs,
@@ -2017,7 +2034,7 @@ function rejectMilesightUgQueueProxy(res) {
     status: 'Error',
     code: 'USE_INTERNAL_LNS_DOWNLINK_ONLY',
     errMsg:
-      'Los downlinks LoRaWAN se gestionan solo con el LNS integrado de esta aplicación (UDP Semtech / GWMP). No use la cola REST del gateway Milesight para tráfico MAC ni payload de aplicación. Use POST /api/devices/:deviceId/downlink (JWT de sesión, staff) o POST /api/lns/v1/devices/:devEUI/queue (token de integración). El gateway debe ser solo packet forwarder hacia LNS_UDP_PORT. Para un proxy experimental de la cola del UG65 defina SYSCOM_MILESIGHT_UG_QUEUE_PROXY=1.',
+      'Los downlinks LoRaWAN se gestionan solo con el LNS integrado de esta aplicación (UDP Semtech / GWMP). No use la cola REST del gateway Milesight para tráfico MAC ni payload de aplicación. Use POST /api/devices/:deviceId/downlink (JWT de sesión y dispositivo asignado) o POST /api/lns/v1/devices/:devEUI/queue (token de integración). El gateway debe ser solo packet forwarder hacia LNS_UDP_PORT. Para un proxy experimental de la cola del UG65 defina SYSCOM_MILESIGHT_UG_QUEUE_PROXY=1.',
   });
   return true;
 }
@@ -2750,12 +2767,15 @@ app.put('/api/device-templates', authMiddleware, realSuperAdminMiddleware, (req,
 app.get(
   '/api/device-templates/assigned-device-ids',
   authMiddleware,
-  staffOnlyMiddleware,
   (req, res) => {
     const tid = String(req.query.templateId || '').trim();
     if (!tid) return res.status(400).json({ error: 'templateId requerido (query)' });
     try {
-      const deviceIds = store.listDeviceIdsWithCatalogTemplate(tid);
+      const full = store.getUserById(req.user.id);
+      const fleetWide = full && navPerm.userHasNav(full, 'Devices');
+      const deviceIds = fleetWide
+        ? store.listDeviceIdsWithCatalogTemplate(tid)
+        : store.listAssignedDeviceIdsWithCatalogTemplate(tid, req.user.id);
       res.json({ templateId: tid, deviceIds });
     } catch (e) {
       console.error('[GET /api/device-templates/assigned-device-ids]', e);
@@ -2767,7 +2787,6 @@ app.get(
 app.get(
   '/api/devices/:deviceId/downlink-presets',
   authMiddleware,
-  staffOnlyMiddleware,
   deviceAssignmentMiddleware,
   (req, res) => {
     const did = decodeURIComponent(String(req.params.deviceId || '').trim());
@@ -2780,7 +2799,6 @@ app.get(
 app.put(
   '/api/devices/:deviceId/downlink-presets',
   authMiddleware,
-  staffOnlyMiddleware,
   deviceAssignmentMiddleware,
   (req, res) => {
     const did = decodeURIComponent(String(req.params.deviceId || '').trim());
@@ -3065,7 +3083,6 @@ app.post(
 app.get(
   '/api/devices/:deviceId/decode-config',
   authMiddleware,
-  staffOnlyMiddleware,
   deviceAssignmentMiddleware,
   (req, res) => {
     res.json(store.getDeviceDecodeConfig(req.params.deviceId));
@@ -3076,7 +3093,6 @@ app.get(
 app.get(
   '/api/devices/:deviceId/lora-profile',
   authMiddleware,
-  staffOnlyMiddleware,
   deviceAssignmentMiddleware,
   (req, res) => {
     const idStr = decodeURIComponent(req.params.deviceId || '').trim();
@@ -3090,7 +3106,17 @@ app.get(
     const deuiProf = String(ud?.devEUI || '')
       .replace(/[^0-9a-fA-F]/g, '')
       .toLowerCase();
-    const sessProf = deuiProf.length === 16 ? store.lnsGetSessionByDevEui(req.user.id, deuiProf) : null;
+    const allowGlobal = req.user && req.user.role === 'superadmin';
+    const sessionUserIdProf =
+      deuiProf.length === 16
+        ? store.lnsResolveSessionUserIdForDevice(idStr, req.user.id, deuiProf, {
+            allowGlobalSessionFallback: allowGlobal,
+          })
+        : null;
+    const sessProf =
+      deuiProf.length === 16 && sessionUserIdProf
+        ? store.lnsGetSessionByDevEui(sessionUserIdProf, deuiProf)
+        : null;
     const fromSess = sessProf?.deviceClass != null ? String(sessProf.deviceClass).trim() : '';
     let raw = 'A';
     let lorawanClassSource = 'default';
@@ -3119,7 +3145,6 @@ app.get(
 app.put(
   '/api/devices/:deviceId/decode-config',
   authMiddleware,
-  staffOnlyMiddleware,
   deviceAssignmentMiddleware,
   (req, res) => {
     const body = req.body || {};
@@ -3161,13 +3186,12 @@ app.put(
 );
 
 /**
- * AppKey / Join EUI (App EUI) para OTAA con el LNS integrado. Staff + dispositivo asignado.
+ * AppKey / Join EUI (App EUI) para OTAA con el LNS integrado. Cualquier usuario con el dispositivo asignado.
  * Cuerpo: `{ "appEui": "…16 hex…", "appKey": "…32 hex…" }` — use cadena vacía para borrar un campo.
  */
 app.patch(
   '/api/devices/:deviceId/lora-credentials',
   authMiddleware,
-  staffOnlyMiddleware,
   deviceAssignmentMiddleware,
   (req, res) => {
     const did = decodeURIComponent(req.params.deviceId || '').trim();
@@ -3204,11 +3228,16 @@ app.patch(
   }
 );
 
-app.delete('/api/user-devices/:deviceId', authMiddleware, staffOnlyMiddleware, (req, res) => {
-  const id = decodeURIComponent(req.params.deviceId);
-  store.deleteUserDevice(req.user.id, id);
-  res.json({ ok: true });
-});
+app.delete(
+  '/api/user-devices/:deviceId',
+  authMiddleware,
+  deviceAssignmentMiddleware,
+  (req, res) => {
+    const id = decodeURIComponent(req.params.deviceId);
+    store.deleteUserDevice(req.user.id, id);
+    res.json({ ok: true });
+  }
+);
 
 app.get('/api/automations', authMiddleware, (req, res) => {
   res.json({ rules: store.listAutomationRules(req.user.id) });
@@ -3386,9 +3415,9 @@ function handleDashboardWidgetsSave(req, res) {
   }
 }
 
-app.put('/api/devices/:deviceId/dashboard-widgets', authMiddleware, staffOnlyMiddleware, handleDashboardWidgetsSave);
+app.put('/api/devices/:deviceId/dashboard-widgets', authMiddleware, deviceAssignmentMiddleware, handleDashboardWidgetsSave);
 /** Mismo cuerpo que PUT; por si el proxy o el cliente no envían PUT correctamente. */
-app.post('/api/devices/:deviceId/dashboard-widgets', authMiddleware, staffOnlyMiddleware, handleDashboardWidgetsSave);
+app.post('/api/devices/:deviceId/dashboard-widgets', authMiddleware, deviceAssignmentMiddleware, handleDashboardWidgetsSave);
 
 function normalizeDeviceBsdPreferencesBody(body) {
   if (!body || typeof body !== 'object') return { error: 'Cuerpo inválido' };
@@ -3504,16 +3533,17 @@ app.put('/api/devices', authMiddleware, staffOnlyMiddleware, (req, res) => {
   res.json({ status: 'Success' });
 });
 
-app.post('/api/devices/:deviceId/downlink', authMiddleware, staffOnlyMiddleware, deviceAssignmentMiddleware, (req, res) => {
+app.post('/api/devices/:deviceId/downlink', authMiddleware, deviceAssignmentMiddleware, (req, res) => {
   const idStr = req.params.deviceId.toString();
-  const ud = store.getUserDevice(req.user.id, idStr);
+  const { ud, lnsOpts } = downlinkRequestContext(req, idStr);
   if (!ud) return res.status(404).json({ error: 'Dispositivo no encontrado' });
-  const r = tryLnsAppDownlinkEnqueue(req.user.id, idStr, ud, req.body);
+  const r = tryLnsAppDownlinkEnqueue(req.user.id, idStr, ud, req.body, lnsOpts);
   return sendHttpResponseAfterLnsAppDownlinkEnqueue(res, req.user.id, r, { deviceIdStr: idStr });
 });
 
 /**
- * JWT de integración (larga vigencia, revocable). Solo staff: misma política que `POST .../downlink`.
+ * JWT de integración (larga vigencia, revocable). Solo staff: las cuentas finales usan JWT de sesión y
+ * `POST /api/devices/:deviceId/downlink` con dispositivo asignado.
  * Cuerpo opcional: `{ "label": "Datacake", "expiresInDays": 365 }` (máx. 730).
  */
 app.post('/api/lns/integration-tokens', authMiddleware, staffOnlyMiddleware, (req, res) => {
@@ -3952,14 +3982,13 @@ app.post('/api/lns/sim/ack-confirmed-downlink', authMiddleware, staffOnlyMiddlew
 app.post(
   '/api/devices/:deviceId/services/call',
   authMiddleware,
-  staffOnlyMiddleware,
   deviceAssignmentMiddleware,
   (req, res) => {
     const idStr = decodeURIComponent(String(req.params.deviceId || '').trim());
     const serviceId = String(req.body?.serviceId || '').trim();
     if (!idStr) return res.status(400).json({ status: 'Error', errMsg: 'deviceId requerido' });
     if (!serviceId) return res.status(400).json({ status: 'Error', errMsg: 'serviceId requerido' });
-    const ud = store.getUserDevice(req.user.id, idStr);
+    const { ud, lnsOpts } = downlinkRequestContext(req, idStr);
     if (!ud) return res.status(404).json({ status: 'Error', errMsg: 'Dispositivo no encontrado' });
     const hex = resolveAutomationDownlinkHex({
       commandKey: serviceId,
@@ -3974,10 +4003,16 @@ app.post(
         code: 'SERVICE_NOT_MAPPED',
       });
     }
-    const r = tryLnsAppDownlinkEnqueue(req.user.id, idStr, ud, {
-      payloadHex: hex,
-      confirmed: req.body?.confirmed === true,
-    });
+    const r = tryLnsAppDownlinkEnqueue(
+      req.user.id,
+      idStr,
+      ud,
+      {
+        payloadHex: hex,
+        confirmed: req.body?.confirmed === true,
+      },
+      lnsOpts
+    );
     return sendHttpResponseAfterLnsAppDownlinkEnqueue(res, req.user.id, r, {
       deviceIdStr: idStr,
       logSource: 'service_call',

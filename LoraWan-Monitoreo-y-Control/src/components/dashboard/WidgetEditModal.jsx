@@ -27,6 +27,7 @@ import {
   BAR_CHART_WIDGET_GRANULARITY_OPTIONS,
   applyHistoryGranularityPreset,
   normalizeBarChartGranularity,
+  normalizeStreamSeriesConfig,
   resolveTextWidgetRawScalar,
   dashboardWidgetBaseId,
 } from './widgetConfigUtils';
@@ -767,12 +768,22 @@ export default function WidgetEditModal({
   /** Clave para leer telemetría en la vista previa (tile fijo del tablero o campo explícito). */
   const previewTelemetryKey = useMemo(() => {
     let fk = draft.data?.fieldKey != null ? String(draft.data.fieldKey).trim() : '';
+    if (fk.startsWith('__bsd_')) fk = '';
+    /** Misma regla que el tablero: el lineal usa `streamSeries[0].fieldKey`, no `__bsd_dw_stream` (no existe en telemetría). */
+    if (fixedDashWidgetId === DASH_WIDGET.STREAM) {
+      const series = normalizeStreamSeriesConfig(draft.data);
+      const first = series[0]?.fieldKey != null ? String(series[0].fieldKey).trim() : '';
+      if (first && !first.startsWith('__bsd_')) fk = first;
+    }
+    if (!fk && sensor?.propertyKey != null) {
+      const pk = String(sensor.propertyKey).trim();
+      if (pk && !pk.startsWith('__bsd_')) fk = pk;
+    }
     if (!fk && isDashboardFixedWidgetSensor(sensor) && fixedDashWidgetId) {
       fk = `__bsd_${fixedDashWidgetId}`;
     }
-    if (!fk && sensor?.propertyKey != null) fk = String(sensor.propertyKey);
     return fk;
-  }, [draft.data?.fieldKey, sensor, fixedDashWidgetId]);
+  }, [draft.data?.fieldKey, draft.data?.streamSeries, draft.data, sensor?.propertyKey, fixedDashWidgetId]);
 
   /** Clave de telemetría de entrada para la fórmula (vista previa); si no hay fórmula activa, coincide con el campo principal. */
   const previewNumericSourceKey = useMemo(() => {
@@ -869,12 +880,15 @@ export default function WidgetEditModal({
 
   const previewSubtitle = useMemo(() => {
     if (sensor?.sourceDeviceId === 'dashboard' && isDashboardFixedWidgetSensor(sensor)) {
-      return 'Vista previa · refleja cambios al instante';
+      if (previewUsesLiveValue) return 'Vista previa · refleja cambios al instante';
+      return showPanelDevicePicker
+        ? 'Vista previa · elige dispositivo y campo con telemetría (o valor de ejemplo)'
+        : 'Vista previa · sin telemetría para este campo (valor de ejemplo)';
     }
     if (!previewUsesLiveValue) return 'Vista previa · valor de ejemplo (ajusta escala y rangos)';
     if (editScope !== 'value') return 'Vista previa';
     return 'Valor en vivo';
-  }, [sensor, previewUsesLiveValue, editScope]);
+  }, [sensor, previewUsesLiveValue, editScope, showPanelDevicePicker]);
 
   const indicatorSelectValue = useMemo(() => {
     const raw = draft.gauge?.indicatorType || 'numeric';
@@ -1551,6 +1565,28 @@ export default function WidgetEditModal({
                       <p className="widget-edit-hint">
                         Si ambos están en «Automático», se usa el orden de la lista (como antes). Si asignas los dos, se
                         envían solo esos HEX.
+                      </p>
+                      <label className="widget-edit-label widget-edit-label--mt">
+                        Campo de telemetría para ON/OFF en el tablero
+                        <select
+                          className="widget-edit-input"
+                          value={String(draft.data?.switchTelemetryField || '')}
+                          onChange={(e) => {
+                            const v = e.target.value.trim();
+                            update('data.switchTelemetryField', v || undefined);
+                          }}
+                        >
+                          <option value="">Automático (prioriza relay/salida; evita LAST/RSSI/FCNT)</option>
+                          {effectiveAvailableDataFields.map((key) => (
+                            <option key={`sw_tel_${key}`} value={key}>
+                              {key}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <p className="widget-edit-hint">
+                        Si el interruptor no coincide con el equipo físico, elige el campo que refleja el estado real del
+                        relay o salida digital.
                       </p>
                     </>
                   ) : (

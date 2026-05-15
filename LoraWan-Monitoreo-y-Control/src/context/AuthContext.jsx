@@ -145,8 +145,8 @@ export const AuthProvider = ({ children }) => {
     ['Users', 'Gateway', 'Automations', 'Settings', 'Templates'].some((k) => Boolean(nav[k]));
   /** Cuenta solo lectura / dispositivos asignados (incluye legado `viewer`). */
   const isViewer = r === 'user' || r === 'viewer';
-  /** Edición de widgets: módulo Dispositivos o superadmin. */
-  const canEditDashboard = isSuperAdmin || Boolean(nav.Devices);
+  /** Edición de layout/widgets en panel o tablero por dispositivo: módulo Dashboard o Dispositivos, o superadmin. */
+  const canEditDashboard = isSuperAdmin || Boolean(nav.Dashboard || nav.Devices);
   /** Solo super admin: alta de dispositivos en el sistema. */
   const canCreateDevices = isSuperAdmin;
 

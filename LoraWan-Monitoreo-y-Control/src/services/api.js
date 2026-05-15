@@ -319,7 +319,7 @@ export const fetchDeviceDecodeConfig = async (deviceId) => {
   return response.data;
 };
 
-/** Canal (FPort) y clase LoRaWAN persistidos para el dispositivo (staff con dispositivo asignado). */
+/** Canal (FPort) y clase LoRaWAN persistidos para el dispositivo (usuario con dispositivo asignado). */
 export const fetchDeviceLoraProfile = async (deviceId) => {
   const response = await axios.get(
     `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/lora-profile`,
@@ -475,7 +475,7 @@ export const putDeviceTemplatesCatalog = async (body) => {
   return response.data;
 };
 
-/** Dispositivos con presets compartidos que referencian una plantilla del catálogo (requiere permiso Dispositivos). */
+/** Dispositivos con presets que referencian la plantilla: todos si tiene módulo Dispositivos; si no, solo los asignados a su cuenta. */
 export const fetchAssignedDeviceIdsForTemplate = async (templateId) => {
   const q = encodeURIComponent(String(templateId || '').trim());
   const response = await axios.get(`${SERVER_API}/device-templates/assigned-device-ids?templateId=${q}`, {

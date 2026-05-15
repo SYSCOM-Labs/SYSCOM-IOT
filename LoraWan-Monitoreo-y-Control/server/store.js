@@ -1221,6 +1221,29 @@ class Store {
     return out;
   }
 
+  /**
+   * Igual que `listDeviceIdsWithCatalogTemplate` pero solo `device_id` donde el usuario tiene fila en `user_devices`.
+   * Evita filtrar dispositivos ajenos al llamar la API sin permiso de módulo Dispositivos.
+   */
+  listAssignedDeviceIdsWithCatalogTemplate(templateId, userId) {
+    const uid = String(userId || '').trim();
+    if (!uid) return [];
+    const all = this.listDeviceIdsWithCatalogTemplate(templateId);
+    if (!all.length) return [];
+    let assigned;
+    try {
+      assigned = new Set(
+        this.db
+          .prepare('SELECT device_id FROM user_devices WHERE user_id = ?')
+          .all(uid)
+          .map((r) => String(r.device_id))
+      );
+    } catch {
+      return [];
+    }
+    return all.filter((did) => assigned.has(String(did)));
+  }
+
   getUserByEmail(email) {
     return rowToUser(this.st.userByEmail.get(email));
   }
@@ -1756,6 +1779,60 @@ class Store {
   lnsGetSessionByDevAddr(userId, devAddrHex8) {
     const h = String(devAddrHex8 || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
     return this._rowToLnsSession(this.st.lnsSessionByDevAddr.get(userId, h));
+  }
+
+  /**
+   * Fila `user_devices` para operaciones LNS cuando el solicitante no está vinculado (p. ej. superadmin global):
+   * primero el propio usuario; si no, la primera cuenta asignada al mismo `device_id`.
+   * @param {{ allowUnassignedCross?: boolean }} [opts] si true y no hay fila propia, reutiliza datos de otro asignado (mismo DevEUI/AppKey en BD).
+   */
+  getUserDeviceForLnsDownlink(requesterUserId, deviceId, opts = {}) {
+    const did = String(deviceId || '').trim();
+    if (!did) return null;
+    const own = this.getUserDevice(requesterUserId, did);
+    if (own) return own;
+    if (!opts.allowUnassignedCross) return null;
+    const uids = this.listUserIdsAssignedToDevice(did);
+    for (const uid of uids) {
+      const u = String(uid).trim();
+      if (u === String(requesterUserId).trim()) continue;
+      const ud = this.getUserDevice(u, did);
+      if (ud) return ud;
+    }
+    return null;
+  }
+
+  /**
+   * `user_id` de la fila `lorawan_lns_sessions` a usar para cifrar/FCnt (puede ser otro asignado si el gateway
+   * registró el join bajo esa cuenta).
+   * @param {{ allowGlobalSessionFallback?: boolean }} [opts] solo superadmin: última sesión con este DevEUI en el servidor.
+   */
+  lnsResolveSessionUserIdForDevice(deviceId, requestingUserId, devEuiNorm16, opts = {}) {
+    const d = String(devEuiNorm16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    const req = String(requestingUserId || '').trim();
+    if (d.length !== 16) return req;
+    if (this.lnsGetSessionByDevEui(req, d)) return req;
+    const did = String(deviceId || '').trim();
+    for (const uid of this.listUserIdsAssignedToDevice(did)) {
+      const u = String(uid).trim();
+      if (u === req) continue;
+      if (this.lnsGetSessionByDevEui(u, d)) return u;
+    }
+    if (opts.allowGlobalSessionFallback) {
+      try {
+        const row = this.db
+          .prepare(
+            `SELECT user_id FROM lorawan_lns_sessions WHERE dev_eui = ? ORDER BY datetime(updated_at) DESC LIMIT 1`
+          )
+          .get(d);
+        if (row && row.user_id) return String(row.user_id);
+      } catch {
+        /* ignore */
+      }
+    }
+    return req;
   }
 
   /**

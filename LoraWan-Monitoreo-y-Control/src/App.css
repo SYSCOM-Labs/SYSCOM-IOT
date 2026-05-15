@@ -314,6 +314,64 @@ body.theme-dark .logout-btn {
   overscroll-behavior-y: contain;
 }
 
+/**
+ * Panel de control (`App.jsx` añade `syscom-scroll-lock-dashboard` en `html`/`body`):
+ * cadena de altura fija hasta `.page-content` para que solo esa zona haga scroll vertical (no `body`).
+ */
+html.syscom-scroll-lock-dashboard,
+html.syscom-scroll-lock-dashboard body {
+  height: 100%;
+  max-height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+html.syscom-scroll-lock-dashboard #root {
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+html.syscom-scroll-lock-dashboard #root > .app-container {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  overflow: hidden;
+  display: flex;
+  width: 100%;
+}
+
+html.syscom-scroll-lock-dashboard .main-content {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  max-height: 100% !important;
+  overflow: hidden !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+html.syscom-scroll-lock-dashboard .page-content.page-content--budget-dashboard {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  scrollbar-gutter: stable;
+  overscroll-behavior-y: contain;
+  display: flex;
+  flex-direction: column;
+}
+
+/** El wrapper del dashboard ocupa el alto útil y delega scroll al hijo interno si hace falta. */
+html.syscom-scroll-lock-dashboard .page-budget-dashboard {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }

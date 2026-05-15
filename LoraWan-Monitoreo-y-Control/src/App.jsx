@@ -252,6 +252,31 @@ function App() {
     writeLastPageToStorage(resolvePageForRole(currentPage, hasNavPage, isSuperAdmin));
   }, [currentPage, loading, user, hasNavPage, isSuperAdmin]);
 
+  /**
+   * Panel de control: un solo scroll en `.page-content` (clase en `html`/`body`; más fiable que `:has()` con la
+   * cadena Provider → `#root` → `.app-container` sin altura explícita).
+   */
+  useEffect(() => {
+    const cl = 'syscom-scroll-lock-dashboard';
+    const supportView = Boolean(userProfile?.impersonation?.actorId || user?.impersonatorId);
+    const mustChangePassword =
+      Boolean(userProfile?.mustChangePassword ?? user?.mustChangePassword) && !supportView;
+    const active = Boolean(
+      !loading && user && token && currentPage === 'Dashboard' && !mustChangePassword
+    );
+    if (!active) {
+      document.documentElement.classList.remove(cl);
+      document.body.classList.remove(cl);
+      return undefined;
+    }
+    document.documentElement.classList.add(cl);
+    document.body.classList.add(cl);
+    return () => {
+      document.documentElement.classList.remove(cl);
+      document.body.classList.remove(cl);
+    };
+  }, [loading, user, token, currentPage, userProfile?.mustChangePassword, user?.mustChangePassword, userProfile?.impersonation?.actorId, user?.impersonatorId]);
+
   if (loading) {
     return <div className="loading-screen loading-screen--premium">{t('common.loading')}</div>;
   }
@@ -403,7 +428,9 @@ function App() {
         <SyscomRealtimeBridge />
         <LnsDownlinkToastBridge />
         <AutomationToastBridge />
-        <div className="page-content">
+        <div
+          className={`page-content${currentPage === 'Dashboard' ? ' page-content--budget-dashboard' : ''}`}
+        >
           {currentPage === 'Dashboard'    && <Dashboard />}
           {currentPage === 'Devices'      && (
             <DeviceList listSearchQuery={devicesSearchQuery} onListSearchQueryChange={setDevicesSearchQuery} />

@@ -37,7 +37,6 @@ import {
   putDeviceBsdPreferences,
   fetchPanelBsdPreferences,
   putPanelBsdPreferences,
-  SYSCOM_LNS_DOWNLINK_SENT_EVENT,
 } from '../../services/api';
 import { getLatestDeviceData, queryTelemetry } from '../../services/localAuth';
 import {
@@ -57,7 +56,7 @@ import {
 } from '../../utils/deviceBsdPreferencesBundle';
 import { applyPanelBsdBundle, collectPanelBsdBundle } from '../../utils/panelBsdPreferencesBundle';
 import { applyStaleOfflineConnectStatus, isDeviceVisuallyOnline } from '../../utils/deviceConnectionStatus';
-import { SYSCOM_REALTIME_LNS, SYSCOM_REALTIME_TELEMETRY } from '../../constants/realtimeEvents';
+import { SYSCOM_REALTIME_TELEMETRY } from '../../constants/realtimeEvents';
 import { pushAppActivityLog } from '../../utils/appActivityLog';
 import WidgetEditModal from './WidgetEditModal';
 import ValueIndicator from './ValueIndicator';
@@ -117,6 +116,8 @@ import {
   normalizeLayoutForPersistence,
   placeNewBsdGridItem,
   readStoredBsdGridLayout,
+  bsdDashboardLayoutHasOverlap,
+  relocateBsdGridItemIfOverlapping,
   filterLayoutToAllowedDashboardItems,
   bsdGridRectsOverlap,
 } from './bsdDashboardLayout';
@@ -129,40 +130,10 @@ import {
 } from './trackingMapPoints';
 import './BudgetSensorsDashboard.css';
 
-/** Si una regla (o otro origen) acaba de enviar el mismo HEX, no encolar otro inmediatamente desde el Switch. */
-const BSD_SWITCH_EXTERNAL_DL_SUPPRESS_MS = 700;
-
 function normalizeDeui16(v) {
   if (v == null) return '';
   const s = String(v).replace(/[^0-9a-fA-F]/g, '').toLowerCase();
   return s.length === 16 ? s : '';
-}
-
-/** Deduce ON/OFF del Switch a partir del HEX enviado (misma lógica que `handleSwitchClick`: dos comandos → [0]=OFF, [1]=ON). */
-function inferSwitchOnFromSentHex(rawHex, switchWidgetData, downlinkList) {
-  const n = normalizeDownlinkHex(rawHex);
-  if (!n) return null;
-  const sw = switchWidgetData && typeof switchWidgetData === 'object' ? switchWidgetData : {};
-  const onN = normalizeDownlinkHex(sw.switchHexOn);
-  const offN = normalizeDownlinkHex(sw.switchHexOff);
-  if (onN && n === onN) return true;
-  if (offN && n === offN) return false;
-  const dls = Array.isArray(downlinkList) ? downlinkList : [];
-  if (dls.length >= 2) {
-    const d0 = normalizeDownlinkHex(dls[0]?.hex);
-    const d1 = normalizeDownlinkHex(dls[1]?.hex);
-    if (d0 && n === d0) return false;
-    if (d1 && n === d1) return true;
-  }
-  if (dls.length === 1) {
-    const d0 = normalizeDownlinkHex(dls[0]?.hex);
-    if (d0 && n === d0) {
-      const name = String(dls[0]?.name || dls[0]?.label || '').toLowerCase();
-      if (/\b(off|apag|apaga|cerrad|disable|desactiv)\b/.test(name)) return false;
-      if (/\b(on|encend|enciend|abier|enable|activ)\b/.test(name)) return true;
-    }
-  }
-  return null;
 }
 
 /** Icono del catálogo modal «Agregar widget» (Lucide). */
@@ -974,8 +945,37 @@ const TOGGLE_KEY_HINTS = [
 
 const IMAGE_PROP_KEYS = ['imageUrl', 'image', 'photo', 'picture', 'snapshot', 'cam', 'thumbnail', 'urlImagen'];
 
-function pickToggleKey(props) {
+/** Evita tomar RSSI/FCNT/LASTRX… como “relay” solo por ser 0/1. */
+function isTelemetryMetadataFalsePositiveKey(k) {
+  const s = String(k || '');
+  if (!s) return true;
+  const u = s.toUpperCase();
+  if (/^(_|LAST|PREV)/.test(u)) return true;
+  if (/^(DEV|EUI|ADDR|GW|GATEWAY|TIME|DATE|TS|FCNT|FPORT|MARGIN|DR|DATARATE)/i.test(s)) return true;
+  if (/(RSSI|SNR|FCNT|FPORT|FREQ|RFCH|CHANNEL|COUNTER|SEEN|DRIFT)$/i.test(u)) return true;
+  return false;
+}
+
+function scoreToggleKeyCandidate(k) {
+  const s = String(k).toLowerCase();
+  let score = 0;
+  for (const w of ['relay', 'output', 'digital', 'socket', 'valve', 'pump', 'motor', 'lock', 'door', 'rly']) {
+    if (s.includes(w)) score += 25;
+  }
+  if (/^ch\d|^out\d|^dio|^r\d|^do\d/.test(s)) score += 18;
+  return score;
+}
+
+/**
+ * @param {Record<string, unknown> | null | undefined} props
+ * @param {string | undefined} [preferredKey] desde `data.switchTelemetryField` del widget
+ */
+function pickToggleKey(props, preferredKey) {
   if (!props || typeof props !== 'object') return null;
+  const pref = typeof preferredKey === 'string' ? preferredKey.trim() : '';
+  if (pref && !IGNORE.has(pref) && props[pref] != null && props[pref] !== '') {
+    return pref;
+  }
   const lowerToActual = new Map();
   for (const key of Object.keys(props)) {
     if (IGNORE.has(key)) continue;
@@ -987,14 +987,29 @@ function pickToggleKey(props) {
     const val = props[actual];
     if (val != null && val !== '') return actual;
   }
+  const candidates = [];
   for (const k of Object.keys(props)) {
     if (IGNORE.has(k)) continue;
     const v = props[k];
-    if (typeof v === 'boolean') return k;
-    if (v === 0 || v === 1 || v === '0' || v === '1') return k;
-    if (typeof v === 'string' && parseTelemetryBoolish(v) !== null) return k;
+    const boolish =
+      typeof v === 'boolean' ||
+      v === 0 ||
+      v === 1 ||
+      v === '0' ||
+      v === '1' ||
+      (typeof v === 'string' && parseTelemetryBoolish(v) !== null);
+    if (!boolish) continue;
+    candidates.push(k);
   }
-  return null;
+  const relayish = candidates.filter((c) => !isTelemetryMetadataFalsePositiveKey(c));
+  const pool = relayish.length ? relayish : candidates;
+  if (!pool.length) return null;
+  pool.sort((a, b) => {
+    const d = scoreToggleKeyCandidate(b) - scoreToggleKeyCandidate(a);
+    if (d !== 0) return d;
+    return String(a).localeCompare(String(b));
+  });
+  return pool[0];
 }
 
 function pickImageUrl(props) {
@@ -1995,7 +2010,9 @@ export default function BudgetSensorsDashboard({
   refreshing = false,
 }) {
   const { credentials, token, hasNavPage, canEditDashboard, user, userProfile } = useAuth();
-  const canSendLnsCommands = hasNavPage('Devices');
+  const canSendLnsCommands = Boolean(
+    token && (hasNavPage('Devices') || variant === 'device' || variant === 'panel')
+  );
   const { t } = useLanguage();
   const dashDeviceId = variant === 'device' ? resolveDeviceDashboardStorageId(device) : null;
 
@@ -2235,13 +2252,9 @@ export default function BudgetSensorsDashboard({
   );
   const [downlinkList, setDownlinkList] = useState([]);
   const [switchProcessing, setSwitchProcessing] = useState(false);
-  /** Tras un downlink OK: la UI del switch sigue la posición elegida aunque el refresco de telemetría aún traiga el valor viejo. */
-  const [switchDisplayOverride, setSwitchDisplayOverride] = useState(null);
   /** HEX normalizados en envío; ref + tick para re-render sin bloquear otros botones. */
   const downlinkSendingHexRef = useRef(new Set());
   const [downlinkSendingVersion, setDownlinkSendingVersion] = useState(0);
-  /** Downlink reciente no originado en el clic del Switch (regla / otro cliente): alinear UI y amortiguar duplicado. */
-  const lastExternalDownlinkRef = useRef({ deviceId: '', hexNorm: '', at: 0 });
 
   useEffect(() => {
     panelDevicesRef.current = panelDevices;
@@ -2264,6 +2277,12 @@ export default function BudgetSensorsDashboard({
     migrateLegacyPanelDataToOwner(seg);
     setWidgetConfigs(loadAllWidgetConfigs());
   }, [variant, userProfile, user]);
+
+  /** Misma disciplina que al cambiar de equipo en dispositivo: al cambiar segmento o pestaña, releer el mapa completo desde disco (claves `dk()` distintas). */
+  useEffect(() => {
+    if (variant !== 'panel') return;
+    setWidgetConfigs(loadAllWidgetConfigs());
+  }, [variant, panelInstanceId, panelOwnerSegment]);
 
   const [editModalCtx, setEditModalCtx] = useState(null);
   /** Panel: dispositivo en vista previa en el modal (selección aún no guardada) para fusionar telemetría. */
@@ -2363,7 +2382,7 @@ export default function BudgetSensorsDashboard({
       variant,
       dashDeviceId,
       variant === 'panel' ? panelInstanceId : undefined,
-      undefined
+      variant === 'panel' ? panelOwnerSegment : undefined
     )
   );
   const visibilityMapRef = useRef(visibilityMap);
@@ -2374,7 +2393,6 @@ export default function BudgetSensorsDashboard({
   const [trackingError, setTrackingError] = useState(null);
   /** Tarjetas de sensor ocultas solo en la vista (no borran telemetría). */
   const [hiddenSensorCardKeys, setHiddenSensorCardKeys] = useState(() => new Set());
-  const visibilityLayoutSig = useMemo(() => JSON.stringify(visibilityMap), [visibilityMap]);
 
   useEffect(() => {
     if (visibilityMap[DASH_WIDGET.STREAM] === false) setStreamHistoryLoading(false);
@@ -2471,58 +2489,82 @@ export default function BudgetSensorsDashboard({
   );
 
   const bsdServerPushTimerRef = useRef(null);
+  /** Evita que `fetch*BsdPreferences` pise localStorage mientras subimos cambios al servidor. */
+  const bsdServerPushInFlightRef = useRef(false);
+  const runBsdServerPushNowRef = useRef(async () => Promise.resolve());
   const scheduleBsdServerPersistRef = useRef(() => {});
 
   /** Tras cada cambio local del BSD, subir el bundle al servidor con debounce (vista dispositivo: por equipo; panel: por segmento y pestaña). */
   useEffect(() => {
+    const runServerPush = async () => {
+      if (!token) return;
+      const uid = String((user && user.id) || (userProfile && userProfile.id) || '').trim();
+      if (!uid) return;
+      if (variant === 'device') {
+        const id = String(dashDeviceId || '').trim();
+        if (!id) return;
+        bsdServerPushInFlightRef.current = true;
+        try {
+          const bundle = collectDeviceBsdBundle(id);
+          if (!bundle) return;
+          const data = await putDeviceBsdPreferences(id, bundle);
+          const updatedAt = data?.updatedAt != null ? String(data.updatedAt) : '';
+          if (updatedAt) {
+            try {
+              localStorage.setItem(`sycom_bsd_remote_rev_${uid}_${id}`, updatedAt);
+            } catch {
+              /* ignore */
+            }
+          }
+        } catch (e) {
+          console.warn('[BSD] persistencia servidor:', e?.message || e);
+        } finally {
+          bsdServerPushInFlightRef.current = false;
+        }
+        return;
+      }
+      if (variant === 'panel') {
+        const pid =
+          panelInstanceId != null && String(panelInstanceId).trim()
+            ? String(panelInstanceId).trim()
+            : 'main';
+        const seg =
+          panelOwnerSegment != null && String(panelOwnerSegment).trim()
+            ? String(panelOwnerSegment).trim()
+            : '';
+        bsdServerPushInFlightRef.current = true;
+        try {
+          const bundle = collectPanelBsdBundle(panelOwnerSegment, pid);
+          if (!bundle) return;
+          const data = await putPanelBsdPreferences(seg, pid, bundle);
+          const updatedAt = data?.updatedAt != null ? String(data.updatedAt) : '';
+          if (updatedAt) {
+            try {
+              const markerKey = `sycom_bsd_panel_remote_rev_${uid}_${encodeURIComponent(seg)}_${encodeURIComponent(pid)}`;
+              localStorage.setItem(markerKey, updatedAt);
+            } catch {
+              /* ignore */
+            }
+          }
+        } catch (e) {
+          console.warn('[BSD] persistencia servidor:', e?.message || e);
+        } finally {
+          bsdServerPushInFlightRef.current = false;
+        }
+      }
+    };
+
+    runBsdServerPushNowRef.current = runServerPush;
+
     scheduleBsdServerPersistRef.current = () => {
       if (!token) return;
       const uid = String((user && user.id) || (userProfile && userProfile.id) || '').trim();
       if (!uid) return;
       if (bsdServerPushTimerRef.current != null) clearTimeout(bsdServerPushTimerRef.current);
-      bsdServerPushTimerRef.current = setTimeout(async () => {
+      bsdServerPushTimerRef.current = setTimeout(() => {
         bsdServerPushTimerRef.current = null;
-        try {
-          if (variant === 'device') {
-            const id = String(dashDeviceId || '').trim();
-            if (!id) return;
-            const bundle = collectDeviceBsdBundle(id);
-            if (!bundle) return;
-            const data = await putDeviceBsdPreferences(id, bundle);
-            const updatedAt = data?.updatedAt != null ? String(data.updatedAt) : '';
-            if (updatedAt) {
-              try {
-                localStorage.setItem(`sycom_bsd_remote_rev_${uid}_${id}`, updatedAt);
-              } catch {
-                /* ignore */
-              }
-            }
-          } else if (variant === 'panel') {
-            const pid =
-              panelInstanceId != null && String(panelInstanceId).trim()
-                ? String(panelInstanceId).trim()
-                : 'main';
-            const seg =
-              panelOwnerSegment != null && String(panelOwnerSegment).trim()
-                ? String(panelOwnerSegment).trim()
-                : '';
-            const bundle = collectPanelBsdBundle(panelOwnerSegment, pid);
-            if (!bundle) return;
-            const data = await putPanelBsdPreferences(seg, pid, bundle);
-            const updatedAt = data?.updatedAt != null ? String(data.updatedAt) : '';
-            if (updatedAt) {
-              try {
-                const markerKey = `sycom_bsd_panel_remote_rev_${uid}_${encodeURIComponent(seg)}_${encodeURIComponent(pid)}`;
-                localStorage.setItem(markerKey, updatedAt);
-              } catch {
-                /* ignore */
-              }
-            }
-          }
-        } catch (e) {
-          console.warn('[BSD] persistencia servidor:', e?.message || e);
-        }
-      }, 1600);
+        void runServerPush();
+      }, 900);
     };
   }, [variant, dashDeviceId, panelInstanceId, panelOwnerSegment, token, user?.id, userProfile?.id]);
 
@@ -2552,7 +2594,21 @@ export default function BudgetSensorsDashboard({
     [variant, dashDeviceId, dashboardGridLayoutKey]
   );
   const [gridLayout, setGridLayout] = useState(() => {
-    if (variant === 'panel') return [];
+    if (variant === 'panel') {
+      const pid =
+        panelInstanceId != null && String(panelInstanceId).trim()
+          ? String(panelInstanceId).trim()
+          : 'main';
+      const vis = loadDashboardVisibility('panel', null, pid, panelOwnerSegment);
+      const gk = dashboardGridLayoutStorageKey('panel', null, pid, panelOwnerSegment);
+      return compactBsdGridLayoutTopLeft(
+        normalizeLayoutForPersistence(
+          clampLayoutItemsToModerateMins(
+            mergeStoredBsdGridLayout(readStoredBsdGridLayout(gk), buildDefaultBsdGridLayout('panel', 0, vis))
+          )
+        )
+      );
+    }
     const did = variant === 'device' ? resolveDeviceDashboardStorageId(device) : null;
     const pid = undefined;
     const vis = loadDashboardVisibility(variant, did, pid);
@@ -2593,7 +2649,7 @@ export default function BudgetSensorsDashboard({
     const apply = () => {
       const w = Math.floor(measureEl.getBoundingClientRect().width);
       const next = Math.max(320, w);
-      if (lastMeasuredGridWidthRef.current !== 0 && Math.abs(next - lastMeasuredGridWidthRef.current) < 4) return;
+      if (lastMeasuredGridWidthRef.current !== 0 && Math.abs(next - lastMeasuredGridWidthRef.current) < 12) return;
       lastMeasuredGridWidthRef.current = next;
       setGridWidth(next);
     };
@@ -2608,7 +2664,7 @@ export default function BudgetSensorsDashboard({
   useEffect(() => {
     const stored = readStoredBsdGridLayout(dashboardGridLayoutKey);
     const vis = visibilityMapRef.current;
-    const defaults = buildDefaultBsdGridLayout(variant, panelDevices.length, vis);
+    const defaults = buildDefaultBsdGridLayout(variant, panelDevices.length > 0 ? 1 : 0, vis);
     /** Unir disco + layout en vivo: evita perder celdas que aún no se escribieron en localStorage. */
     const hybridById = new Map((stored || []).map((it) => [String(it.i), it]));
     const live = normalizeLayoutForPersistence(gridLayoutLatestRef.current || []);
@@ -2619,7 +2675,10 @@ export default function BudgetSensorsDashboard({
     const hybrid = normalizeLayoutForPersistence([...hybridById.values()]);
     const merged = normalizeLayoutForPersistence(mergeStoredBsdGridLayout(hybrid, defaults));
     const filtered = filterLayoutToAllowedDashboardItems(merged, defaults);
-    const sizeSafe = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(filtered));
+    let sizeSafe = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(filtered));
+    if (bsdDashboardLayoutHasOverlap(sizeSafe)) {
+      sizeSafe = compactBsdGridLayoutTopLeft(sizeSafe);
+    }
     /**
      * No reinyectar la plantilla por defecto cuando el filtro deja el grid vacío: eso mostraba widgets
      * que el usuario no había colocado manualmente (p. ej. desincronía transitoria). Se conserva el resultado filtrado.
@@ -2631,15 +2690,15 @@ export default function BudgetSensorsDashboard({
     } catch {
       /* ignore */
     }
-    setGridLayout((prev) => (layoutsEqualStable(prev, nextLayout) ? prev : nextLayout));
-    gridLayoutLatestRef.current = nextLayout;
-  }, [
-    dashboardGridLayoutKey,
-    variant,
-    panelDevices.length,
-    visibilityLayoutSig,
-    persistBsdGridLayoutDisk,
-  ]);
+    setGridLayout((prev) => {
+      if (layoutsEqualStable(prev, nextLayout)) {
+        gridLayoutLatestRef.current = prev;
+        return prev;
+      }
+      gridLayoutLatestRef.current = nextLayout;
+      return nextLayout;
+    });
+  }, [dashboardGridLayoutKey, variant, panelDevices.length > 0, persistBsdGridLayoutDisk]);
 
   /** Solo estado en vivo; localStorage en drag/resize stop y «Listo» (evita E/S en cada frame y ref desfasado). */
   const handleGridLayoutChange = useCallback(
@@ -2653,7 +2712,7 @@ export default function BudgetSensorsDashboard({
         next,
         gridLayoutLatestRef.current,
         variant,
-        panelDevicesRef.current?.length ?? 0,
+        (panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0,
         visibilityMapRef.current
       );
       if (!normalized) return;
@@ -2677,7 +2736,7 @@ export default function BudgetSensorsDashboard({
         layout,
         gridLayoutLatestRef.current,
         variant,
-        panelDevicesRef.current?.length ?? 0,
+        (panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0,
         visibilityMapRef.current
       );
       if (!normalized) return;
@@ -2730,11 +2789,18 @@ export default function BudgetSensorsDashboard({
       try {
         const data = await fetchDeviceBsdPreferences(dashDeviceId);
         if (cancelled || !data || typeof data.prefs !== 'object') return;
+        if (bsdServerPushTimerRef.current != null || bsdServerPushInFlightRef.current) return;
         const updatedAt = data.updatedAt != null ? String(data.updatedAt) : '';
         if (!updatedAt) return;
         const markerKey = `sycom_bsd_remote_rev_${uid}_${dashDeviceId}`;
         try {
           if (localStorage.getItem(markerKey) === updatedAt) return;
+        } catch {
+          /* ignore */
+        }
+        try {
+          const localRev = localStorage.getItem(markerKey);
+          if (localRev && String(localRev) !== String(updatedAt) && String(localRev) > String(updatedAt)) return;
         } catch {
           /* ignore */
         }
@@ -2775,11 +2841,18 @@ export default function BudgetSensorsDashboard({
       try {
         const data = await fetchPanelBsdPreferences(seg, pid);
         if (cancelled || !data || typeof data.prefs !== 'object') return;
+        if (bsdServerPushTimerRef.current != null || bsdServerPushInFlightRef.current) return;
         const updatedAt = data.updatedAt != null ? String(data.updatedAt) : '';
         if (!updatedAt) return;
         const markerKey = `sycom_bsd_panel_remote_rev_${uid}_${encodeURIComponent(seg)}_${encodeURIComponent(pid)}`;
         try {
           if (localStorage.getItem(markerKey) === updatedAt) return;
+        } catch {
+          /* ignore */
+        }
+        try {
+          const localRev = localStorage.getItem(markerKey);
+          if (localRev && String(localRev) !== String(updatedAt) && String(localRev) > String(updatedAt)) return;
         } catch {
           /* ignore */
         }
@@ -3080,13 +3153,24 @@ export default function BudgetSensorsDashboard({
       } catch {
         latestBatch = [];
       }
-      const results = await Promise.all(
-        idArr.map(async (id) => {
-          const dev = list.find((d) => String(d.deviceId) === String(id));
-          const merged = dev ? await mergeDeviceLive(dev, credentials, token, latestBatch) : {};
-          return [id, merged];
-        })
-      );
+      let results = [];
+      try {
+        results = await Promise.all(
+          idArr.map(async (id) => {
+            try {
+              const dev = list.find((d) => String(d.deviceId) === String(id));
+              const merged = dev ? await mergeDeviceLive(dev, credentials, token, latestBatch) : {};
+              return [id, merged && typeof merged === 'object' && !Array.isArray(merged) ? merged : {}];
+            } catch (e) {
+              console.warn('[BudgetSensorsDashboard] panel merge device', id, e?.message || e);
+              return [id, {}];
+            }
+          })
+        );
+      } catch (e) {
+        console.warn('[BudgetSensorsDashboard] panel merge batch', e?.message || e);
+        return;
+      }
       if (cancelled) return;
       const byId = {};
       for (const [id, merged] of results) {
@@ -4847,7 +4931,7 @@ export default function BudgetSensorsDashboard({
           without,
           without,
           variant,
-          panelDevicesRef.current?.length ?? 0,
+          (panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0,
           visNext
         ) || normalizeLayoutForPersistence(without);
       const packed = compactBsdGridLayoutTopLeft(normalized);
@@ -4893,7 +4977,7 @@ export default function BudgetSensorsDashboard({
         visibilitySnapshot && typeof visibilitySnapshot === 'object' && !Array.isArray(visibilitySnapshot)
           ? visibilitySnapshot
           : visibilityMapRef.current;
-      const panelLen = variant === 'panel' ? panelDevicesRef.current?.length ?? 0 : 0;
+      const panelLen = variant === 'panel' ? ((panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0) : 0;
       const defaults = buildDefaultBsdGridLayout(variant, panelLen, vis);
       let slot = defaults.find((d) => String(d.i) === String(wid));
       /** Solo calcular posición libre al crear celda nueva sin coordenadas de plantilla (galería / clon). */
@@ -4926,7 +5010,11 @@ export default function BudgetSensorsDashboard({
         piece = placeNewBsdGridItem(cur, slot);
       }
       const next = normalizeLayoutForPersistence([...cur, piece]);
-      const clamped = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(next));
+      let clamped = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(next));
+      clamped = relocateBsdGridItemIfOverlapping(clamped, wid);
+      if (bsdDashboardLayoutHasOverlap(clamped)) {
+        clamped = compactBsdGridLayoutTopLeft(clamped);
+      }
       gridLayoutLatestRef.current = clamped;
       setGridLayout(clamped);
       persistBsdGridLayoutDisk(clamped);
@@ -4994,15 +5082,21 @@ export default function BudgetSensorsDashboard({
     return loadDownlinksFromStorage(id);
   }, [variant, downlinkList, downlinkWidgetTargetDeviceId]);
 
-  const switchTelemetryForToggle = useMemo(
-    () =>
-      variant === 'panel'
-        ? telemetryLivePropsForPanelWidget(DASH_WIDGET.SWITCH)
-        : liveProps,
-    [variant, liveProps, telemetryLivePropsForPanelWidget]
+  const switchTelemetryForToggle = useMemo(() => {
+    const raw =
+      variant === 'panel' ? telemetryLivePropsForPanelWidget(DASH_WIDGET.SWITCH) : liveProps;
+    return expandMergedDeviceTelemetryLive(raw);
+  }, [variant, liveProps, telemetryLivePropsForPanelWidget]);
+
+  const switchTelemetryFieldCfg = widgetConfigs[dk(DASH_WIDGET.SWITCH)]?.data?.switchTelemetryField;
+  const switchTelemetryField =
+    typeof switchTelemetryFieldCfg === 'string' ? switchTelemetryFieldCfg.trim() : '';
+
+  const toggleKey = useMemo(
+    () => pickToggleKey(switchTelemetryForToggle, switchTelemetryField || undefined),
+    [switchTelemetryForToggle, switchTelemetryField]
   );
 
-  const toggleKey = useMemo(() => pickToggleKey(switchTelemetryForToggle), [switchTelemetryForToggle]);
   const switchFromTelemetry = useMemo(() => {
     if (!toggleKey) return false;
     const v = switchTelemetryForToggle[toggleKey];
@@ -5016,12 +5110,7 @@ export default function BudgetSensorsDashboard({
     return false;
   }, [switchTelemetryForToggle, toggleKey]);
 
-  const switchOn = useMemo(() => {
-    if (switchDisplayOverride !== null && typeof switchDisplayOverride === 'boolean') {
-      return switchDisplayOverride;
-    }
-    return switchFromTelemetry;
-  }, [switchDisplayOverride, switchFromTelemetry]);
+  const switchOn = switchFromTelemetry;
 
   const switchLastTelemetryLabel = useMemo(() => {
     if (variant !== 'panel' || !switchTargetDeviceId) return lastTelemetryAtLabel;
@@ -5031,83 +5120,6 @@ export default function BudgetSensorsDashboard({
     const raw = panelTelemetryByDeviceId[String(switchTargetDeviceId)];
     return formatLastTelemetryUpdateLine(raw?.lastUpdateTime) || lastTelemetryAtLabel;
   }, [variant, lastTelemetryAtLabel, switchTargetDeviceId, controlDeviceId, panelTelemetryByDeviceId]);
-
-  /** Solo al cambiar de dispositivo: no limpiar al variar la telemetría (toggleKey) o se pierde el ON/OFF impuesto por la regla. */
-  useEffect(() => {
-    setSwitchDisplayOverride(null);
-    lastExternalDownlinkRef.current = { deviceId: '', hexNorm: '', at: 0 };
-  }, [switchTargetDeviceId]);
-
-  useEffect(() => {
-    const panelDev =
-      variant === 'panel' && switchTargetDeviceId
-        ? (panelDevices || []).find((x) => String(x.deviceId) === String(switchTargetDeviceId))
-        : null;
-
-    const downlinkEventTargetsThisDashboard = (meta, deviceIdFromEvent) => {
-      if (!switchTargetDeviceId) return false;
-      const idEv = String(deviceIdFromEvent || '').trim();
-      const idEff = String(switchTargetDeviceId).trim();
-      if (idEv && idEv === idEff) return true;
-      if (variant === 'device' && dashDeviceId && idEv && idEv === String(dashDeviceId).trim()) return true;
-      const deuiEvt = normalizeDeui16(meta?.devEUI ?? meta?.devEui ?? meta?.deveui);
-      if (!deuiEvt) return false;
-      if (variant === 'device' && device) {
-        const d = normalizeDeui16(device.devEUI ?? device.devEui ?? device.deveui);
-        if (d && d === deuiEvt) return true;
-      }
-      if (panelDev) {
-        const d = normalizeDeui16(panelDev.devEUI ?? panelDev.devEui ?? panelDev.deveui);
-        if (d && d === deuiEvt) return true;
-      }
-      return false;
-    };
-
-    const applyFromHex = (meta, deviceIdFromEvent, rawHex) => {
-      if (!rawHex || !switchTargetDeviceId) return;
-      const metaObj = meta && typeof meta === 'object' ? meta : {};
-      if (!downlinkEventTargetsThisDashboard(metaObj, deviceIdFromEvent)) return;
-      const swData = widgetConfigs[dk(DASH_WIDGET.SWITCH)]?.data;
-      const inferred = inferSwitchOnFromSentHex(rawHex, swData, switchWidgetDownlinkList);
-      if (inferred === null) return;
-      const hexNorm = normalizeDownlinkHex(rawHex);
-      lastExternalDownlinkRef.current = {
-        deviceId: String(deviceIdFromEvent || metaObj.deviceId || switchTargetDeviceId),
-        hexNorm: hexNorm || '',
-        at: Date.now(),
-      };
-      setSwitchDisplayOverride(inferred);
-    };
-
-    const onLocalSent = (e) => {
-      const d = e.detail || {};
-      applyFromHex(d, d.deviceId, d.payloadHex);
-    };
-
-    const onLns = (ev) => {
-      const d = ev.detail || {};
-      if (d.eventType !== 'downlink_sent') return;
-      const meta = d.meta && typeof d.meta === 'object' ? d.meta : {};
-      applyFromHex(meta, meta.deviceId, meta.payloadHex);
-    };
-
-    window.addEventListener(SYSCOM_LNS_DOWNLINK_SENT_EVENT, onLocalSent);
-    window.addEventListener(SYSCOM_REALTIME_LNS, onLns);
-    return () => {
-      window.removeEventListener(SYSCOM_LNS_DOWNLINK_SENT_EVENT, onLocalSent);
-      window.removeEventListener(SYSCOM_REALTIME_LNS, onLns);
-    };
-  }, [
-    switchTargetDeviceId,
-    widgetConfigs,
-    dk,
-    switchWidgetDownlinkList,
-    variant,
-    dashDeviceId,
-    device,
-    controlDeviceId,
-    panelDevices,
-  ]);
 
   const imageUrl = useMemo(
     () =>
@@ -5331,21 +5343,9 @@ export default function BudgetSensorsDashboard({
       hex = dls.length >= 2 ? (switchOn ? dls[1].hex : dls[0].hex) : dls[0].hex;
     }
     const wasOn = switchOn;
-    const hexNorm = normalizeDownlinkHex(hex);
-    const ext = lastExternalDownlinkRef.current;
-    if (
-      hexNorm &&
-      ext.hexNorm === hexNorm &&
-      String(ext.deviceId) === String(switchTargetDeviceId) &&
-      Date.now() - ext.at < BSD_SWITCH_EXTERNAL_DL_SUPPRESS_MS
-    ) {
-      setSwitchDisplayOverride(!wasOn);
-      return;
-    }
     setSwitchProcessing(true);
     try {
       await sendDownlink(switchTargetDeviceId, hex, credentials, token);
-      setSwitchDisplayOverride(!wasOn);
     } catch (err) {
       const code = err.response?.data?.code;
       const st = err.response?.status;
@@ -5641,7 +5641,7 @@ export default function BudgetSensorsDashboard({
     (baseId) => {
       if (!canEditDashboard || !MULTI_INSTANCE_DASH_WIDGETS.has(baseId)) return;
       const newId = makeDashboardWidgetCloneId(baseId);
-      const panelLen = variant === 'panel' ? panelDevicesRef.current?.length ?? 0 : 0;
+      const panelLen = variant === 'panel' ? ((panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0) : 0;
       const curVis = { ...visibilityMapRef.current, [baseId]: true };
       visibilityMapRef.current = curVis;
       setVisibilityMap(() => {
@@ -5660,7 +5660,11 @@ export default function BudgetSensorsDashboard({
       /** Misma lógica que la galería: a la derecha en la fila o siguiente fila, sin solape (no `y: maxY`). */
       const appended = placeNewBsdGridItem(cur, { ...tmpl, i: newId });
       const next = normalizeLayoutForPersistence([...cur, appended]);
-      const clamped = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(next));
+      let clamped = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(next));
+      clamped = relocateBsdGridItemIfOverlapping(clamped, newId);
+      if (bsdDashboardLayoutHasOverlap(clamped)) {
+        clamped = compactBsdGridLayoutTopLeft(clamped);
+      }
       gridLayoutLatestRef.current = clamped;
       setGridLayout(clamped);
       persistBsdGridLayoutDisk(clamped);
@@ -5725,6 +5729,11 @@ export default function BudgetSensorsDashboard({
               flushSync(() => {
                 persistDashboardGridLayoutNow(gridLayoutLatestRef.current);
               });
+              if (bsdServerPushTimerRef.current != null) {
+                clearTimeout(bsdServerPushTimerRef.current);
+                bsdServerPushTimerRef.current = null;
+              }
+              void runBsdServerPushNowRef.current();
               setDashboardEditMode(false);
             }}
           >
@@ -5812,7 +5821,9 @@ export default function BudgetSensorsDashboard({
         <div
           className={
             variant === 'panel'
-              ? 'bsd-panel-widgets-canvas'
+              ? `bsd-panel-widgets-canvas${
+                  (gridLayout?.length ?? 0) <= 6 ? ' bsd-panel-widgets-canvas--compact' : ''
+                }`
               : 'bsd-dashboard-inner-wrap'
           }
         >
@@ -5908,7 +5919,9 @@ export default function BudgetSensorsDashboard({
                 <span className="bsd-switch-knob" />
                 <span className="bsd-switch-label">{switchProcessing ? '…' : switchOn ? 'ON' : 'OFF'}</span>
               </button>
-              {!canSendLnsCommands && <p className="bsd-control-hint">Se requiere permiso de dispositivos para enviar comandos.</p>}
+              {!canSendLnsCommands && (
+                <p className="bsd-control-hint">Inicie sesión para enviar comandos LoRaWAN desde el panel.</p>
+              )}
             </div>
             {switchLastTelemetryLabel ? (
               <div className="bsd-widget-footnote" style={wTitleStyle(DASH_WIDGET.SWITCH)}>
@@ -5978,7 +5991,9 @@ export default function BudgetSensorsDashboard({
                 </div>
               )}
             </div>
-            {!canSendLnsCommands && <p className="bsd-control-hint">Se requiere permiso de dispositivos para enviar downlinks.</p>}
+            {!canSendLnsCommands && (
+              <p className="bsd-control-hint">Inicie sesión para enviar downlinks desde el panel.</p>
+            )}
             {lastTelemetryAtLabel ? (
               <div className="bsd-widget-footnote" style={wTitleStyle(DASH_WIDGET.DOWNLINK)}>
                 {lastTelemetryAtLabel}
@@ -6834,7 +6849,7 @@ export default function BudgetSensorsDashboard({
                 if (idx >= 0) {
                   layout[idx] = { ...layout[idx], i: newWid };
                 } else {
-                  const panelLen = variant === 'panel' ? panelDevicesRef.current?.length ?? 0 : 0;
+                  const panelLen = variant === 'panel' ? ((panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0) : 0;
                   const defaults = buildDefaultBsdGridLayout(variant, panelLen, visNext);
                   const slot =
                     defaults.find((d) => String(d.i) === String(newWid)) ||
