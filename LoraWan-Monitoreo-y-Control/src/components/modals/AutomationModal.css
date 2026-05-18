@@ -112,6 +112,27 @@
   border: 1px solid var(--border-color);
 }
 
+.automation-condition-widget-value {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.22);
+  cursor: pointer;
+}
+
+.automation-condition-widget-value input[type='checkbox'] {
+  margin-top: 3px;
+  flex-shrink: 0;
+  accent-color: var(--accent-blue, #6366f1);
+}
+
 .action-main-row {
   display: flex;
   align-items: center;

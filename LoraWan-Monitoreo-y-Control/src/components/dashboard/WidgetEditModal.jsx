@@ -10,6 +10,7 @@ import {
   dashWidgetIdFromPropertyKey,
   isDashboardFixedWidgetSensor,
   colorForValueInRanges,
+  resolveGaugeColorLookupValue,
   DASH_WIDGET,
   normalizeDownlinkHex,
   parseCssHex,
@@ -938,9 +939,11 @@ function ModalSatisfactionRingPreview({
     () => computeSatisfactionRingUi(draft, previewMergedLiveProps, previewLiveDeviceModel, previewTelemetryHints),
     [draft, previewMergedLiveProps, previewLiveDeviceModel, previewTelemetryHints]
   );
+  const satColorVal = resolveGaugeColorLookupValue(draft, satUi);
   const satArcStroke =
     satUi.ranges?.length > 0 && satUi.rawValue != null && Number.isFinite(satUi.rawValue)
-      ? colorForValueInRanges(satUi.rawValue, satUi.ranges, satUi.scaleMin, satUi.scaleMax) || `url(#bsd-circ-grad-${gid})`
+      ? colorForValueInRanges(satColorVal, satUi.ranges, satUi.scaleMin, satUi.scaleMax) ||
+        `url(#bsd-circ-grad-${gid})`
       : `url(#bsd-circ-grad-${gid})`;
   const satArcDashOffset = BSD_CIRCULAR_GAUGE_LEN - (satUi.ringPct / 100) * BSD_CIRCULAR_GAUGE_LEN;
 
@@ -1016,13 +1019,9 @@ function ModalContainerTankPreview({
   const liquidColor = useMemo(() => {
     const lo = tankUi.scaleMin;
     const hi = tankUi.scaleMax;
-    const span = hi - lo;
-    const val =
-      tankUi.rawValue != null && Number.isFinite(tankUi.rawValue)
-        ? tankUi.rawValue
-        : lo + (tankUi.ringPct / 100) * span;
+    const val = resolveGaugeColorLookupValue(draft, tankUi);
     return colorForValueInRanges(val, tankUi.ranges, lo, hi) || '#22c55e';
-  }, [tankUi]);
+  }, [draft, tankUi]);
 
   return (
     <div
@@ -1063,13 +1062,9 @@ function ModalBatteryLevelPreview({
   const fillColor = useMemo(() => {
     const lo = batUi.scaleMin;
     const hi = batUi.scaleMax;
-    const span = hi - lo;
-    const val =
-      batUi.rawValue != null && Number.isFinite(batUi.rawValue)
-        ? batUi.rawValue
-        : lo + (batUi.ringPct / 100) * span;
+    const val = resolveGaugeColorLookupValue(draft, batUi);
     return colorForValueInRanges(val, batUi.ranges, lo, hi) || '#f97316';
-  }, [batUi]);
+  }, [draft, batUi]);
 
   return (
     <div
@@ -3313,7 +3308,27 @@ export default function WidgetEditModal({
                   />
                 </label>
               </div>
-              {showInverseGaugeOption ? (
+              {previewDashWidgetId === DASH_WIDGET.CONTAINER && showInverseGaugeOption ? (
+                <div className="widget-edit-container-gauge-options">
+                  <label className="widget-edit-label widget-edit-label--inline widget-edit-lorawan-toggle">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(draft.gauge?.inverseFill)}
+                      onChange={(e) => update('gauge.inverseFill', e.target.checked)}
+                    />
+                    Lógica inversa (menor valor en escala = mayor llenado del arco; útil p. ej. distancia ultrasónica al
+                    líquido)
+                  </label>
+                  <label className="widget-edit-label widget-edit-label--inline widget-edit-lorawan-toggle">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(draft.gauge?.invertDisplayedValue)}
+                      onChange={(e) => update('gauge.invertDisplayedValue', e.target.checked)}
+                    />
+                    Invertir valores mostrados (según escala: con mín. 0 y máx. 100, lectura 86 → se muestra 14)
+                  </label>
+                </div>
+              ) : showInverseGaugeOption ? (
                 <label className="widget-edit-label widget-edit-label--inline widget-edit-lorawan-toggle">
                   <input
                     type="checkbox"

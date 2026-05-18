@@ -1,124 +1,183 @@
-import React, { useId } from 'react';
+import React, { useId, useMemo } from 'react';
+
+/** Asegura etiqueta con símbolo de porcentaje. */
+function formatPctLabel(label) {
+  const s = String(label ?? '').trim();
+  if (!s || s === '—') return '—';
+  return s.includes('%') ? s : `${s}%`;
+}
 
 /**
- * Pila vertical (0–100 %): cristal + tapas metálicas, referencia visual, máximo uso del espacio.
+ * Batería vertical estilo icono clásico: marco metálico, relleno glossy y % (sin rayo).
  */
 export default function BsdBatteryLevelView({
   fillPct = 0,
-  fillColor = '#fb923c',
+  fillColor = '#22c55e',
   centerLabel = '—',
   lastAtLine = '',
   titleColor,
 }) {
   const uid = useId().replace(/:/g, '');
   const t = Math.min(100, Math.max(0, Number(fillPct) || 0));
-  const bodyTop = 78;
-  const bodyH = 132;
-  const bodyBottom = bodyTop + bodyH;
-  const fillH = (bodyH * t) / 100;
-  const fillY = bodyBottom - fillH;
+  const pctLabel = useMemo(() => formatPctLabel(centerLabel), [centerLabel]);
+
+  const shellX = 24;
+  const shellY = 30;
+  const shellW = 92;
+  const shellH = 158;
+  const shellR = 14;
+  const pad = 7;
+  const wellX = shellX + pad;
+  const wellY = shellY + pad;
+  const wellW = shellW - pad * 2;
+  const wellH = shellH - pad * 2;
+  const wellR = 10;
+  const wellBottom = wellY + wellH;
+  const fillH = (wellH * t) / 100;
+  const fillY = wellBottom - fillH;
+
+  const tipW = 34;
+  const tipH = 12;
+  const tipX = (140 - tipW) / 2;
+  /** Ubica el % en la zona vacía (arriba) cuando el nivel es alto. */
+  const labelTopPct = Math.min(58, Math.max(36, 34 + (100 - t) * 0.24));
+  const valueColor =
+    titleColor != null && String(titleColor).trim() !== '' ? String(titleColor).trim() : fillColor;
 
   return (
     <div className="bsd-battery-level">
-      <div className="bsd-battery-level__texture" aria-hidden />
       <div className="bsd-battery-level__stage">
         <svg
           className="bsd-battery-level__svg"
-          viewBox="0 0 200 220"
+          viewBox="0 0 140 210"
           width="100%"
           height="100%"
           preserveAspectRatio="xMidYMid meet"
           aria-hidden
         >
           <defs>
-            <linearGradient id={`bt-cap-${uid}`} x1="0%" y1="0%" x2="100%" y2="100%">
-              <stop offset="0%" stopColor="#f4f4f5" />
-              <stop offset="35%" stopColor="#a1a1aa" />
-              <stop offset="100%" stopColor="#6b7280" />
+            <linearGradient id={`vb-shell-${uid}`} x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stopColor="#f1f5f9" />
+              <stop offset="28%" stopColor="#cbd5e1" />
+              <stop offset="55%" stopColor="#64748b" />
+              <stop offset="100%" stopColor="#1e293b" />
             </linearGradient>
-            <linearGradient id={`bt-glass-${uid}`} x1="12%" y1="0%" x2="88%" y2="0%">
-              <stop offset="0%" stopColor="rgba(255,255,255,0.38)" />
-              <stop offset="40%" stopColor="rgba(255,255,255,0.07)" />
-              <stop offset="100%" stopColor="rgba(255,255,255,0.28)" />
+            <linearGradient id={`vb-tip-${uid}`} x1="0%" y1="0%" x2="0%" y2="100%">
+              <stop offset="0%" stopColor="#e2e8f0" />
+              <stop offset="100%" stopColor="#475569" />
             </linearGradient>
-            <linearGradient id={`bt-shine-${uid}`} x1="22%" y1="0%" x2="78%" y2="0%">
-              <stop offset="0%" stopColor="rgba(255,255,255,0.5)" />
-              <stop offset="35%" stopColor="rgba(255,255,255,0)" />
-              <stop offset="100%" stopColor="rgba(255,255,255,0.18)" />
+            <linearGradient id={`vb-fill-${uid}`} x1="50%" y1="0%" x2="50%" y2="100%">
+              <stop offset="0%" stopColor={fillColor} stopOpacity="1" />
+              <stop offset="55%" stopColor={fillColor} stopOpacity="0.92" />
+              <stop offset="100%" stopColor={fillColor} stopOpacity="0.78" />
             </linearGradient>
-            <linearGradient id={`bt-base-${uid}`} x1="50%" y1="0%" x2="50%" y2="100%">
-              <stop offset="0%" stopColor="#9ca3af" />
-              <stop offset="100%" stopColor="#4b5563" />
+            <linearGradient id={`vb-fill-shine-${uid}`} x1="50%" y1="0%" x2="50%" y2="100%">
+              <stop offset="0%" stopColor="#ffffff" stopOpacity="0.55" />
+              <stop offset="45%" stopColor="#ffffff" stopOpacity="0.12" />
+              <stop offset="100%" stopColor="#ffffff" stopOpacity="0" />
             </linearGradient>
-            <clipPath id={`bt-clip-${uid}`}>
-              <rect x="50" y={bodyTop} width="100" height={bodyH} rx="36" ry="36" />
+            <linearGradient id={`vb-glass-${uid}`} x1="0%" y1="0%" x2="100%" y2="0%">
+              <stop offset="0%" stopColor="#ffffff" stopOpacity="0.35" />
+              <stop offset="35%" stopColor="#ffffff" stopOpacity="0" />
+              <stop offset="100%" stopColor="#ffffff" stopOpacity="0.08" />
+            </linearGradient>
+            <clipPath id={`vb-clip-${uid}`}>
+              <rect x={wellX} y={wellY} width={wellW} height={wellH} rx={wellR} ry={wellR} />
             </clipPath>
+            <filter id={`vb-shadow-${uid}`} x="-20%" y="-10%" width="140%" height="130%">
+              <feDropShadow dx="0" dy="3" stdDeviation="4" floodColor="#000" floodOpacity="0.28" />
+            </filter>
           </defs>
 
-          <ellipse cx="100" cy="206" rx="68" ry="9" fill="rgba(0,0,0,0.3)" opacity="0.55" />
+          <g filter={`url(#vb-shadow-${uid})`}>
+            <rect
+              x={tipX}
+              y="10"
+              width={tipW}
+              height={tipH}
+              rx="4"
+              fill={`url(#vb-tip-${uid})`}
+              stroke="#334155"
+              strokeWidth="1"
+            />
 
-          {/* Base metálica ancha */}
-          <rect x="22" y="192" width="156" height="22" rx="8" fill={`url(#bt-base-${uid})`} stroke="#374151" strokeWidth="1.1" />
-          <rect x="30" y="188" width="140" height="8" rx="3" fill="#d1d5db" opacity="0.35" />
+            <rect
+              x={shellX}
+              y={shellY}
+              width={shellW}
+              height={shellH}
+              rx={shellR}
+              ry={shellR}
+              fill={`url(#vb-shell-${uid})`}
+              stroke="#0f172a"
+              strokeWidth="1.5"
+            />
 
-          {/* Cuerpo cristal (más ancho = más presencia) */}
-          <rect
-            x="42"
-            y="64"
-            width="116"
-            height="156"
-            rx="40"
-            ry="40"
-            fill="rgba(15,23,42,0.1)"
-            stroke="rgba(209,213,219,0.5)"
-            strokeWidth="2.2"
-          />
-          <rect x="46" y="68" width="108" height="148" rx="36" ry="36" fill={`url(#bt-glass-${uid})`} opacity="0.85" />
+            <rect
+              x={wellX - 2}
+              y={wellY - 2}
+              width={wellW + 4}
+              height={wellH + 4}
+              rx={wellR + 1}
+              ry={wellR + 1}
+              fill="#f8fafc"
+              stroke="#e2e8f0"
+              strokeWidth="1"
+            />
 
-          <g clipPath={`url(#bt-clip-${uid})`}>
-            <rect x="48" y={bodyTop - 2} width="104" height={bodyH + 4} fill="rgba(15,23,42,0.22)" />
-            <rect x="48" y={fillY} width="104" height={Math.max(0, fillH) + 1} fill={fillColor} opacity="0.94" />
-            <rect x="48" y={bodyTop} width="104" height={bodyH * 0.42} fill={`url(#bt-shine-${uid})`} opacity="0.4" />
+            <g clipPath={`url(#vb-clip-${uid})`}>
+              <rect x={wellX} y={wellY} width={wellW} height={wellH} fill="#1e293b" opacity="0.35" />
+              {fillH > 0.5 ? (
+                <>
+                  <rect
+                    x={wellX}
+                    y={fillY}
+                    width={wellW}
+                    height={fillH + 0.5}
+                    fill={`url(#vb-fill-${uid})`}
+                  />
+                  <rect
+                    x={wellX + 3}
+                    y={fillY}
+                    width={wellW - 6}
+                    height={Math.min(fillH * 0.55, wellH * 0.45)}
+                    fill={`url(#vb-fill-shine-${uid})`}
+                    rx="4"
+                  />
+                </>
+              ) : null}
+              <rect
+                x={wellX + 4}
+                y={wellY + 6}
+                width="14"
+                height={wellH - 12}
+                fill={`url(#vb-glass-${uid})`}
+                rx="6"
+              />
+            </g>
+
+            <rect
+              x={shellX}
+              y={shellY}
+              width={shellW}
+              height={shellH}
+              rx={shellR}
+              ry={shellR}
+              fill="none"
+              stroke="rgba(255,255,255,0.35)"
+              strokeWidth="1.2"
+            />
           </g>
-
-          <rect
-            x="42"
-            y="64"
-            width="116"
-            height="156"
-            rx="40"
-            ry="40"
-            fill="none"
-            stroke="rgba(255,255,255,0.28)"
-            strokeWidth="1.2"
-          />
-
-          {/* Brillos verticales */}
-          <path
-            d="M 58 198 L 58 78"
-            stroke="rgba(255,255,255,0.45)"
-            strokeWidth="6"
-            strokeLinecap="round"
-            opacity="0.22"
-          />
-          <path
-            d="M 142 198 L 142 78"
-            stroke="rgba(255,255,255,0.2)"
-            strokeWidth="4"
-            strokeLinecap="round"
-            opacity="0.18"
-          />
-
-          {/* Tapa + terminal positivo */}
-          <ellipse cx="100" cy="64" rx="44" ry="14" fill={`url(#bt-cap-${uid})`} stroke="#52525b" strokeWidth="1" />
-          <rect x="88" y="40" width="24" height="30" rx="5" fill="#e5e7eb" stroke="#6b7280" strokeWidth="1" />
-          <ellipse cx="100" cy="36" rx="10" ry="6" fill="#fafafa" stroke="#9ca3af" strokeWidth="0.8" />
-          <rect x="96" y="28" width="8" height="14" rx="2" fill="#d1d5db" stroke="#6b7280" strokeWidth="0.6" />
         </svg>
-        <div className="bsd-battery-level__hub">
-          <span className="bsd-battery-level__value">{centerLabel}</span>
+
+        <div
+          className="bsd-battery-level__label"
+          style={{ color: valueColor, top: `${labelTopPct}%` }}
+        >
+          <span className="bsd-battery-level__value">{pctLabel}</span>
         </div>
       </div>
+
       {lastAtLine ? (
         <div className="bsd-battery-level__foot-at" style={titleColor ? { color: titleColor } : undefined}>
           {lastAtLine}

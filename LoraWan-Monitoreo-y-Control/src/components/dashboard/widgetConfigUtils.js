@@ -1188,9 +1188,33 @@ export function ensureStreamSeriesDraftData(data) {
 }
 
 /**
+ * Valor en escala para elegir el color de un rango (Contenedor, Circular, Batería).
+ * Con `invertDisplayedValue` o `inverseFill`, el color debe coincidir con el llenado / valor mostrado,
+ * no con la lectura cruda (p. ej. lectura 86 con escala 0–100 → muestra 14 % → rango rojo 0–20).
+ *
+ * @param {Record<string, unknown> | null | undefined} cfg
+ * @param {{ rawValue?: number | null, ringPct?: number, scaleMin?: number, scaleMax?: number }} ui
+ */
+export function resolveGaugeColorLookupValue(cfg, ui) {
+  const lo = Number.isFinite(ui?.scaleMin) ? ui.scaleMin : 0;
+  const hi = Number.isFinite(ui?.scaleMax) && ui.scaleMax > lo ? ui.scaleMax : lo + 100;
+  const span = hi - lo;
+  const ringPct = Number(ui?.ringPct);
+  const fallback = lo + (Number.isFinite(ringPct) ? ringPct / 100 : 0.5) * span;
+  const raw = ui?.rawValue;
+  if (raw == null || !Number.isFinite(raw)) return fallback;
+  if (Boolean(cfg?.gauge?.invertDisplayedValue)) {
+    return invertDisplayedValueOnScale(raw, lo, hi);
+  }
+  if (Boolean(cfg?.gauge?.inverseFill)) {
+    return lo + (Number.isFinite(ringPct) ? ringPct / 100 : 1 - (raw - lo) / span) * span;
+  }
+  return raw;
+}
+
+/**
  * Progreso 0–1 del llenado del arco entre scaleLo y scaleHi.
  * Con inverseFill, un menor valor de telemetría implica mayor llenado (p. ej. distancia al líquido menor = más llenado).
- * Los colores por rangos siguen evaluándose con el valor físico (colorForValueInRanges sobre la lectura real).
  */
 export function gaugeFillProgressT(n, scaleLo, scaleHi, inverseFill) {
   const lo = Number.isFinite(scaleLo) ? scaleLo : 0;
@@ -1201,6 +1225,14 @@ export function gaugeFillProgressT(n, scaleLo, scaleHi, inverseFill) {
   const tNorm = (clamped - lo) / span;
   const inv = Boolean(inverseFill);
   return inv ? 1 - tNorm : tNorm;
+}
+
+/** Valor espejo en la escala (ej. escala 0–100 y n=86 → 14). Solo afecta el texto mostrado, no el llenado. */
+export function invertDisplayedValueOnScale(n, scaleLo, scaleHi) {
+  if (!Number.isFinite(n)) return n;
+  const lo = Number.isFinite(scaleLo) ? scaleLo : 0;
+  const hi = Number.isFinite(scaleHi) && scaleHi > lo ? scaleHi : lo + 100;
+  return lo + hi - n;
 }
 
 export function colorForValueInRanges(value, ranges, scaleMin, scaleMax) {
@@ -1413,6 +1445,7 @@ export function defaultWidgetConfig(sensor) {
             { id: 'r4', name: '', value: Math.round(step * 4 * 10) / 10, color: '#ed8936' },
             { id: 'r5', name: '', value: Math.round(baseMax * 10) / 10, color: '#f56565' },
           ],
+      ...(isContainerWidget ? { invertDisplayedValue: false } : {}),
     },
     timeframe: isBarChart
       ? {

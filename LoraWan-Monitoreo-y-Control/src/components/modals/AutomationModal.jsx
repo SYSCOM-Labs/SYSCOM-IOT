@@ -18,6 +18,35 @@ function effectiveAutomationConditions(conds) {
   );
 }
 
+function normalizeConditionRow(c) {
+  const base = c && typeof c === 'object' ? c : {};
+  return {
+    deviceId: base.deviceId != null ? String(base.deviceId) : '',
+    propKey: base.propKey != null ? String(base.propKey) : '',
+    propName: base.propName != null ? String(base.propName) : '',
+    operator: base.operator != null ? String(base.operator) : '==',
+    value: base.value != null ? String(base.value) : '',
+    useWidgetValue: Boolean(base.useWidgetValue),
+  };
+}
+
+function defaultConditionRow() {
+  return {
+    deviceId: '',
+    propKey: '',
+    propName: '',
+    operator: '==',
+    value: '',
+    useWidgetValue: false,
+  };
+}
+
+function buildConditionsFromRule(rule) {
+  const list = Array.isArray(rule?.conditions) ? rule.conditions : [];
+  if (!list.length) return [defaultConditionRow()];
+  return list.map(normalizeConditionRow);
+}
+
 /** URL de ejemplo / documentación de GitHub, no es el endpoint de PushMore. */
 function isLikelyGithubDocUrlInsteadOfWebhook(target) {
   const t = String(target || '').toLowerCase();
@@ -38,9 +67,7 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
   const { credentials, token, loading } = useAuth();
   
   const [name, setName] = useState(rule?.name || '');
-  const [conditions, setConditions] = useState(rule?.conditions || [
-    { deviceId: '', propKey: '', propName: '', operator: '==', value: '' }
-  ]);
+  const [conditions, setConditions] = useState(() => buildConditionsFromRule(rule));
   const [actions, setActions] = useState(rule?.actions || [
     {
       type: 'email',
@@ -72,6 +99,38 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
   const [deviceProperties, setDeviceProperties] = useState({}); 
   const [deviceDownlinks, setDeviceDownlinks] = useState({});
   const [deviceServiceCommands, setDeviceServiceCommands] = useState({});
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setName(rule?.name || '');
+    setConditions(buildConditionsFromRule(rule));
+    setActions(
+      Array.isArray(rule?.actions) && rule.actions.length
+        ? rule.actions.map((a) => ({ ...a }))
+        : [
+            {
+              type: 'email',
+              target: '',
+              emailSubject: '',
+              emailBody: '',
+              webhookBody: '',
+              targetDeviceId: '',
+              commandKey: '',
+              payload: '',
+              delay: 0,
+              scheduleRunAt: 'start',
+              toastTitle: '',
+              toastMessage: '',
+              toastVariant: 'indigo',
+            },
+          ]
+    );
+    setActiveDays(rule?.activeDays || [0, 1, 2, 3, 4, 5, 6]);
+    setScheduleStart(rule?.scheduleStart || '00:00');
+    setScheduleEnd(rule?.scheduleEnd || '23:59');
+    setReactivation(rule?.reactivation ?? 60);
+    setAllowReactivation(Boolean(rule?.allowReactivation));
+  }, [isOpen, rule]);
 
   useEffect(() => {
     if (!isOpen || loading) return;
@@ -172,7 +231,7 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
   };
 
   const addCondition = () => {
-    setConditions([...conditions, { deviceId: '', propKey: '', propName: '', operator: '==', value: '' }]);
+    setConditions([...conditions, defaultConditionRow()]);
   };
 
   const removeCondition = (index) => {
@@ -368,6 +427,19 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
                       </select>
                       <input type="text" value={cond.value} onChange={e => updateCondition(index, 'value', e.target.value)} placeholder="Valor" className="field-value" />
                     </div>
+                    {cond.deviceId && cond.propKey ? (
+                      <label className="automation-condition-widget-value">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(cond.useWidgetValue)}
+                          onChange={(e) => updateCondition(index, 'useWidgetValue', e.target.checked)}
+                        />
+                        <span>
+                          Usar valor del widget (fórmula, escala invertida, etc.). Si no está marcado, se usa la
+                          lectura real de la base de datos.
+                        </span>
+                      </label>
+                    ) : null}
                     <button type="button" className="btn-icon delete" onClick={() => removeCondition(index)}><Trash2 size={16} /></button>
                   </div>
                 ))}

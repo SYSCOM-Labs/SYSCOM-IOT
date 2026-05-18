@@ -1052,6 +1052,27 @@ body:not(.theme-dark) .widget-edit-preview-dash-note {
   box-sizing: border-box;
 }
 
+.widget-edit-container-gauge-options {
+  margin: 4px 0 10px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.18);
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.widget-edit-container-gauge-options .widget-edit-lorawan-toggle {
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  width: 100%;
+}
+
 .widget-edit-field-opt {
   display: flex;
   align-items: center;

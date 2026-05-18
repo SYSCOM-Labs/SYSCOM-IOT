@@ -7,6 +7,7 @@ import { tryTelemetryDisplayLabel } from '../../utils/telemetryDisplayFormat';
 import {
   resolveTelemetryDisplaySource,
   gaugeFillProgressT,
+  invertDisplayedValueOnScale,
 } from './widgetConfigUtils';
 
 /** Anillo del widget Circular (porcentaje): radio en viewBox 200×200. */
@@ -244,8 +245,22 @@ export function computeSatisfactionRingUi(cfg, telemetryLiveProps, liveDeviceMod
   };
 }
 
-/** Widget «Contenedor»: misma escala / telemetría / fórmula que el anillo Circular. */
-export const computeContainerTankUi = computeSatisfactionRingUi;
+/** Widget «Contenedor»: como Circular + opción de invertir solo el valor mostrado en la escala. */
+export function computeContainerTankUi(cfg, telemetryLiveProps, liveDeviceModel, telemetryHintMap) {
+  const ui = computeSatisfactionRingUi(cfg, telemetryLiveProps, liveDeviceModel, telemetryHintMap);
+  if (!Boolean(cfg?.gauge?.invertDisplayedValue) || ui.rawValue == null || !Number.isFinite(ui.rawValue)) {
+    return ui;
+  }
+  const inv = invertDisplayedValueOnScale(ui.rawValue, ui.scaleMin, ui.scaleMax);
+  const decRaw = cfg?.data?.decimals;
+  const dec =
+    decRaw != null && decRaw !== '' && Number.isFinite(Number(decRaw))
+      ? Math.min(20, Math.max(0, Number(decRaw)))
+      : 2;
+  const unit = cfg?.data?.unit != null ? String(cfg.data.unit) : '';
+  const label = `${inv.toFixed(dec)}${unit ? ` ${unit}` : ''}`.trim();
+  return { ...ui, centerLabel: label };
+}
 
 /** Widget «Nivel Batería»: misma escala / telemetría / fórmula que el anillo Circular. */
 export const computeBatteryLevelUi = computeSatisfactionRingUi;

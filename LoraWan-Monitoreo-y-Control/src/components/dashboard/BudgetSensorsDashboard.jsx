@@ -82,6 +82,7 @@ import {
   getDashboardWidgetMenuEntries,
   colorForValueInRanges,
   gaugeFillProgressT,
+  resolveGaugeColorLookupValue,
   dashboardWidgetIdFromStorageKey,
   mergeWidgetConfig,
   dashboardWidgetSensorStub,
@@ -2569,6 +2570,8 @@ export default function BudgetSensorsDashboard({
   });
   const gridLayoutLatestRef = useRef(gridLayout);
   gridLayoutLatestRef.current = gridLayout;
+  /** Evita mezclar posiciones del panel/dispositivo anterior al cambiar `dashboardGridLayoutKey`. */
+  const prevDashboardGridLayoutKeyRef = useRef(dashboardGridLayoutKey);
   /** Layout al inicio de un drag (intercambio pairwise con el solape al soltar). */
   const gridDragSnapshotRef = useRef(null);
   /** RGL emite `onLayoutChange` justo después de `onDragStop` con el layout sin intercambio; ignorar una vez. */
@@ -2605,21 +2608,37 @@ export default function BudgetSensorsDashboard({
     });
     ro.observe(measureEl);
     return () => ro.disconnect();
-  }, [embedded, variant, panelLoading, loadingExternal]);
+  }, [embedded, variant, panelLoading, loadingExternal, dashboardGridLayoutKey]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const keyChanged = prevDashboardGridLayoutKeyRef.current !== dashboardGridLayoutKey;
+    prevDashboardGridLayoutKeyRef.current = dashboardGridLayoutKey;
+
     const stored = readStoredBsdGridLayout(dashboardGridLayoutKey);
-    const vis = visibilityMapRef.current;
+    const vis = loadDashboardVisibility(
+      variant,
+      dashDeviceId,
+      variant === 'panel' ? panelInstanceId : undefined,
+      variant === 'panel' ? panelOwnerSegment : undefined
+    );
     const panelLen = variant === 'panel' && (panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0;
     const defaults = buildDefaultBsdGridLayout(variant, panelLen, vis);
-    /** Unir disco + layout en vivo: evita perder celdas que aún no se escribieron en localStorage. */
-    const hybridById = new Map((stored || []).map((it) => [String(it.i), it]));
-    const live = normalizeLayoutForPersistence(gridLayoutLatestRef.current || []);
-    for (const it of live) {
-      const id = String(it.i);
-      if (id) hybridById.set(id, it);
+    /**
+     * Al cambiar de panel/dispositivo solo leer disco: mezclar el layout en vivo del tab anterior
+     * pisaba posiciones guardadas y deformaba widgets hasta recargar (F5).
+     */
+    let hybrid;
+    if (keyChanged) {
+      hybrid = normalizeLayoutForPersistence(stored || []);
+    } else {
+      const hybridById = new Map((stored || []).map((it) => [String(it.i), it]));
+      const live = normalizeLayoutForPersistence(gridLayoutLatestRef.current || []);
+      for (const it of live) {
+        const id = String(it.i);
+        if (id) hybridById.set(id, it);
+      }
+      hybrid = normalizeLayoutForPersistence([...hybridById.values()]);
     }
-    const hybrid = normalizeLayoutForPersistence([...hybridById.values()]);
     const merged = normalizeLayoutForPersistence(mergeStoredBsdGridLayout(hybrid, defaults));
     const filtered = filterLayoutToAllowedDashboardItems(merged, defaults);
     /** Sin reempaque global: `compactBsdGridLayoutTopLeft` aquí movía widgets solos (p. ej. al cargar lista de dispositivos del panel o al redimensionar). */
@@ -2643,7 +2662,33 @@ export default function BudgetSensorsDashboard({
       gridLayoutLatestRef.current = nextLayout;
       return nextLayout;
     });
-  }, [dashboardGridLayoutKey, variant, persistBsdGridLayoutDisk]);
+
+    if (keyChanged) {
+      lastMeasuredGridWidthRef.current = 0;
+      const measureEl = gridWidthMeasureRef.current;
+      if (measureEl) {
+        const w = Math.floor(measureEl.getBoundingClientRect().width);
+        const next = Math.max(320, w);
+        lastMeasuredGridWidthRef.current = next;
+        setGridWidth(next);
+      }
+      requestAnimationFrame(() => {
+        const el = gridWidthMeasureRef.current;
+        if (!el) return;
+        const w = Math.floor(el.getBoundingClientRect().width);
+        const next = Math.max(320, w);
+        lastMeasuredGridWidthRef.current = next;
+        setGridWidth(next);
+      });
+    }
+  }, [
+    dashboardGridLayoutKey,
+    variant,
+    persistBsdGridLayoutDisk,
+    dashDeviceId,
+    panelInstanceId,
+    panelOwnerSegment,
+  ]);
 
   /**
    * Cuando el panel pasa a tener dispositivos y la barra superior está visible, insertar **una vez** esa fila
@@ -3471,13 +3516,10 @@ export default function BudgetSensorsDashboard({
   const satisfactionArcStroke = useMemo(() => {
     const lo = satisfactionUi.scaleMin;
     const hi = satisfactionUi.scaleMax;
-    const span = hi - lo;
-    const val =
-      satisfactionUi.rawValue != null && Number.isFinite(satisfactionUi.rawValue)
-        ? satisfactionUi.rawValue
-        : lo + (satisfactionUi.ringPct / 100) * span;
+    const cfg = widgetConfigs[dk(DASH_WIDGET.SATISFACTION)];
+    const val = resolveGaugeColorLookupValue(cfg, satisfactionUi);
     return colorForValueInRanges(val, satisfactionUi.ranges, lo, hi) || `url(#bsd-circ-grad-${gradId})`;
-  }, [satisfactionUi, gradId]);
+  }, [satisfactionUi, gradId, widgetConfigs, dk]);
 
   const satisfactionArcDashOffset =
     BSD_CIRCULAR_GAUGE_LEN - (satisfactionUi.ringPct / 100) * BSD_CIRCULAR_GAUGE_LEN;
@@ -3485,24 +3527,18 @@ export default function BudgetSensorsDashboard({
   const containerLiquidColor = useMemo(() => {
     const lo = containerUi.scaleMin;
     const hi = containerUi.scaleMax;
-    const span = hi - lo;
-    const val =
-      containerUi.rawValue != null && Number.isFinite(containerUi.rawValue)
-        ? containerUi.rawValue
-        : lo + (containerUi.ringPct / 100) * span;
+    const cfg = widgetConfigs[dk(DASH_WIDGET.CONTAINER)];
+    const val = resolveGaugeColorLookupValue(cfg, containerUi);
     return colorForValueInRanges(val, containerUi.ranges, lo, hi) || '#22c55e';
-  }, [containerUi]);
+  }, [containerUi, widgetConfigs, dk]);
 
   const batteryFillColor = useMemo(() => {
     const lo = batteryLevelUi.scaleMin;
     const hi = batteryLevelUi.scaleMax;
-    const span = hi - lo;
-    const val =
-      batteryLevelUi.rawValue != null && Number.isFinite(batteryLevelUi.rawValue)
-        ? batteryLevelUi.rawValue
-        : lo + (batteryLevelUi.ringPct / 100) * span;
+    const cfg = widgetConfigs[dk(DASH_WIDGET.BATTERY_LEVEL)];
+    const val = resolveGaugeColorLookupValue(cfg, batteryLevelUi);
     return colorForValueInRanges(val, batteryLevelUi.ranges, lo, hi) || '#f97316';
-  }, [batteryLevelUi]);
+  }, [batteryLevelUi, widgetConfigs, dk]);
 
   useLayoutEffect(() => {
     if (visibilityMap[DASH_WIDGET.STREAM] === false) {

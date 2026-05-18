@@ -6,6 +6,8 @@ import { getLatestDeviceData } from './localAuth.js';
 import { expandNestedGatewayTelemetry } from '../utils/gatewayPayload.js';
 import { SYSCOM_AUTOMATION_TOAST } from '../constants/automationEvents.js';
 import { tryShowAutomationBrowserNotification } from '../utils/browserNotifications.js';
+import { loadAllWidgetConfigs } from '../components/dashboard/widgetConfigUtils.js';
+import { resolveAutomationConditionCompareValue } from '../utils/automationWidgetValue.js';
 
 /**
  * Automation Engine
@@ -71,6 +73,7 @@ export const runAutomations = async (devices, deviceProperties, credentials, tok
   const now = new Date();
   const currentDay = now.getDay(); // 0-6 (Sun-Sat)
   const currentTimeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
+  const widgetConfigsForRules = loadAllWidgetConfigs();
 
   for (const rule of activeRules) {
     // 1. Check Schedule
@@ -102,14 +105,21 @@ export const runAutomations = async (devices, deviceProperties, credentials, tok
       const did = cond.deviceId != null ? String(cond.deviceId) : '';
       const props = did ? deviceProperties[did] : null;
       const pk = cond.propKey != null && cond.propKey !== '' ? String(cond.propKey) : '';
-      const deviceValue =
+      const rawDeviceValue =
         props && pk
           ? deviceValueForAutomationCondition(props, pk)
           : undefined;
-      if (deviceValue === undefined) {
+      if (rawDeviceValue === undefined) {
         allConditionsMet = false;
         break;
       }
+
+      const deviceValue = resolveAutomationConditionCompareValue(
+        rawDeviceValue,
+        cond,
+        props,
+        widgetConfigsForRules
+      );
 
       if (!evaluateCondition(deviceValue, cond.operator, cond.value)) {
         allConditionsMet = false;

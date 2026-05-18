@@ -5,6 +5,7 @@
 'use strict';
 
 const { resolveAutomationDownlinkHex } = require('./automation-downlink-resolve');
+const { resolveAutomationConditionCompareValue } = require('./automation-widget-value.cjs');
 
 /** @type {null | { store: object, tryLnsAppDownlinkEnqueue: Function, appendDownlinkLog: Function, insertUiEventWithStream: Function, buildLnsDownlinkApiSuccessBody: Function, canRunAutomationsForUser: Function }} */
 let _ctx = null;
@@ -401,11 +402,18 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
     for (const cond of effectiveConditions) {
       const did = cond.deviceId != null ? String(cond.deviceId) : '';
       const props = did ? deviceProperties[did] : null;
-      const deviceValue = getConditionDeviceValue(props, cond.propKey);
-      if (deviceValue === undefined) {
+      const rawDeviceValue = getConditionDeviceValue(props, cond.propKey);
+      if (rawDeviceValue === undefined) {
         allConditionsMet = false;
         break;
       }
+      const deviceValue = resolveAutomationConditionCompareValue(
+        rawDeviceValue,
+        cond,
+        props,
+        store,
+        userId
+      );
       if (!evaluateCondition(deviceValue, cond.operator, cond.value)) {
         allConditionsMet = false;
         break;
