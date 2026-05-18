@@ -8,6 +8,7 @@ import { WS558_DECODER_SCRIPT } from './ws558DecoderScript.js';
 import { UC300_DECODER_SCRIPT } from './uc300DecoderScript.js';
 import { SHENGDA_V16_DECODER_SCRIPT } from './shengdaV16DecoderScript.js';
 import { TIMEWAVE_DECODER_SCRIPT } from './timewaveDecoderScript.js';
+import { VS133_DECODER_SCRIPT } from './vs133DecoderScript.js';
 
 const EASTRON_DECODER_SCRIPT = `
 function decodeUplink(input) {
@@ -91,6 +92,20 @@ export const SEED_DEVICE_TEMPLATES = [
       { name: 'FC10 — Tipo pulso 1 = export Wh (40087)', hex: '01100056000204408000006291' },
       { name: 'FC10 — Reset demanda máxima (reg. F010 = 0000)', hex: '0110f010000102000054cf' },
       { name: 'FC10 — Reset energía reseteable (F010 = 0003)', hex: '0110f010000102000314ce' },
+    ],
+  },
+  {
+    modelo: 'VS133',
+    marca: 'Milesight',
+    channel: '85',
+    lorawanClass: 'A',
+    decoderScript: VS133_DECODER_SCRIPT,
+    downlinks: [
+      { name: 'Intervalo de reporte (20 min)', hex: 'ff03b004' },
+      { name: 'Intervalo de reporte (5 min)', hex: 'ff032c01' },
+      { name: 'Reiniciar dispositivo', hex: 'ff10ff' },
+      { name: 'Consultar estado del dispositivo', hex: 'ff28ff' },
+      { name: 'Borrar historial de conteo', hex: 'ff27ff' },
     ],
   },
   {

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useEffect, useState, useMemo, useRef } from 'react';
 import './DeviceList.css';
 import '../styles/premiumPageShell.css';
 import {
@@ -260,6 +260,8 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
   const [licenseRenewConfirmDevice, setLicenseRenewConfirmDevice] = useState(null);
   const [deviceTablePage, setDeviceTablePage] = useState(1);
   const [devicePageSize, setDevicePageSize] = useState(10);
+  /** Último evento SSE de telemetría (evita GET /devices/latest redundante cada 5 s). */
+  const lastRealtimeTelemetryMsRef = useRef(0);
 
   /**
    * @param {{ silent?: boolean, softFail?: boolean, ensureRows?: object[] }} [opts]
@@ -334,50 +336,66 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
     });
   }, [devices, showDataModal]);
 
+  const applyLatestBatchToDevices = (latestData) => {
+    if (!latestData?.length) {
+      setDevices((prev) => prev.map((dev) => applyStaleOfflineConnectStatus(dev)));
+      return;
+    }
+    setDevices((prevDevices) => {
+      if (prevDevices.length === 0) return prevDevices;
+      return prevDevices.map((dev) => {
+        const localUpdate = latestData.find((d) => d.deviceId.toString() === dev.deviceId.toString());
+        if (localUpdate && localUpdate.properties) {
+          return mergeDeviceRowWithLatestTelemetry(dev, localUpdate);
+        }
+        return applyStaleOfflineConnectStatus(dev);
+      });
+    });
+  };
+
   useEffect(() => {
     let interval;
     const pollLocalUpdates = async () => {
       if (devices.length === 0) return;
+      if (Date.now() - lastRealtimeTelemetryMsRef.current < 15000) return;
       try {
         const latestData = await getLatestDeviceData();
-        if (latestData && latestData.length > 0) {
-          setDevices((prevDevices) =>
-            prevDevices.map((dev) => {
-              const localUpdate = latestData.find((d) => d.deviceId.toString() === dev.deviceId.toString());
-              if (localUpdate && localUpdate.properties) {
-                return mergeDeviceRowWithLatestTelemetry(dev, localUpdate);
-              }
-              return applyStaleOfflineConnectStatus(dev);
-            })
-          );
-        } else {
-          setDevices((prev) => prev.map((dev) => applyStaleOfflineConnectStatus(dev)));
-        }
+        applyLatestBatchToDevices(latestData);
       } catch (err) {
         console.error('Error polling local DB:', err);
       }
     };
 
-    interval = setInterval(pollLocalUpdates, 5000);
+    interval = setInterval(pollLocalUpdates, 15000);
     return () => clearInterval(interval);
   }, [devices.length]);
 
   useEffect(() => {
-    const onRealtimeTelemetry = () => {
+    const onRealtimeTelemetry = (ev) => {
+      const detail = ev && typeof ev === 'object' ? ev.detail : null;
+      if (detail?.deviceId && detail.properties && typeof detail.properties === 'object') {
+        lastRealtimeTelemetryMsRef.current = Date.now();
+        setDevices((prevDevices) => {
+          if (prevDevices.length === 0) return prevDevices;
+          const id = String(detail.deviceId);
+          return prevDevices.map((dev) =>
+            String(dev.deviceId) === id
+              ? mergeDeviceRowWithLatestTelemetry(dev, {
+                  deviceId: id,
+                  properties: detail.properties,
+                  timestamp: detail.timestamp != null ? detail.timestamp : Date.now(),
+                })
+              : applyStaleOfflineConnectStatus(dev)
+          );
+        });
+        return;
+      }
       (async () => {
         try {
           const latestData = await getLatestDeviceData();
           if (!latestData?.length) return;
-          setDevices((prevDevices) => {
-            if (prevDevices.length === 0) return prevDevices;
-            return prevDevices.map((dev) => {
-              const localUpdate = latestData.find((d) => d.deviceId.toString() === dev.deviceId.toString());
-              if (localUpdate && localUpdate.properties) {
-                return mergeDeviceRowWithLatestTelemetry(dev, localUpdate);
-              }
-              return applyStaleOfflineConnectStatus(dev);
-            });
-          });
+          lastRealtimeTelemetryMsRef.current = Date.now();
+          applyLatestBatchToDevices(latestData);
         } catch (err) {
           console.error('Error merging SSE telemetry:', err);
         }

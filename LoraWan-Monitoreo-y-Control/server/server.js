@@ -7,6 +7,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { normalizeLorawanUplink, expandLorawanPacketBodies } = require('./lorawan-normalize');
 const { tryApplyStoredDecoder } = require('./payload-decoder');
+const { DECODER_SCRIPT: VS133_BUILTIN_DECODER } = require('./milesight-vs133-decoder.cjs');
 const {
   normalizeBaseUrl: ugNormalizeBaseUrl,
   ugJsonRequest,
@@ -453,6 +454,55 @@ function isGatewayPseudoDeviceId(deviceId) {
   return /^[0-9a-f]{8,32}$/.test(hex);
 }
 
+function normalizeDevIdKey(s) {
+  return String(s || '').replace(/[^0-9a-fA-F]/gi, '').toLowerCase();
+}
+
+/** Telemetría generada por el LNS al encolar Join-Accept (sin payload de aplicación / conteo). */
+function joinOnlyTelemetryHint(properties) {
+  if (!properties || typeof properties !== 'object') return null;
+  const ev = properties.lorawan_event != null ? String(properties.lorawan_event).trim() : '';
+  if (!ev || !/join/i.test(ev)) return null;
+  const hex = properties.payload_hex != null ? String(properties.payload_hex).trim() : '';
+  if (hex.length > 0) return null;
+  return 'Solo join LoRaWAN (sin uplink de aplicación). El VS133 aún no envió reporte de conteo (puerto 85).';
+}
+
+/** Última telemetría: por device_id, DevEUI en columna o clave guardada bajo DevEUI (LNS). */
+/** Superadmin: telemetría bajo la cuenta que realmente ingirió el dato. */
+function telemetryUserIdForRequest(req, deviceId) {
+  return store.resolveTelemetryUserId(req.user.id, String(deviceId || ''), { role: req.user.role });
+}
+
+function getUserDeviceForActorReq(req, deviceId) {
+  return store.getUserDeviceForActor(req.user.id, req.user.role, deviceId);
+}
+
+function findLatestTelemetryForRegistration(latestMap, reg) {
+  if (!latestMap || !reg) return null;
+  const did = String(reg.deviceId || '').trim();
+  if (did && latestMap[did]) return latestMap[did];
+
+  const didNorm = normalizeDevIdKey(did);
+  if (didNorm.length >= 8) {
+    for (const [k, v] of Object.entries(latestMap)) {
+      if (normalizeDevIdKey(k) === didNorm) return v;
+    }
+  }
+
+  const eui = normalizeDevIdKey(reg.devEUI || (didNorm.length === 16 ? did : ''));
+  if (eui.length === 16) {
+    if (latestMap[eui]) return latestMap[eui];
+    for (const [k, v] of Object.entries(latestMap)) {
+      if (normalizeDevIdKey(k) === eui) return v;
+      const props = v && v.properties && typeof v.properties === 'object' ? v.properties : {};
+      const pe = normalizeDevIdKey(props.devEUI || props.devEui);
+      if (pe === eui) return v;
+    }
+  }
+  return null;
+}
+
 /** Último ts de ingesta en BD para el usuario; si es antiguo, forzar OFFLINE en el listado. */
 function applyStaleOfflineFromTelemetryRow(row, telemetryRow) {
   if (!telemetryRow || telemetryRow.timestamp == null) return;
@@ -474,11 +524,10 @@ function inferFreshOnlineConnectStatus(row, telemetryRow) {
   row.connectStatus = 'ONLINE';
 }
 
-function attachLicenseFieldsToDeviceRow(row) {
+function attachLicenseFieldsToDeviceRow(row, licenseMeta) {
   const did = row && row.deviceId;
   if (!did) return;
-  store.ensureDeviceLicenseIfMissing(did);
-  const m = store.getDeviceLicenseMeta(did);
+  const m = licenseMeta !== undefined ? licenseMeta : store.getDeviceLicenseMeta(did);
   if (!m) return;
   row.licenseStartedAt = m.startedAt;
   row.licenseExpiresAt = m.expiresAt;
@@ -496,7 +545,7 @@ function normalizeListLorawanClassLetter(raw) {
 }
 
 /** Clase efectiva para la UI (user_devices → plantilla decode). */
-function resolveLorawanClassForDeviceRow(deviceId, reg, assigns) {
+function resolveLorawanClassForDeviceRow(deviceId, reg, assigns, decodeCfg) {
   const did = String(deviceId || '').trim();
   if (reg && reg.lorawanClass != null && String(reg.lorawanClass).trim() !== '') {
     return normalizeListLorawanClassLetter(reg.lorawanClass);
@@ -509,7 +558,7 @@ function resolveLorawanClassForDeviceRow(deviceId, reg, assigns) {
     }
   }
   try {
-    const dec = store.getDeviceDecodeConfig(did);
+    const dec = decodeCfg || store.getDeviceDecodeConfig(did);
     if (dec && dec.lorawanClass != null && String(dec.lorawanClass).trim() !== '') {
       return normalizeListLorawanClassLetter(dec.lorawanClass);
     }
@@ -517,6 +566,18 @@ function resolveLorawanClassForDeviceRow(deviceId, reg, assigns) {
     /* ignore */
   }
   return 'A';
+}
+
+function productModelFromDecodeCfg(decodeCfg) {
+  return decodeCfg && decodeCfg.productModel != null ? String(decodeCfg.productModel).trim() : '';
+}
+
+function resolvedDeviceProductModelFast(deviceId, reg, decodeMap) {
+  const fromUd = productModelFromUserDeviceReg(reg);
+  if (fromUd) return fromUd;
+  const did = String(deviceId || '').trim();
+  const fromDec = decodeMap && decodeMap[did] ? productModelFromDecodeCfg(decodeMap[did]) : '';
+  return fromDec;
 }
 
 /**
@@ -528,10 +589,14 @@ function buildDevicesContentAssignedOnly(userId) {
   const labels = store.getDeviceLabels(userId);
   const labelById = Object.fromEntries(labels.map((l) => [l.deviceId, l.displayName]));
   const registered = store.listUserDevices(userId);
+  const regIds = registered.map((r) => r.deviceId).filter(Boolean);
+  const decodeMap = store.getDeviceDecodeConfigMap(regIds);
+  const licenseMap = store.getDeviceLicenseMetaMap(regIds);
 
   const mapTelemetryRow = (t) => {
     const p = t.properties || {};
     const name = labelById[t.deviceId] || t.deviceName || p.deviceName || t.deviceId;
+    const ingestHint = joinOnlyTelemetryHint(p);
     return {
       deviceId: t.deviceId,
       name,
@@ -540,6 +605,7 @@ function buildDevicesContentAssignedOnly(userId) {
       electricity: p.electricity,
       rssi: p.rssi,
       ...p,
+      ...(ingestHint ? { ingestStatus: ingestHint } : {}),
       name,
       model: deviceModelFromTelemetryProps(p),
       /** Siempre hora de ingesta en servidor (evita que `last_update` / campos del payload congelen la columna «última actualización»). */
@@ -550,14 +616,14 @@ function buildDevicesContentAssignedOnly(userId) {
   const content = [];
   for (const reg of registered) {
     if (isGatewayPseudoDeviceId(reg.deviceId)) continue;
-    const t = latestMap[reg.deviceId];
+    const t = findLatestTelemetryForRegistration(latestMap, reg);
     if (t) {
       const row = mapTelemetryRow(t);
       applyStaleOfflineFromTelemetryRow(row, t);
       inferFreshOnlineConnectStatus(row, t);
       if (reg.displayName) row.name = reg.displayName;
       if (reg.devEUI && !row.devEUI && !row.devEui) row.devEUI = reg.devEUI;
-      const tplModel = resolvedDeviceProductModel(store, reg.deviceId, reg);
+      const tplModel = resolvedDeviceProductModelFast(reg.deviceId, reg, decodeMap);
       row.productModel = tplModel;
       row.model =
         tplModel ||
@@ -565,11 +631,11 @@ function buildDevicesContentAssignedOnly(userId) {
         deviceModelFromTelemetryProps(t.properties || {});
       row.tag = reg.tag != null ? String(reg.tag) : '';
       row.registered = true;
-      attachLicenseFieldsToDeviceRow(row);
-      row.lorawanClass = resolveLorawanClassForDeviceRow(reg.deviceId, reg, null);
+      attachLicenseFieldsToDeviceRow(row, licenseMap[reg.deviceId]);
+      row.lorawanClass = resolveLorawanClassForDeviceRow(reg.deviceId, reg, null, decodeMap[reg.deviceId]);
       content.push(row);
     } else {
-      const tplModel = resolvedDeviceProductModel(store, reg.deviceId, reg);
+      const tplModel = resolvedDeviceProductModelFast(reg.deviceId, reg, decodeMap);
       const row = {
         deviceId: reg.deviceId,
         name: reg.displayName || reg.deviceId,
@@ -584,8 +650,8 @@ function buildDevicesContentAssignedOnly(userId) {
         notes: reg.notes || undefined,
         tag: reg.tag != null ? String(reg.tag) : '',
       };
-      attachLicenseFieldsToDeviceRow(row);
-      row.lorawanClass = resolveLorawanClassForDeviceRow(reg.deviceId, reg, null);
+      attachLicenseFieldsToDeviceRow(row, licenseMap[reg.deviceId]);
+      row.lorawanClass = resolveLorawanClassForDeviceRow(reg.deviceId, reg, null, decodeMap[reg.deviceId]);
       content.push(row);
     }
   }
@@ -600,6 +666,7 @@ function buildDevicesContentSuperadmin() {
   const labelsByDevice = store.getAllLabelsGroupedByDevice();
 
   const assignByDevice = {};
+  const anyUdByDevice = {};
   for (const u of udList) {
     if (!assignByDevice[u.deviceId]) assignByDevice[u.deviceId] = [];
     assignByDevice[u.deviceId].push({
@@ -611,6 +678,9 @@ function buildDevicesContentSuperadmin() {
       productModel: u.productModel != null ? String(u.productModel) : '',
       lorawanClass: u.lorawanClass != null ? String(u.lorawanClass) : '',
     });
+    if (!anyUdByDevice[u.deviceId]) {
+      anyUdByDevice[u.deviceId] = u;
+    }
   }
 
   const deviceIds = new Set();
@@ -621,9 +691,14 @@ function buildDevicesContentSuperadmin() {
     deviceIds.add(licDid);
   }
 
+  const deviceIdList = [...deviceIds];
+  const decodeMap = store.getDeviceDecodeConfigMap(deviceIdList);
+  const licenseMap = store.getDeviceLicenseMetaMap(deviceIdList);
+
   const mapTelemetryRow = (t) => {
     const p = t.properties || {};
     const name = t.deviceName || p.deviceName || t.deviceId;
+    const ingestHint = joinOnlyTelemetryHint(p);
     return {
       deviceId: t.deviceId,
       name,
@@ -632,6 +707,7 @@ function buildDevicesContentSuperadmin() {
       electricity: p.electricity,
       rssi: p.rssi,
       ...p,
+      ...(ingestHint ? { ingestStatus: ingestHint } : {}),
       name,
       model: deviceModelFromTelemetryProps(p),
       lastUpdateTime: t.timestamp,
@@ -639,13 +715,17 @@ function buildDevicesContentSuperadmin() {
   };
 
   const content = [];
-  for (const deviceId of deviceIds) {
+  for (const deviceId of deviceIdList) {
     if (isGatewayPseudoDeviceId(deviceId)) continue;
-    const t = latestMap[deviceId];
     const assigns = assignByDevice[deviceId] || [];
-    const anyUd = store.getAnyUserDeviceForDeviceId(deviceId);
+    const anyUd = anyUdByDevice[deviceId] || store.getAnyUserDeviceForDeviceId(deviceId);
     const labelOpts = labelsByDevice[deviceId] || [];
     const reg0 = assigns[0];
+    const decCfg = decodeMap[deviceId];
+    const t = findLatestTelemetryForRegistration(latestMap, {
+      deviceId,
+      devEUI: (anyUd && anyUd.devEUI) || deviceId,
+    });
 
     let row;
     if (t) {
@@ -669,7 +749,7 @@ function buildDevicesContentSuperadmin() {
     }
     const tagPick = assigns.map((a) => String(a.tag || '').trim()).find(Boolean);
     row.tag = tagPick || '';
-    const tplFromDecode = String(store.getDeviceDecodeConfig(deviceId).productModel || '').trim();
+    const tplFromDecode = productModelFromDecodeCfg(decCfg);
     const tplModel =
       assigns.map((a) => String(a.productModel || '').trim()).find(Boolean) || tplFromDecode;
     row.productModel = tplModel;
@@ -680,8 +760,8 @@ function buildDevicesContentSuperadmin() {
     row.registered = assigns.length > 0;
     row.assignments = assigns.map((a) => ({ email: a.email, role: a.role, displayName: a.displayName }));
     row.superadminGlobalView = true;
-    attachLicenseFieldsToDeviceRow(row);
-    row.lorawanClass = resolveLorawanClassForDeviceRow(deviceId, anyUd, assigns);
+    attachLicenseFieldsToDeviceRow(row, licenseMap[deviceId]);
+    row.lorawanClass = resolveLorawanClassForDeviceRow(deviceId, anyUd, assigns, decCfg);
     content.push(row);
   }
   content.sort((a, b) => String(a.deviceId).localeCompare(String(b.deviceId)));
@@ -1037,6 +1117,11 @@ function saveIngestEntry(userId, data) {
   properties.deviceName = normalizedDeviceName;
   if (!properties.devEUI && properties.devEui) properties.devEUI = properties.devEui;
   if (!properties.devEui && properties.devEUI) properties.devEui = properties.devEUI;
+  const csRaw = properties.connectStatus != null ? String(properties.connectStatus).trim() : '';
+  const stRaw = properties.status != null ? String(properties.status).trim() : '';
+  if (!csRaw && !stRaw) {
+    properties.connectStatus = 'online';
+  }
 
   tryApplyStoredDecoder(store, canonicalDeviceId, rawDeviceId, properties);
 
@@ -2597,6 +2682,16 @@ function gatewayTelemetryAggregate(userId, gwEui16) {
   return { lastTs, latest };
 }
 
+function gatewayTelemetryAggregateForActor(userId, role, gwEui16) {
+  if (role !== 'superadmin') return gatewayTelemetryAggregate(userId, gwEui16);
+  let best = { lastTs: 0, latest: null };
+  for (const sid of store.listSuperadminUserIds()) {
+    const agg = gatewayTelemetryAggregate(sid, gwEui16);
+    if (agg.lastTs > best.lastTs) best = agg;
+  }
+  return best;
+}
+
 function computeGatewayOnline(latest, lastTs, now) {
   if (!lastTs) return { online: false, lastSeenAt: null };
   const fresh = now - lastTs < COMMS_STALE_OFFLINE_MS;
@@ -2618,10 +2713,13 @@ function computeGatewayOnline(latest, lastTs, now) {
 
 // ── Gateways LoRaWAN registrados (catálogo local por usuario) ───────────
 app.get('/api/lorawan-gateways', authMiddleware, (req, res) => {
-  const list = store.listLorawanGateways(req.user.id);
+  const list =
+    req.user.role === 'superadmin'
+      ? store.listLorawanGatewaysUnifiedForSuperadmin()
+      : store.listLorawanGateways(req.user.id);
   const now = Date.now();
   const enriched = list.map((g) => {
-    const { lastTs, latest } = gatewayTelemetryAggregate(req.user.id, g.gatewayEui);
+    const { lastTs, latest } = gatewayTelemetryAggregateForActor(req.user.id, req.user.role, g.gatewayEui);
     const { online, lastSeenAt } = computeGatewayOnline(latest, lastTs, now);
     return {
       ...g,
@@ -2670,6 +2768,7 @@ app.post('/api/lorawan-gateways', authMiddleware, navGatewayMiddleware, (req, re
     createdAt: new Date().toISOString(),
   };
   store.insertLorawanGateway(row);
+  store.mirrorLorawanGatewayToSuperadminPool(row);
   let lnsAbpBootstrapRetry = { attempted: 0, provisioned: 0, results: [] };
   try {
     lnsAbpBootstrapRetry = retryMilesightAbpBootstrapAll(store, req.user.id);
@@ -2882,6 +2981,9 @@ app.post('/api/devices/assign', authMiddleware, (req, res) => {
     createdAt: prevA ? prevA.createdAt : nowIso,
   };
   store.upsertUserDevice(row);
+  if (assignee.role === 'superadmin') {
+    store.syncUserDeviceToSuperadminPool(row);
+  }
   const deuiA = String(row.devEUI || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
   if (deuiA.length === 16 && row.lorawanClass != null && String(row.lorawanClass).trim() !== '') {
     store.lnsSyncSessionDeviceClass(assignee.id, deuiA, row.lorawanClass);
@@ -3053,9 +3155,22 @@ app.post('/api/user-devices', authMiddleware, superAdminOnlyMiddleware, (req, re
     createdAt: prev ? prev.createdAt : nowIso,
   };
   store.upsertUserDevice(row);
+  store.syncUserDeviceToSuperadminPool(row);
+  if (/vs\s*133|vs133/i.test(productModelStr)) {
+    const existingDec = store.getDeviceDecodeConfig(id);
+    const hasScript =
+      existingDec &&
+      existingDec.decoderScript != null &&
+      String(existingDec.decoderScript).trim().length > 0;
+    if (!hasScript && VS133_BUILTIN_DECODER) {
+      store.setDeviceDecodeConfig(id, VS133_BUILTIN_DECODER, '85', row.lorawanClass, productModelStr);
+    }
+  }
   const deuiSync = String(row.devEUI || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
   if (deuiSync.length === 16 && row.lorawanClass != null && String(row.lorawanClass).trim() !== '') {
-    store.lnsSyncSessionDeviceClass(req.user.id, deuiSync, row.lorawanClass);
+    for (const sid of store.listSuperadminUserIds()) {
+      store.lnsSyncSessionDeviceClass(sid, deuiSync, row.lorawanClass);
+    }
   }
   store.ensureDeviceLicenseIfMissing(id);
   store.upsertDeviceLabel(req.user.id, id, name);
@@ -3091,9 +3206,12 @@ app.patch('/api/user-devices/:deviceId', authMiddleware, superAdminOnlyMiddlewar
     updatedAt: new Date().toISOString(),
   };
   store.upsertUserDevice(row);
+  store.syncUserDeviceToSuperadminPool(row);
   const deui = String(row.devEUI || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
   if (deui.length === 16) {
-    store.lnsSyncSessionDeviceClass(req.user.id, deui, lorawanClass);
+    for (const sid of store.listSuperadminUserIds()) {
+      store.lnsSyncSessionDeviceClass(sid, deui, lorawanClass);
+    }
   }
   res.json(row);
 });
@@ -3129,12 +3247,13 @@ app.get(
   (req, res) => {
     const idStr = decodeURIComponent(req.params.deviceId || '').trim();
     if (!idStr) return res.status(400).json({ error: 'deviceId requerido' });
-    const ud = store.getUserDevice(req.user.id, idStr);
+    const ud = getUserDeviceForActorReq(req, idStr);
     const cfg = store.getDeviceDecodeConfig(idStr);
     const fromDecRaw = decodeConfigLorawanClassRawForUserDevice(idStr, ud);
     const fromUd = String(ud?.lorawanClass || '').trim();
     const skipTelProf = String(process.env.SYSCOM_LNS_DOWNLINK_IGNORE_TELEMETRY_CLASS || '').trim() === '1';
-    const fromTel = skipTelProf ? null : lorawanClassFromLatestTelemetry(req.user.id, idStr);
+    const tuidProf = telemetryUserIdForRequest(req, idStr);
+    const fromTel = skipTelProf ? null : lorawanClassFromLatestTelemetry(tuidProf, idStr);
     const deuiProf = String(ud?.devEUI || '')
       .replace(/[^0-9a-fA-F]/g, '')
       .toLowerCase();
@@ -3183,16 +3302,20 @@ app.put(
     const { decoderScript, channel, lorawanClass } = body;
     const did = decodeURIComponent(req.params.deviceId || '').trim();
     if (!did) return res.status(400).json({ error: 'deviceId requerido' });
-    const script = decoderScript != null ? String(decoderScript) : '';
+    let script = decoderScript != null ? String(decoderScript) : '';
     if (script.length > 512 * 1024) {
       return res.status(400).json({ error: 'Decoder demasiado largo (máx. 512 KB)' });
     }
-    const ch = channel != null ? String(channel).trim().slice(0, 64) : '';
+    let ch = channel != null ? String(channel).trim().slice(0, 64) : '';
     let productModelPass = undefined;
     if (Object.prototype.hasOwnProperty.call(body, 'productModel')) {
       productModelPass = String(body.productModel ?? '').trim().slice(0, 200);
     } else if (Object.prototype.hasOwnProperty.call(body, 'templateModel')) {
       productModelPass = String(body.templateModel ?? '').trim().slice(0, 200);
+    }
+    if (!script.trim() && /vs\s*133|vs133/i.test(productModelPass || '')) {
+      script = VS133_BUILTIN_DECODER;
+      if (!ch) ch = '85';
     }
     store.setDeviceDecodeConfig(did, script, ch, lorawanClass, productModelPass);
     const cfgOut = store.getDeviceDecodeConfig(did);
@@ -3250,7 +3373,7 @@ app.patch(
       }
       return res.status(400).json({ status: 'Error', errMsg: r.error || 'No se pudo actualizar' });
     }
-    const ud = store.getUserDevice(req.user.id, did);
+    const ud = getUserDeviceForActorReq(req, did);
     res.json({
       status: 'Success',
       deviceId: did,
@@ -3405,7 +3528,8 @@ app.get('/api/downlinks', authMiddleware, (req, res) => {
 });
 
 app.get('/api/devices/:deviceId/properties', authMiddleware, deviceAssignmentMiddleware, (req, res) => {
-  const latest = store.getMergedLatestTelemetryForDevice(req.user.id, req.params.deviceId);
+  const tuid = telemetryUserIdForRequest(req, req.params.deviceId);
+  const latest = store.getMergedLatestTelemetryForDevice(tuid, req.params.deviceId);
   res.json({
     status: 'Success',
     data: {
@@ -3420,7 +3544,8 @@ app.get(
   authMiddleware,
   deviceAssignmentMiddleware,
   (req, res) => {
-  const latest = store.getMergedLatestTelemetryForDevice(req.user.id, req.params.deviceId);
+  const tuid = telemetryUserIdForRequest(req, req.params.deviceId);
+  const latest = store.getMergedLatestTelemetryForDevice(tuid, req.params.deviceId);
   const props = latest?.properties || {};
   const flat = flattenTelemetryProps(props);
   const list = Object.keys(flat)
@@ -3530,7 +3655,8 @@ app.get('/api/devices/:deviceId/properties/history', authMiddleware, deviceAssig
   const startMs = startTime != null ? Number(startTime) : undefined;
   const endMs = endTime != null ? Number(endTime) : undefined;
   const limit = pageSize != null ? Number(pageSize) : 50;
-  const entries = store.getTelemetryHistory(req.user.id, req.params.deviceId, {
+  const tuid = telemetryUserIdForRequest(req, req.params.deviceId);
+  const entries = store.getTelemetryHistory(tuid, req.params.deviceId, {
     startMs,
     endMs,
     limit,
@@ -3549,7 +3675,7 @@ app.put('/api/devices', authMiddleware, staffOnlyMiddleware, (req, res) => {
   if (!deviceId) return res.status(400).json({ status: 'Error', errMsg: 'deviceId requerido' });
   const idStr = deviceId.toString();
   if (!assertDeviceAssignedToUser(req, res, idStr)) return;
-  const ud = store.getUserDevice(req.user.id, idStr);
+  const ud = getUserDeviceForActorReq(req, idStr);
   if (!ud) return res.status(400).json({ status: 'Error', errMsg: 'Dispositivo no asignado a su cuenta' });
   const displayName = name != null ? String(name).trim() : String(ud.displayName || '').trim();
   if (!displayName) return res.status(400).json({ status: 'Error', errMsg: 'Indique el nombre del dispositivo' });
@@ -3651,7 +3777,7 @@ app.delete(
   deviceAssignmentMiddleware,
   (req, res) => {
     const idStr = String(req.params.deviceId || '').trim();
-    const ud = store.getUserDevice(req.user.id, idStr);
+    const ud = getUserDeviceForActorReq(req, idStr);
     if (!ud) return res.status(404).json({ status: 'Error', errMsg: 'Dispositivo no encontrado' });
     const deui = String(ud.devEUI || '')
       .replace(/[^0-9a-fA-F]/g, '')
@@ -3662,7 +3788,10 @@ app.delete(
         errMsg: 'El dispositivo no tiene DevEUI (16 hex) en el alta; no hay sesión LNS que borrar.',
       });
     }
-    const { removed, devEui } = store.lnsDeleteSessionForUserDev(req.user.id, deui);
+    const lnsUid = store.lnsResolveSessionUserIdForDevice(idStr, req.user.id, deui, {
+      allowGlobalSessionFallback: req.user.role === 'superadmin',
+    });
+    const { removed, devEui } = store.lnsDeleteSessionForUserDev(lnsUid, deui);
     res.json({
       status: 'Success',
       removed,
@@ -3680,7 +3809,7 @@ app.delete(
  */
 app.get('/api/devices/:deviceId/lns/session', authMiddleware, deviceAssignmentMiddleware, (req, res) => {
   const idStr = String(req.params.deviceId || '').trim();
-  const ud = store.getUserDevice(req.user.id, idStr);
+  const ud = getUserDeviceForActorReq(req, idStr);
   if (!ud) return res.status(404).json({ status: 'Error', errMsg: 'Dispositivo no encontrado' });
   const deui = String(ud.devEUI || '')
     .replace(/[^0-9a-fA-F]/g, '')
@@ -3691,7 +3820,10 @@ app.get('/api/devices/:deviceId/lns/session', authMiddleware, deviceAssignmentMi
       errMsg: 'El dispositivo no tiene DevEUI (16 hex); no aplica sesión LNS.',
     });
   }
-  const sess = store.lnsGetSessionByDevEui(req.user.id, deui);
+  const lnsUid = store.lnsResolveSessionUserIdForDevice(idStr, req.user.id, deui, {
+    allowGlobalSessionFallback: req.user.role === 'superadmin',
+  });
+  const sess = store.lnsGetSessionByDevEui(lnsUid, deui);
   if (!sess) {
     return res.json({
       status: 'Success',
@@ -3733,7 +3865,7 @@ app.patch(
   deviceAssignmentMiddleware,
   (req, res) => {
     const idStr = String(req.params.deviceId || '').trim();
-    const ud = store.getUserDevice(req.user.id, idStr);
+    const ud = getUserDeviceForActorReq(req, idStr);
     if (!ud) return res.status(404).json({ status: 'Error', errMsg: 'Dispositivo no encontrado' });
     const deui = String(ud.devEUI || '')
       .replace(/[^0-9a-fA-F]/g, '')
@@ -3744,7 +3876,10 @@ app.patch(
         errMsg: 'El dispositivo no tiene DevEUI (16 hex); no aplica sesión LNS.',
       });
     }
-    const sess = store.lnsGetSessionByDevEui(req.user.id, deui);
+    const lnsUid = store.lnsResolveSessionUserIdForDevice(idStr, req.user.id, deui, {
+      allowGlobalSessionFallback: req.user.role === 'superadmin',
+    });
+    const sess = store.lnsGetSessionByDevEui(lnsUid, deui);
     if (!sess) {
       return res.status(404).json({
         status: 'Error',
@@ -3766,8 +3901,8 @@ app.patch(
         errMsg: 'fcntDown debe estar entre -1 y 65535.',
       });
     }
-    const removedQueue = store.lnsDeletePendingAppDownlinksForDev(req.user.id, deui);
-    store.lnsSetFcntDown(req.user.id, deui, n);
+    const removedQueue = store.lnsDeletePendingAppDownlinksForDev(lnsUid, deui);
+    store.lnsSetFcntDown(lnsUid, deui, n);
     res.json({
       status: 'Success',
       devEui: deui,
@@ -3788,7 +3923,7 @@ app.patch(
  */
 app.post('/api/devices/:deviceId/lns/session', authMiddleware, deviceAssignmentMiddleware, (req, res) => {
   const idStr = String(req.params.deviceId || '').trim();
-  const ud = store.getUserDevice(req.user.id, idStr);
+  const ud = getUserDeviceForActorReq(req, idStr);
   if (!ud) return res.status(404).json({ status: 'Error', errMsg: 'Dispositivo no encontrado' });
   const deui = String(ud.devEUI || '')
     .replace(/[^0-9a-fA-F]/g, '')
@@ -3817,7 +3952,8 @@ app.post('/api/devices/:deviceId/lns/session', authMiddleware, deviceAssignmentM
       errMsg: 'nwkSKey y appSKey deben ser 32 caracteres hex (16 bytes) cada una.',
     });
   }
-  const other = store.lnsGetSessionByDevAddr(req.user.id, devAddr);
+  const sessOwnerId = String(ud.userId);
+  const other = store.lnsGetSessionByDevAddr(sessOwnerId, devAddr);
   if (other && String(other.devEui).toLowerCase() !== deui) {
     return res.status(409).json({
       status: 'Error',
@@ -3829,7 +3965,10 @@ app.post('/api/devices/:deviceId/lns/session', authMiddleware, deviceAssignmentM
     .replace(/[^0-9a-fA-F]/g, '')
     .toLowerCase();
   if (gwNorm.length !== 16) {
-    const gws = store.listLorawanGateways(req.user.id);
+    const gws =
+      req.user.role === 'superadmin'
+        ? store.listLorawanGatewaysUnifiedForSuperadmin()
+        : store.listLorawanGateways(req.user.id);
     gwNorm = gws.length > 0 ? String(gws[0].gatewayEui || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase() : '';
   }
   if (gwNorm.length !== 16) {
@@ -3840,7 +3979,11 @@ app.post('/api/devices/:deviceId/lns/session', authMiddleware, deviceAssignmentM
     });
   }
   const bandU = (() => {
-    const row = store.lnsGetGatewayByEui(req.user.id, gwNorm);
+    const row =
+      store.lnsGetGatewayByEui(sessOwnerId, gwNorm) ||
+      (typeof store.lnsGetGatewayByEuiAnyUser === 'function'
+        ? store.lnsGetGatewayByEuiAnyUser(gwNorm)
+        : null);
     return row ? String(row.frequencyBand || '').toUpperCase() : '';
   })();
   const isUs = isUs915ForUserGateway(bandU);
@@ -3863,7 +4006,7 @@ app.post('/api/devices/:deviceId/lns/session', authMiddleware, deviceAssignmentM
         : 868.5;
   const lastRxDatr = String(req.body?.lastRxDatr || req.body?.last_rx_datr || (isUs ? 'SF10BW125' : 'SF12BW125')).trim();
   const upsert = {
-    userId: req.user.id,
+    userId: sessOwnerId,
     devEui: deui,
     devAddr,
     nwkSKeyHex: nwkSKey,
@@ -3882,12 +4025,12 @@ app.post('/api/devices/:deviceId/lns/session', authMiddleware, deviceAssignmentM
     pendingMacAck: false,
   };
   store.lnsUpsertSessionJoin(upsert);
-  store.lnsSyncSessionDeviceClass(req.user.id, deui, deviceClass);
+  store.lnsSyncSessionDeviceClass(sessOwnerId, deui, deviceClass);
   if (fcntUp >= 0) {
-    store.lnsSetFcntUp(req.user.id, deui, fcntUp);
+    store.lnsSetFcntUp(sessOwnerId, deui, fcntUp);
   }
   const ts = Date.now();
-  store.appendTelemetry(req.user.id, idStr, ud.displayName || idStr, {
+  store.appendTelemetry(sessOwnerId, idStr, ud.displayName || idStr, {
     devEUI: deui,
     deviceId: idStr,
     lorawan_event: 'lns_session_upserted',
@@ -4055,7 +4198,8 @@ app.post(
 
 // ── Telemetry (cliente autenticado) ───────────────────────
 app.get('/api/devices/latest', authMiddleware, (req, res) => {
-  const m = store.getLatestMap(req.user.id);
+  const m =
+    req.user.role === 'superadmin' ? store.getGlobalLatestMap() : store.getLatestMap(req.user.id);
   if (req.user.role === 'superadmin') {
     res.json(Object.values(m));
     return;
@@ -4085,8 +4229,9 @@ app.get('/api/telemetry/:deviceId', authMiddleware, deviceAssignmentMiddleware, 
     const n = parseInt(String(limit), 10);
     if (Number.isFinite(n)) maxRows = Math.min(4000, Math.max(50, n));
   }
+  const tuid = telemetryUserIdForRequest(req, req.params.deviceId);
   const entries = store.getTelemetrySeries(
-    req.user.id,
+    tuid,
     req.params.deviceId,
     startMs,
     endMs,
@@ -4236,6 +4381,16 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`📊 Widgets dispositivo: GET | PUT | POST /api/devices/:deviceId/dashboard-widgets`);
   console.log(`📁 Base de datos (SQLite): ${store.dbPath()}`);
   try {
+    const poolSync = store.reconcileSuperadminPool();
+    if (poolSync.devicesMirrored > 0 || poolSync.gatewaysMirrored > 0) {
+      console.log(
+        `[Syscom] Pool superadmin: ${poolSync.devicesMirrored} asignación(es) de dispositivo y ${poolSync.gatewaysMirrored} gateway(s) replicados entre cuentas.`
+      );
+    }
+  } catch (e) {
+    console.warn('[Syscom] reconcileSuperadminPool:', e.message);
+  }
+  try {
     const { scheduleDailyDatabaseBackup } = require('./db-backup-scheduler');
     scheduleDailyDatabaseBackup(store);
   } catch (e) {
@@ -4340,7 +4495,10 @@ const server = app.listen(PORT, '0.0.0.0', () => {
       },
       onHeartbeat: (mac) => {
         const eui = mac.toString('hex').toUpperCase();
-        let uids = store.findUserIdsBySemtechGatewayMac8(mac);
+        let uids =
+          typeof store.findUserIdsForSemtechPush === 'function'
+            ? store.findUserIdsForSemtechPush(mac)
+            : store.findUserIdsBySemtechGatewayMac8(mac);
         const defUid = process.env.SYSCOM_LNS_DEFAULT_USER_ID;
         if (uids.length === 0 && defUid) uids = [String(defUid).trim()];
         for (const uid of uids) {

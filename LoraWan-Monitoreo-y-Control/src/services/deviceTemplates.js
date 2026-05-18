@@ -557,16 +557,34 @@ export function getDeviceTemplateById(templateId) {
  * @param {string} deviceId DevEUI / id de dispositivo
  * @param {(deviceId: string, payload: { decoderScript: string, channel: string, lorawanClass?: string, productModel?: string }) => Promise<unknown>} saveDeviceDecodeConfig
  */
-export async function persistTemplateForDeviceId(deviceId, template, saveDeviceDecodeConfig) {
+export async function persistTemplateForDeviceId(deviceId, template, saveDeviceDecodeConfig, opts = {}) {
   if (!template || !deviceId) return;
   const idApi = String(deviceId).trim();
   const cls = normalizeTemplateLorawanClass(template.lorawanClass);
-  await saveDeviceDecodeConfig(idApi, {
-    decoderScript: template.decoderScript != null ? String(template.decoderScript) : '',
-    channel: template.channel != null ? String(template.channel) : '',
-    lorawanClass: cls,
-    productModel: productModelLabelFromTemplate(template),
-  });
+  const skipDecoder = Boolean(opts.skipDecoder);
+  if (!skipDecoder) {
+    await saveDeviceDecodeConfig(idApi, {
+      decoderScript: template.decoderScript != null ? String(template.decoderScript) : '',
+      channel: template.channel != null ? String(template.channel) : '',
+      lorawanClass: cls,
+      productModel: productModelLabelFromTemplate(template),
+    });
+  } else if (opts.syncLoraMetaOnly) {
+    const { fetchDeviceDecodeConfig } = await import('./api.js');
+    const cur = await fetchDeviceDecodeConfig(idApi);
+    const script =
+      cur?.decoderScript != null && String(cur.decoderScript).trim()
+        ? String(cur.decoderScript)
+        : template.decoderScript != null
+          ? String(template.decoderScript)
+          : '';
+    await saveDeviceDecodeConfig(idApi, {
+      decoderScript: script,
+      channel: template.channel != null ? String(template.channel) : String(cur?.channel || ''),
+      lorawanClass: cls,
+      productModel: productModelLabelFromTemplate(template),
+    });
+  }
   const dls = normalizeDownlinks(template.downlinks);
   const tid = template.id != null && String(template.id).trim() ? String(template.id).trim() : '';
   if (typeof localStorage !== 'undefined') {
@@ -626,32 +644,107 @@ export function listDeviceIdsBoundToTemplate(templateId) {
 /**
  * Propaga una plantilla guardada al servidor (`decode-config` + clase) y downlinks locales para cada dispositivo vinculado.
  * No modifica credenciales OTAA en servidor (cada equipo ya las tiene en el alta).
+ * @param {{ onProgress?: (p: { phase: string, current: number, total: number, deviceId?: string }) => void, perDeviceTimeoutMs?: number }} [opts]
  * @returns {{ synced: number, errors: string[] }}
  */
-export async function pushTemplateToAssignedDevices(template, saveDeviceDecodeConfig) {
+async function runWithConcurrency(items, limit, worker) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return;
+  const n = Math.max(1, Math.min(limit, list.length));
+  let next = 0;
+  async function runOne() {
+    while (next < list.length) {
+      const i = next;
+      next += 1;
+      await worker(list[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: n }, () => runOne()));
+}
+
+/**
+ * @param {object} template
+ * @param {object|null|undefined} previous
+ */
+export function templateSyncPlan(template, previous) {
+  if (!previous) {
+    return { skipDecoder: false, syncLoraMetaOnly: false, downlinksOnly: false };
+  }
+  const decEq = String(template.decoderScript || '') === String(previous.decoderScript || '');
+  const chEq = String(template.channel || '').trim() === String(previous.channel || '').trim();
+  const clsEq =
+    normalizeTemplateLorawanClass(template.lorawanClass) ===
+    normalizeTemplateLorawanClass(previous.lorawanClass);
+  const downlinksOnly = decEq && chEq && clsEq;
+  return {
+    skipDecoder: downlinksOnly,
+    syncLoraMetaOnly: decEq && (!chEq || !clsEq),
+    downlinksOnly,
+  };
+}
+
+export async function pushTemplateToAssignedDevices(template, saveDeviceDecodeConfig, opts = {}) {
+  const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null;
+  const perDeviceTimeoutMs =
+    Number.isFinite(Number(opts.perDeviceTimeoutMs)) && Number(opts.perDeviceTimeoutMs) > 0
+      ? Math.floor(Number(opts.perDeviceTimeoutMs))
+      : 90000;
+  const concurrency =
+    Number.isFinite(Number(opts.concurrency)) && Number(opts.concurrency) > 0
+      ? Math.min(4, Math.floor(Number(opts.concurrency)))
+      : 3;
+  const syncPlan =
+    opts.syncPlan && typeof opts.syncPlan === 'object'
+      ? opts.syncPlan
+      : templateSyncPlan(template, opts.previousTemplate);
+  const persistOpts = {
+    skipDecoder: Boolean(syncPlan.skipDecoder),
+    syncLoraMetaOnly: Boolean(syncPlan.syncLoraMetaOnly),
+  };
   const id = template?.id != null && String(template.id).trim() ? String(template.id).trim() : '';
   if (!id) return { synced: 0, errors: ['Plantilla sin id'] };
   const localIds = listDeviceIdsBoundToTemplate(id);
   let remoteIds = [];
+  if (onProgress) onProgress({ phase: 'list', current: 0, total: 0 });
   try {
     const { fetchAssignedDeviceIdsForTemplate } = await import('./api.js');
-    const data = await fetchAssignedDeviceIdsForTemplate(id);
+    const data = await Promise.race([
+      fetchAssignedDeviceIdsForTemplate(id),
+      new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Tiempo de espera al listar dispositivos (45 s)')), 45000);
+      }),
+    ]);
     remoteIds = Array.isArray(data?.deviceIds) ? data.deviceIds : [];
-  } catch {
+  } catch (e) {
+    if (e?.message) {
+      return { synced: 0, errors: [String(e.message)] };
+    }
     /* sin sesión o sin permiso Dispositivos */
   }
   const deviceIds = [...new Set([...localIds, ...remoteIds].map((x) => String(x || '').trim()).filter(Boolean))];
   const errors = [];
   let synced = 0;
-  for (const did of deviceIds) {
+  const total = deviceIds.length;
+  let done = 0;
+  await runWithConcurrency(deviceIds, concurrency, async (did) => {
+    done += 1;
+    if (onProgress) onProgress({ phase: 'devices', current: done, total, deviceId: did });
     try {
-      await persistTemplateForDeviceId(did, template, saveDeviceDecodeConfig);
+      await Promise.race([
+        persistTemplateForDeviceId(did, template, saveDeviceDecodeConfig, persistOpts),
+        new Promise((_, reject) => {
+          setTimeout(
+            () => reject(new Error(`Tiempo de espera (${Math.round(perDeviceTimeoutMs / 1000)} s)`)),
+            perDeviceTimeoutMs
+          );
+        }),
+      ]);
       synced += 1;
     } catch (e) {
       errors.push(`${did}: ${e?.message || String(e)}`);
     }
-  }
-  return { synced, errors };
+  });
+  return { synced, errors, syncPlan };
 }
 
 export function filterDeviceTemplatesByQuery(query) {

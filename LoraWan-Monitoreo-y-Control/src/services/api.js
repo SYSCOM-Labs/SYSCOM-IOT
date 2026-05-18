@@ -340,11 +340,14 @@ export const fetchDeviceLoraProfile = async (deviceId) => {
   return response.data;
 };
 
+/** Decoders Milesight (VS133, etc.) pueden ser ~20–50 KB; evitar cuelgue sin feedback en la UI. */
+const DECODE_CONFIG_PUT_TIMEOUT_MS = 120000;
+
 export const saveDeviceDecodeConfig = async (deviceId, payload) => {
   const response = await axios.put(
     `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/decode-config`,
     payload,
-    { headers: authHeaders() }
+    { headers: authHeaders(), timeout: DECODE_CONFIG_PUT_TIMEOUT_MS }
   );
   return response.data;
 };
@@ -483,7 +486,10 @@ export const fetchDeviceTemplatesCatalog = async () => {
 };
 
 export const putDeviceTemplatesCatalog = async (body) => {
-  const response = await axios.put(`${SERVER_API}/device-templates`, body, { headers: authHeaders() });
+  const response = await axios.put(`${SERVER_API}/device-templates`, body, {
+    headers: authHeaders(),
+    timeout: 180000,
+  });
   return response.data;
 };
 
@@ -492,6 +498,7 @@ export const fetchAssignedDeviceIdsForTemplate = async (templateId) => {
   const q = encodeURIComponent(String(templateId || '').trim());
   const response = await axios.get(`${SERVER_API}/device-templates/assigned-device-ids?templateId=${q}`, {
     headers: authHeaders(),
+    timeout: 45000,
   });
   return response.data;
 };

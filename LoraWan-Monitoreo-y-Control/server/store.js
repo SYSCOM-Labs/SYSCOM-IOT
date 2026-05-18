@@ -708,6 +708,9 @@ class Store {
       userById: this.db.prepare('SELECT * FROM users WHERE id = ?'),
       usersByCreator: this.db.prepare('SELECT * FROM users WHERE created_by = ?'),
       allUsers: this.db.prepare('SELECT * FROM users'),
+      usersSuperadminIds: this.db.prepare(
+        `SELECT id FROM users WHERE lower(trim(COALESCE(role, ''))) = 'superadmin'`
+      ),
       insertUser: prepareBare(this.db, `
         INSERT INTO users (id, email, password, role, profile_name, created_by, created_by_email, ingest_token, created_at, milesight_ug_json, must_change_password, nav_permissions_json)
         VALUES (@id, @email, @password, @role, @profile_name, @created_by, @created_by_email, @ingest_token, @created_at, @milesight_ug_json, @must_change_password, @nav_permissions_json)
@@ -802,8 +805,45 @@ class Store {
         AND app_key IS NOT NULL AND length(trim(app_key)) = 32
         LIMIT 1
       `),
+      /** Alta con device_id = DevEUI pero dev_eui vacío en columna (OTAA por identificador). */
+      lnsOtaaDeviceByDeviceIdAsDevEui: this.db.prepare(`
+        SELECT * FROM user_devices WHERE user_id = ?
+        AND lower(replace(replace(replace(device_id,':',''),'-',''),' ','')) = ?
+        AND app_key IS NOT NULL AND length(trim(app_key)) = 32
+        LIMIT 1
+      `),
+      /** OTAA en cualquier cuenta (gateway compartido ≠ dueño del dispositivo). */
+      lnsOtaaDeviceGlobal: this.db.prepare(`
+        SELECT * FROM user_devices
+        WHERE lower(replace(replace(replace(dev_eui,':',''),'-',''),' ','')) = ?
+        AND lower(replace(replace(replace(app_eui,':',''),'-',''),' ','')) = ?
+        AND app_key IS NOT NULL AND length(trim(app_key)) = 32
+        LIMIT 1
+      `),
+      lnsOtaaDeviceGlobalByDevEuiOnly: this.db.prepare(`
+        SELECT * FROM user_devices
+        WHERE lower(replace(replace(replace(dev_eui,':',''),'-',''),' ','')) = ?
+        AND app_key IS NOT NULL AND length(trim(app_key)) = 32
+        LIMIT 1
+      `),
+      lnsOtaaDeviceGlobalByDeviceIdAsDevEui: this.db.prepare(`
+        SELECT * FROM user_devices
+        WHERE lower(replace(replace(replace(device_id,':',''),'-',''),' ','')) = ?
+        AND app_key IS NOT NULL AND length(trim(app_key)) = 32
+        LIMIT 1
+      `),
       lnsSessionByDevEui: this.db.prepare('SELECT * FROM lorawan_lns_sessions WHERE user_id = ? AND dev_eui = ?'),
       lnsSessionByDevAddr: this.db.prepare('SELECT * FROM lorawan_lns_sessions WHERE user_id = ? AND dev_addr = ?'),
+      lnsSessionByDevAddrGlobal: this.db.prepare(`
+        SELECT * FROM lorawan_lns_sessions
+        WHERE upper(replace(replace(dev_addr,':',''),'-','')) = ?
+        LIMIT 1
+      `),
+      lgwGetByEuiGlobal: this.db.prepare(`
+        SELECT * FROM lorawan_gateways
+        WHERE lower(replace(replace(replace(gateway_eui,':',''),'-',''),' ','')) = ?
+        LIMIT 1
+      `),
       lnsSessionDeleteByDevEui: this.db.prepare('DELETE FROM lorawan_lns_sessions WHERE user_id = ? AND dev_eui = ?'),
       lnsUpsertSession: this.db.prepare(`
         INSERT INTO lorawan_lns_sessions (
@@ -1209,11 +1249,22 @@ class Store {
   listDeviceIdsWithCatalogTemplate(templateId) {
     const tid = String(templateId || '').trim();
     if (!tid) return [];
+    const needle = `"catalogTemplateId":"${tid}"`;
     let rows;
     try {
-      rows = this.db.prepare('SELECT device_id, body_json FROM device_shared_presets').all();
+      rows = this.db
+        .prepare(
+          `SELECT device_id FROM device_shared_presets
+           WHERE instr(body_json, ?) > 0`
+        )
+        .all(needle);
+      return [...new Set((rows || []).map((r) => String(r.device_id || '').trim()).filter(Boolean))];
     } catch {
-      return [];
+      try {
+        rows = this.db.prepare('SELECT device_id, body_json FROM device_shared_presets').all();
+      } catch {
+        return [];
+      }
     }
     const out = [];
     for (const r of rows || []) {
@@ -1226,7 +1277,7 @@ class Store {
         /* ignore */
       }
     }
-    return out;
+    return [...new Set(out)];
   }
 
   /**
@@ -1430,6 +1481,19 @@ class Store {
         ts: tss,
       });
     }
+    if (this.deviceInSuperadminPool(did, userId)) {
+      for (const sid of this.listSuperadminUserIds()) {
+        if (affected.has(sid)) continue;
+        affected.add(sid);
+        this.st.insertTelemetry.run({
+          user_id: sid,
+          device_id: did,
+          device_name: deviceName || null,
+          properties_json: payload,
+          ts: tss,
+        });
+      }
+    }
     this._pruneCounter += 1;
     if (this._pruneCounter >= 50) {
       this._pruneCounter = 0;
@@ -1505,6 +1569,15 @@ class Store {
    * @param {{ historyRowLimit?: number }} [opts]
    * @returns {object | null} Misma forma que `getLatestForDevice` (`properties`, `timestamp`, …).
    */
+  /** Uplink de aplicación (con payload); excluye solo eventos join del LNS sin conteo. */
+  _isJoinOnlyTelemetryProperties(properties) {
+    if (!properties || typeof properties !== 'object') return false;
+    const ev = properties.lorawan_event != null ? String(properties.lorawan_event).trim() : '';
+    if (!ev || !/join/i.test(ev)) return false;
+    const hex = properties.payload_hex != null ? String(properties.payload_hex).trim() : '';
+    return hex.length === 0;
+  }
+
   getMergedLatestTelemetryForDevice(userId, deviceId, opts = {}) {
     const uid = userId;
     const did = String(deviceId);
@@ -1516,8 +1589,19 @@ class Store {
     const rows = this.st.telemetryHistory.all(uid, did, 0, endMs, rowLimit);
     if (!rows.length) return this.getLatestForDevice(uid, did);
 
-    const mergedFlat = {};
+    const appRows = [];
     for (const row of rows) {
+      try {
+        const p = JSON.parse(row.properties_json || '{}');
+        if (!this._isJoinOnlyTelemetryProperties(p)) appRows.push(row);
+      } catch {
+        /* ignore */
+      }
+    }
+    const rowsForMerge = appRows.length ? appRows : rows;
+
+    const mergedFlat = {};
+    for (const row of rowsForMerge) {
       let properties = {};
       try {
         properties = JSON.parse(row.properties_json || '{}');
@@ -1533,9 +1617,13 @@ class Store {
       }
     }
 
-    const top = rows[0];
+    const top = rowsForMerge[0];
     const ts = Number(top.ts);
     mergedFlat.lastUpdateTime = ts;
+    if (!appRows.length && rows.length) {
+      mergedFlat.ingestStatus =
+        'Solo join LoRaWAN (sin uplink de aplicación con payload). El contador VS133 aún no ha enviado reporte en puerto 85.';
+    }
 
     return {
       id: String(top.id),
@@ -1692,6 +1780,17 @@ class Store {
   }
 
   /**
+   * Cuentas que deben procesar PUSH_DATA de un gateway: dueños del EUI + todas las superadmin (pool unificado).
+   * @param {Buffer} mac8
+   * @returns {string[]}
+   */
+  findUserIdsForSemtechPush(mac8) {
+    const out = new Set(this.findUserIdsBySemtechGatewayMac8(mac8).map((id) => String(id)));
+    for (const sid of this.listSuperadminUserIds()) out.add(sid);
+    return Array.from(out);
+  }
+
+  /**
    * Cuentas que tienen dado de alta un gateway con este EUI 16 hex (para hooks TX_ACK sin `user_id` en fila).
    * @param {string} eui16
    * @returns {string[]}
@@ -1745,7 +1844,244 @@ class Store {
     let r = this.st.lnsOtaaDevice.get(userId, d, j);
     if (r) return r;
     r = this.st.lnsOtaaDeviceByDevEuiOnly.get(userId, d);
+    if (r) return r;
+    r = this.st.lnsOtaaDeviceByDeviceIdAsDevEui.get(userId, d);
     return r || null;
+  }
+
+  /**
+   * Dispositivo OTAA en cualquier cuenta (p. ej. gateway dado de alta en otra cuenta que la del sensor).
+   * @returns {{ userId: string, row: object } | null}
+   */
+  lnsFindOtaaDeviceRowGlobal(joinEuiHex16, devEuiHex16) {
+    const j = String(joinEuiHex16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    const d = String(devEuiHex16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (d.length !== 16) return null;
+    let r = j.length === 16 ? this.st.lnsOtaaDeviceGlobal.get(d, j) : null;
+    if (!r) r = this.st.lnsOtaaDeviceGlobalByDevEuiOnly.get(d);
+    if (!r) r = this.st.lnsOtaaDeviceGlobalByDeviceIdAsDevEui.get(d);
+    if (!r || !r.user_id) return null;
+    return { userId: String(r.user_id), row: r };
+  }
+
+  /**
+   * OTAA en cualquier cuenta superadmin (pool unificado).
+   * @returns {{ userId: string, row: object } | null}
+   */
+  lnsFindOtaaDeviceRowInSuperadminPool(joinEuiHex16, devEuiHex16) {
+    for (const uid of this.listSuperadminUserIds()) {
+      const row = this.lnsFindOtaaDeviceRow(uid, joinEuiHex16, devEuiHex16);
+      if (row) return { userId: uid, row };
+    }
+    return null;
+  }
+
+  /** @returns {{ userId: string, session: object } | null} */
+  lnsGetSessionByDevAddrInSuperadminPool(devAddrHex8) {
+    const h = String(devAddrHex8 || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+    if (h.length !== 8) return null;
+    for (const uid of this.listSuperadminUserIds()) {
+      const session = this.lnsGetSessionByDevAddr(uid, h);
+      if (session) return { userId: uid, session };
+    }
+    return null;
+  }
+
+  /** IDs de cuentas con rol superadmin. */
+  listSuperadminUserIds() {
+    return this.st.usersSuperadminIds.all().map((r) => String(r.id));
+  }
+
+  isSuperadminUserId(userId) {
+    const u = this.getUserById(userId);
+    return u != null && String(u.role || '').trim().toLowerCase() === 'superadmin';
+  }
+
+  /** Dispositivo dado de alta o asignado a al menos una cuenta superadmin. */
+  deviceInSuperadminPool(deviceId, ingestUserId) {
+    const did = String(deviceId || '').trim();
+    if (!did) return false;
+    if (ingestUserId && this.isSuperadminUserId(ingestUserId)) return true;
+    for (const uid of this.listUserIdsAssignedToDevice(did)) {
+      if (this.isSuperadminUserId(uid)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * user_id bajo el que hay telemetría para consultas API (superadmin ve datos de cualquier superadmin).
+   */
+  resolveTelemetryUserId(requesterUserId, deviceId, opts = {}) {
+    const role = opts.role != null ? String(opts.role).trim().toLowerCase() : '';
+    const req = String(requesterUserId || '').trim();
+    const did = String(deviceId || '').trim();
+    if (role !== 'superadmin' || !did) return req;
+    if (this.getLatestForDevice(req, did)) return req;
+    for (const sid of this.listSuperadminUserIds()) {
+      if (sid === req) continue;
+      if (this.getLatestForDevice(sid, did)) return sid;
+    }
+    for (const uid of this.listUserIdsAssignedToDevice(did)) {
+      if (this.getLatestForDevice(uid, did)) return uid;
+    }
+    return req;
+  }
+
+  /**
+   * Fila `user_devices` visible para el actor (superadmin: cualquier alta del pool).
+   */
+  getUserDeviceForActor(actorUserId, actorRole, deviceId) {
+    const did = String(deviceId || '').trim();
+    if (!did) return null;
+    const own = this.getUserDevice(actorUserId, did);
+    if (own) return own;
+    if (String(actorRole || '').trim().toLowerCase() !== 'superadmin') return null;
+    const any = this.getAnyUserDeviceForDeviceId(did);
+    if (any) return any;
+    for (const sid of this.listSuperadminUserIds()) {
+      const ud = this.getUserDevice(sid, did);
+      if (ud) return ud;
+    }
+    return null;
+  }
+
+  /** Gateways de todas las cuentas superadmin (deduplicado por EUI). */
+  listLorawanGatewaysUnifiedForSuperadmin() {
+    const byEui = new Map();
+    for (const uid of this.listSuperadminUserIds()) {
+      for (const g of this.listLorawanGateways(uid)) {
+        const eui = String(g.gatewayEui || '')
+          .replace(/[^0-9a-fA-F]/g, '')
+          .toLowerCase();
+        if (eui.length !== 16) continue;
+        if (!byEui.has(eui)) byEui.set(eui, { ...g, ownerUserIds: [uid] });
+        else {
+          const prev = byEui.get(eui);
+          if (!prev.ownerUserIds.includes(uid)) prev.ownerUserIds.push(uid);
+        }
+      }
+    }
+    return Array.from(byEui.values());
+  }
+
+  /**
+   * Replica / actualiza un dispositivo en todas las cuentas superadmin (pool unificado).
+   * Si ya existía la fila en otra cuenta, se actualizan DevEUI, AppKey, clase, etc.
+   */
+  syncUserDeviceToSuperadminPool(sourceRow) {
+    if (!sourceRow || !sourceRow.deviceId) return;
+    const srcUid = String(sourceRow.userId || '').trim();
+    if (!this.isSuperadminUserId(srcUid)) return;
+    const nowIso = new Date().toISOString();
+    const did = String(sourceRow.deviceId).trim();
+    for (const sid of this.listSuperadminUserIds()) {
+      if (sid === srcUid) continue;
+      const prev = this.getUserDevice(sid, did);
+      const merged = {
+        ...(prev || {}),
+        ...sourceRow,
+        id: prev ? prev.id : `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        userId: sid,
+        deviceId: did,
+        displayName: sourceRow.displayName || prev?.displayName || did,
+        devEUI: sourceRow.devEUI || prev?.devEUI || '',
+        appEui: sourceRow.appEui || prev?.appEui || '',
+        appKey: sourceRow.appKey || prev?.appKey || '',
+        productModel: sourceRow.productModel || prev?.productModel || '',
+        lorawanClass: sourceRow.lorawanClass || prev?.lorawanClass || '',
+        deviceSerialHex: sourceRow.deviceSerialHex || prev?.deviceSerialHex || '',
+        notes: sourceRow.notes != null ? sourceRow.notes : prev?.notes || '',
+        tag: sourceRow.tag != null ? sourceRow.tag : prev?.tag || '',
+        createdAt: prev ? prev.createdAt : nowIso,
+        updatedAt: nowIso,
+      };
+      this.upsertUserDevice(merged);
+      this.upsertDeviceLabel(sid, did, merged.displayName || did);
+    }
+  }
+
+  /** Replica un gateway dado de alta por un superadmin al resto del pool (mismo EUI). */
+  mirrorLorawanGatewayToSuperadminPool(sourceRow) {
+    if (!sourceRow || !sourceRow.gatewayEui) return;
+    const srcUid = String(sourceRow.userId || '').trim();
+    if (!this.isSuperadminUserId(srcUid)) return;
+    const eui = String(sourceRow.gatewayEui).replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+    if (eui.length !== 16) return;
+    const nowIso = sourceRow.createdAt || new Date().toISOString();
+    for (const sid of this.listSuperadminUserIds()) {
+      if (sid === srcUid) continue;
+      if (this.lorawanGatewayExists(sid, eui)) continue;
+      this.insertLorawanGateway({
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        userId: sid,
+        name: sourceRow.name,
+        gatewayEui: eui,
+        frequencyBand: sourceRow.frequencyBand,
+        createdAt: nowIso,
+      });
+    }
+  }
+
+  /**
+   * Sincroniza dispositivos y gateways existentes entre cuentas superadmin (arranque / migración ligera).
+   */
+  reconcileSuperadminPool() {
+    const supers = this.listSuperadminUserIds();
+    if (supers.length < 2) return { devicesMirrored: 0, gatewaysMirrored: 0 };
+    let devicesMirrored = 0;
+    let gatewaysMirrored = 0;
+    const seenDev = new Set();
+    for (const uid of supers) {
+      for (const ud of this.listUserDevices(uid)) {
+        const key = String(ud.deviceId);
+        if (seenDev.has(key)) continue;
+        seenDev.add(key);
+        const before = supers.filter((s) => this.getUserDevice(s, key)).length;
+        this.syncUserDeviceToSuperadminPool(ud);
+        const after = supers.filter((s) => this.getUserDevice(s, key)).length;
+        if (after > before) devicesMirrored += after - before;
+      }
+    }
+    const seenGw = new Set();
+    for (const uid of supers) {
+      for (const g of this.listLorawanGateways(uid)) {
+        const eui = String(g.gatewayEui).replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+        if (seenGw.has(eui)) continue;
+        seenGw.add(eui);
+        const before = supers.filter((s) => this.lorawanGatewayExists(s, eui)).length;
+        this.mirrorLorawanGatewayToSuperadminPool(g);
+        const after = supers.filter((s) => this.lorawanGatewayExists(s, eui)).length;
+        if (after > before) gatewaysMirrored += after - before;
+      }
+    }
+    return { devicesMirrored, gatewaysMirrored };
+  }
+
+  lnsGetSessionByDevAddrGlobal(devAddrHex8) {
+    const h = String(devAddrHex8 || '').replace(/[^0-9a-fA-F]/g, '').toUpperCase();
+    if (h.length !== 8) return null;
+    const r = this.st.lnsSessionByDevAddrGlobal.get(h);
+    const session = this._rowToLnsSession(r);
+    if (!session) return null;
+    return { userId: session.userId, session };
+  }
+
+  lnsGetGatewayByEuiAnyUser(gatewayEuiNorm16) {
+    const h = String(gatewayEuiNorm16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (h.length !== 16) return null;
+    const r = this.st.lgwGetByEuiGlobal.get(h);
+    if (!r) return null;
+    return {
+      gatewayEui: r.gateway_eui,
+      frequencyBand: r.frequency_band,
+      name: r.name,
+    };
   }
 
   lnsAllocateDevAddrBuf(userId) {
@@ -1809,6 +2145,14 @@ class Store {
     const own = this.getUserDevice(requesterUserId, did);
     if (own) return own;
     if (!opts.allowUnassignedCross) return null;
+    if (this.isSuperadminUserId(requesterUserId)) {
+      const pool = this.getAnyUserDeviceForDeviceId(did);
+      if (pool) return pool;
+      for (const sid of this.listSuperadminUserIds()) {
+        const ud = this.getUserDevice(sid, did);
+        if (ud) return ud;
+      }
+    }
     const uids = this.listUserIdsAssignedToDevice(did);
     for (const uid of uids) {
       const u = String(uid).trim();
@@ -1832,6 +2176,12 @@ class Store {
     if (d.length !== 16) return req;
     if (this.lnsGetSessionByDevEui(req, d)) return req;
     const did = String(deviceId || '').trim();
+    if (opts.allowGlobalSessionFallback && this.isSuperadminUserId(req)) {
+      for (const sid of this.listSuperadminUserIds()) {
+        if (sid === req) continue;
+        if (this.lnsGetSessionByDevEui(sid, d)) return sid;
+      }
+    }
     for (const uid of this.listUserIdsAssignedToDevice(did)) {
       const u = String(uid).trim();
       if (u === req) continue;
@@ -2748,18 +3098,18 @@ class Store {
     );
   }
 
-  getDeviceDecodeConfig(deviceId) {
-    const r = this.st.decodeGet.get(String(deviceId));
-    if (!r) {
-      return {
-        deviceId: String(deviceId),
-        decoderScript: '',
-        channel: '',
-        lorawanClass: '',
-        productModel: '',
-        updatedAt: null,
-      };
-    }
+  _emptyDeviceDecodeConfig(deviceId) {
+    return {
+      deviceId: String(deviceId),
+      decoderScript: '',
+      channel: '',
+      lorawanClass: '',
+      productModel: '',
+      updatedAt: null,
+    };
+  }
+
+  _rowToDeviceDecodeConfig(r) {
     return {
       deviceId: r.device_id,
       decoderScript: r.decoder_script || '',
@@ -2768,6 +3118,81 @@ class Store {
       productModel: r.product_model != null ? String(r.product_model) : '',
       updatedAt: r.updated_at,
     };
+  }
+
+  getDeviceDecodeConfig(deviceId) {
+    const r = this.st.decodeGet.get(String(deviceId));
+    if (!r) return this._emptyDeviceDecodeConfig(deviceId);
+    return this._rowToDeviceDecodeConfig(r);
+  }
+
+  /** Mapa deviceId → decode config (una consulta por lote; evita N+1 en listado). */
+  getDeviceDecodeConfigMap(deviceIds) {
+    const ids = [...new Set((deviceIds || []).map((x) => String(x || '').trim()).filter(Boolean))];
+    const map = {};
+    for (const id of ids) {
+      map[id] = this._emptyDeviceDecodeConfig(id);
+    }
+    if (!ids.length) return map;
+    const CHUNK = 400;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = this.db
+        .prepare(
+          `SELECT device_id, decoder_script, channel, lorawan_class, product_model, updated_at FROM device_decode_config WHERE device_id IN (${placeholders})`
+        )
+        .all(...chunk);
+      for (const r of rows) {
+        map[r.device_id] = this._rowToDeviceDecodeConfig(r);
+      }
+    }
+    return map;
+  }
+
+  _licenseMetaFromRow(r) {
+    const now = Date.now();
+    const expMs = parseIsoOrEpochMsToMs(r.expires_at);
+    if (!Number.isFinite(expMs)) {
+      return {
+        startedAt: r.started_at,
+        expiresAt: r.expires_at,
+        updatedAt: r.updated_at,
+        purgeAt: null,
+        expiredForUsers: false,
+        inSuperadminGrace: false,
+      };
+    }
+    const graceEndMs = expMs + LICENSE_SUPERADMIN_GRACE_MS;
+    return {
+      startedAt: r.started_at,
+      expiresAt: r.expires_at,
+      updatedAt: r.updated_at,
+      purgeAt: new Date(graceEndMs).toISOString(),
+      expiredForUsers: now >= expMs,
+      inSuperadminGrace: now >= expMs && now < graceEndMs,
+    };
+  }
+
+  /** Mapa deviceId → metadatos de licencia (solo lectura; sin INSERT en listados). */
+  getDeviceLicenseMetaMap(deviceIds) {
+    const ids = [...new Set((deviceIds || []).map((x) => String(x || '').trim()).filter(Boolean))];
+    const map = {};
+    if (!ids.length) return map;
+    const CHUNK = 400;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => '?').join(',');
+      const rows = this.db
+        .prepare(
+          `SELECT device_id, started_at, expires_at, updated_at FROM device_license WHERE device_id IN (${placeholders})`
+        )
+        .all(...chunk);
+      for (const r of rows) {
+        map[r.device_id] = this._licenseMetaFromRow(r);
+      }
+    }
+    return map;
   }
 
   /**

@@ -185,7 +185,10 @@ function startSemtechUdpLns(opts) {
 
       sendUdp(socket, gwAck(version, token, GW_PUSH_ACK), rinfo);
 
-      let userIds = store.findUserIdsBySemtechGatewayMac8(mac);
+      let userIds =
+        typeof store.findUserIdsForSemtechPush === 'function'
+          ? store.findUserIdsForSemtechPush(mac)
+          : store.findUserIdsBySemtechGatewayMac8(mac);
       const defUid = process.env.SYSCOM_LNS_DEFAULT_USER_ID;
       if (userIds.length === 0 && defUid) {
         console.warn('[LNS-UDP] Gateway sin registro en app; SYSCOM_LNS_DEFAULT_USER_ID →', defUid);

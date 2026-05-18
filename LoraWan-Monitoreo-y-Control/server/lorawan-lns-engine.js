@@ -850,14 +850,38 @@ function createLorawanLnsEngine(ctx) {
     return buf;
   }
 
-  function processJoin(userId, gatewayEuiNorm, p, rxpk) {
+  function processJoin(gatewayUserId, gatewayEuiNorm, p, rxpk) {
     const joinEui = buf8ToHex16(p.AppEUI);
     const devEui = buf8ToHex16(p.DevEUI);
-    const row = store.lnsFindOtaaDeviceRow(userId, joinEui, devEui);
+    let row = store.lnsFindOtaaDeviceRow(gatewayUserId, joinEui, devEui);
+    let ownerUserId = gatewayUserId;
+    if (!row && typeof store.lnsFindOtaaDeviceRowInSuperadminPool === 'function') {
+      const pool = store.lnsFindOtaaDeviceRowInSuperadminPool(joinEui, devEui);
+      if (pool) {
+        row = pool.row;
+        ownerUserId = pool.userId;
+        console.log('[LNS] OTAA join: pool superadmin unificado →', ownerUserId, 'devEUI', devEui);
+      }
+    }
+    if (!row && typeof store.lnsFindOtaaDeviceRowGlobal === 'function') {
+      const global = store.lnsFindOtaaDeviceRowGlobal(joinEui, devEui);
+      if (global) {
+        row = global.row;
+        ownerUserId = global.userId;
+        console.log(
+          '[LNS] OTAA join: dispositivo en cuenta',
+          ownerUserId,
+          'recibido por gateway de cuenta',
+          gatewayUserId,
+          'devEUI',
+          devEui
+        );
+      }
+    }
     if (!row) {
       const pol = unknownJoinLogPolicy();
       if (!pol.silent) {
-        const jk = `${userId}:${devEui}:${joinEui}`;
+        const jk = `${gatewayUserId}:${devEui}:${joinEui}`;
         const now = Date.now();
         const last = joinUnknownLogAt.get(jk) || 0;
         if (now - last >= pol.intervalMs) {
@@ -881,7 +905,7 @@ function createLorawanLnsEngine(ctx) {
 
     let devAddrBuf;
     try {
-      devAddrBuf = pickOtaaJoinDevAddrBuf(userId, devEui);
+      devAddrBuf = pickOtaaJoinDevAddrBuf(ownerUserId, devEui);
     } catch (e) {
       console.error('[LNS]', e.message);
       return false;
@@ -890,7 +914,12 @@ function createLorawanLnsEngine(ctx) {
     const nid = netIdBuf();
     const { nwkSKey, appSKey } = deriveSessionKeys10x(appKeyBuf, appNonce, nid, p.DevNonce);
 
-    const gw = store.lnsGetGatewayByEui(userId, gatewayEuiNorm);
+    const gw =
+      store.lnsGetGatewayByEui(ownerUserId, gatewayEuiNorm) ||
+      store.lnsGetGatewayByEui(gatewayUserId, gatewayEuiNorm) ||
+      (typeof store.lnsGetGatewayByEuiAnyUser === 'function'
+        ? store.lnsGetGatewayByEuiAnyUser(gatewayEuiNorm)
+        : null);
     const gwBand = gw ? String(gw.frequencyBand || '').toUpperCase() : '';
     // Banda preferente desde BD del gateway; si no hay fila, heurística por frecuencia del uplink.
     const isUs915Join = isUs915Plan({ band: gwBand }, rxpk);
@@ -924,7 +953,7 @@ function createLorawanLnsEngine(ctx) {
     );
     const phy = ja.getPHYPayload();
 
-    const ud = store.getUserDeviceByDevEuiNorm(userId, devEui);
+    const ud = store.getUserDeviceByDevEuiNorm(ownerUserId, devEui);
     const telemetryDeviceId = ud && ud.deviceId ? ud.deviceId : devEui;
     /** Clase en sesión: `device_decode_config` (plantilla) gana sobre `user_devices` vacío. Prueba `deviceId` de alta y DevEUI. */
     let fromCfg = null;
@@ -951,7 +980,7 @@ function createLorawanLnsEngine(ctx) {
 
     /** Con `SYSCOM_LNS_JOIN_COMMIT_ON_TX_ACK=1` la sesión se difiere hasta GW_TX_ACK (evita fila si el GW rechaza el Join-Accept). Por defecto se escribe al encolar. */
     const upsertPayload = {
-      userId,
+      userId: ownerUserId,
       devEui,
       devAddr: devAddrBuf.toString('hex').toUpperCase(),
       nwkSKeyHex: nwkSKey.toString('hex'),
@@ -990,26 +1019,26 @@ function createLorawanLnsEngine(ctx) {
     const deferJoinDb = joinSessionCommitDeferred();
     if (!deferJoinDb) {
       pruneSupersededDevAddrHints();
-      const prevSess = store.lnsGetSessionByDevEui(userId, devEui);
+      const prevSess = store.lnsGetSessionByDevEui(ownerUserId, devEui);
       if (prevSess && prevSess.devAddr) {
         const prevAddr = String(prevSess.devAddr).replace(/[^0-9a-fA-F]/g, '').toUpperCase();
         const nextAddr = devAddrBuf.toString('hex').toUpperCase();
         if (prevAddr.length === 8 && prevAddr !== nextAddr) {
-          supersededDevAddrHint.set(micFailStreakKey(userId, prevAddr), {
+          supersededDevAddrHint.set(micFailStreakKey(ownerUserId, prevAddr), {
             devEui,
             exp: Date.now() + 20 * 60 * 1000,
           });
         }
       }
       store.lnsUpsertSessionJoin(upsertPayload);
-      saveIngestEntry(userId, {
+      saveIngestEntry(ownerUserId, {
         deviceId: telemetryDeviceId,
         deviceName: displayName,
         devEUI: devEui,
         properties: joinTelemetryProps,
         ts: joinTs,
       });
-      store.lnsEnqueuePullResp(userId, gatewayEuiNorm, pullObj, joinQueueNotBefore, 255, null);
+      store.lnsEnqueuePullResp(ownerUserId, gatewayEuiNorm, pullObj, joinQueueNotBefore, 255, null);
       console.log(
         '[LNS] OTAA Join-Accept encolado (sesión ya en BD; sin esperar GW_TX_ACK — predeterminado; use SYSCOM_LNS_JOIN_COMMIT_ON_TX_ACK=1 para diferir) →',
         devEui,
@@ -1018,7 +1047,7 @@ function createLorawanLnsEngine(ctx) {
         deviceClass
       );
     } else {
-      store.lnsEnqueuePullResp(userId, gatewayEuiNorm, pullObj, joinQueueNotBefore, 255, {
+      store.lnsEnqueuePullResp(ownerUserId, gatewayEuiNorm, pullObj, joinQueueNotBefore, 255, {
         devEui,
         joinSessionCommit: {
           upsert: upsertPayload,
@@ -1041,20 +1070,28 @@ function createLorawanLnsEngine(ctx) {
     return true;
   }
 
-  function processDataUp(userId, gatewayEuiNorm, p, rxpk) {
+  function processDataUp(gatewayUserId, gatewayEuiNorm, p, rxpk) {
     const devAddrHex = p.DevAddr.toString('hex').toUpperCase();
-    const session = store.lnsGetSessionByDevAddr(userId, devAddrHex);
+    let session = store.lnsGetSessionByDevAddr(gatewayUserId, devAddrHex);
+    if (!session && typeof store.lnsGetSessionByDevAddrInSuperadminPool === 'function') {
+      const pool = store.lnsGetSessionByDevAddrInSuperadminPool(devAddrHex);
+      if (pool) session = pool.session;
+    }
+    if (!session && typeof store.lnsGetSessionByDevAddrGlobal === 'function') {
+      const global = store.lnsGetSessionByDevAddrGlobal(devAddrHex);
+      if (global) session = global.session;
+    }
     if (!session) {
       const now = Date.now();
       if (String(process.env.SYSCOM_LNS_LOG_NO_SESSION || '').trim() === '0') {
         return false;
       }
-      const k = micFailStreakKey(userId, devAddrHex);
+      const k = micFailStreakKey(gatewayUserId, devAddrHex);
       const hint = supersededDevAddrHint.get(k);
       const hintOk = hint && hint.exp > now && hint.devEui;
       const intervalMs = hintOk ? 60_000 : guestNoSessionLogMs();
       const prev = dataUpNoSessionLogAt.get(k) || 0;
-      const anyKey = String(userId);
+      const anyKey = String(gatewayUserId);
       const lastAny = dataUpNoSessionAnyLogAt.get(anyKey) || 0;
       const anyMs = dataUpNoSessionAnyLogMs();
       if (now - prev > intervalMs && now - lastAny >= anyMs) {
@@ -1073,6 +1110,7 @@ function createLorawanLnsEngine(ctx) {
       }
       return false;
     }
+    const ownerUserId = session.userId;
     const wireFcnt16 = p.getFCnt();
     let fCntMSBytes = null;
     let fcnt32 = null;
@@ -1096,7 +1134,7 @@ function createLorawanLnsEngine(ctx) {
       }
     }
     if (!fCntMSBytes) {
-      const mk = micFailStreakKey(userId, devAddrHex);
+      const mk = micFailStreakKey(ownerUserId, devAddrHex);
       const now = Date.now();
       const micLogMs = micDataInvalidLogMs();
       const lastMic = micDataInvalidLogAt.get(mk) || 0;
@@ -1112,10 +1150,10 @@ function createLorawanLnsEngine(ctx) {
             `${Math.round(micLogMs / 1000)} s (SYSCOM_LNS_MIC_FAIL_LOG_MS).`
         );
       }
-      recordMicFailureAndMaybePurgeSession(userId, devAddrHex, session.devEui);
+      recordMicFailureAndMaybePurgeSession(ownerUserId, devAddrHex, session.devEui);
       return false;
     }
-    clearMicFailStreak(userId, devAddrHex);
+    clearMicFailStreak(ownerUserId, devAddrHex);
 
     if (session.fcntUp >= 0) {
       const prev = session.fcntUp >>> 0;
@@ -1140,7 +1178,7 @@ function createLorawanLnsEngine(ctx) {
     if (fPort === 0 && plain.length >= 5) {
       const ps = tryParsePingSlotInfoAns(plain);
       if (ps) {
-        store.lnsPatchClassBFromMac(userId, session.devEui, ps.periodicity, ps.dr);
+        store.lnsPatchClassBFromMac(ownerUserId, session.devEui, ps.periodicity, ps.dr);
         console.log('[LNS] PingSlotInfoAns → periodicity=', ps.periodicity, 'dr=', ps.dr, 'dev=', session.devEui);
       }
     }
@@ -1158,7 +1196,11 @@ function createLorawanLnsEngine(ctx) {
     }
 
     const devEui = session.devEui;
-    const ud = store.getUserDevice(userId, devEui) || store.listUserDevices(userId).find((d) => d.devEUI === devEui);
+    const ud =
+      store.getUserDevice(ownerUserId, devEui) ||
+      store.getUserDeviceByDevEuiNorm(ownerUserId, devEui) ||
+      store.listUserDevices(ownerUserId).find((d) => d.devEUI === devEui);
+    const telemetryDeviceId = ud && ud.deviceId ? ud.deviceId : devEui;
     const displayName = ud ? ud.displayName : devEui;
 
     session.fcntUp = fcnt32;
@@ -1175,9 +1217,9 @@ function createLorawanLnsEngine(ctx) {
     const hadAwaitingDlAck = session.awaitingConfirmedDlAck === true;
     const macAckForDownlink = p.getDir() === 'up' && Boolean(p.getFCtrlACK());
     if (macAckForDownlink && hadAwaitingDlAck) {
-      store.lnsClearAwaitingConfirmedDeviceAck(userId, devEui);
+      store.lnsClearAwaitingConfirmedDeviceAck(ownerUserId, devEui);
       insertUiEvent(
-        userId,
+        ownerUserId,
         devEui,
         'downlink_device_acked',
         JSON.stringify({ fCntUplink: fcnt32, devAddr: devAddrHex })
@@ -1188,8 +1230,8 @@ function createLorawanLnsEngine(ctx) {
 
     const radioUp = radioMetaFromRxpk(rxpk);
     /** No expandir `session` aquí: incluye NwkSKey/AppSKey (Buffer) y userId; al JSON.parse en BD aparecen como `appSKey.data` y todas las cuentas veían las mismas claves en selectores. */
-    saveIngestEntry(userId, {
-      deviceId: devEui,
+    saveIngestEntry(ownerUserId, {
+      deviceId: telemetryDeviceId,
       deviceName: displayName,
       devEUI: devEui,
       properties: {
@@ -1226,7 +1268,7 @@ function createLorawanLnsEngine(ctx) {
         const margin = Math.max(0, Math.min(254, envInt('SYSCOM_LNS_LINK_CHECK_ANS_MARGIN', 10)));
         const gwcnt = Math.max(0, Math.min(255, envInt('SYSCOM_LNS_LINK_CHECK_ANS_GW_CNT', 1)));
         /** LinkCheckAns (CID 0x03) en FRMPayload con FPort 0; cifrado con NwkSKey en `enqueueAppDownlink`. */
-        enqueueAppDownlink(userId, devEui, 0, Buffer.from([0x03, margin, gwcnt]), {
+        enqueueAppDownlink(ownerUserId, devEui, 0, Buffer.from([0x03, margin, gwcnt]), {
           priority: 10,
           skipTxAckTrack: true,
         });
@@ -1237,7 +1279,7 @@ function createLorawanLnsEngine(ctx) {
       }
     }
 
-    tryFlushOneDeferredAppDownlinkAfterUplink(userId, devEui, linkCheckQueuedOk);
+    tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, linkCheckQueuedOk);
 
     return true;
   }

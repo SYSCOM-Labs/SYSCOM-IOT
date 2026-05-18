@@ -10,6 +10,8 @@ const vm = require('node:vm');
 const timewaveWaterMeter = require('./timewave-water-meter');
 const eastronSdm230 = require('./eastron-sdm230');
 const shengdaAppLayer = require('./shengda-app-layer');
+const { DECODER_SCRIPT: VS133_DECODER_SCRIPT } = require('./milesight-vs133-decoder.cjs');
+const { applyVs133TelemetryAliases } = require('./lib/vs133-telemetry-aliases');
 
 const DECODER_TIMEOUT_MS = Math.min(
   Math.max(Number(process.env.SYSCOM_DECODER_TIMEOUT_MS || 4000), 200),
@@ -239,14 +241,24 @@ function tryApplyStoredDecoder(store, canonicalDeviceId, rawDeviceId, properties
 
   const seen = new Set();
   let script = '';
+  let productModel = '';
   for (const id of idCandidates) {
     if (seen.has(id)) continue;
     seen.add(id);
     const cfg = store.getDeviceDecodeConfig(id);
     const s = cfg && cfg.decoderScript != null ? String(cfg.decoderScript).trim() : '';
+    if (cfg && cfg.productModel != null && String(cfg.productModel).trim()) {
+      productModel = String(cfg.productModel).trim();
+    }
     if (s) {
       script = cfg.decoderScript;
       break;
+    }
+  }
+
+  if (!script || !String(script).trim()) {
+    if (/vs\s*133|vs133/i.test(productModel) && VS133_DECODER_SCRIPT) {
+      script = VS133_DECODER_SCRIPT;
     }
   }
 
@@ -265,6 +277,7 @@ function tryApplyStoredDecoder(store, canonicalDeviceId, rawDeviceId, properties
     const decoded = runDecoderScript(script, port, buf);
     if (!decoded || Object.keys(decoded).length === 0) return;
     Object.assign(properties, decoded);
+    applyVs133TelemetryAliases(properties, { productModel });
     reapplyMeta(properties, meta);
   } catch (e) {
     console.warn('[Ingest decoder]', e.message || e);
@@ -276,4 +289,5 @@ module.exports = {
   extractPayloadBytes,
   snapshotMeta,
   INGEST_META_KEYS,
+  applyVs133TelemetryAliases,
 };

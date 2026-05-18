@@ -14,6 +14,7 @@ import {
   lorawanClassOptionLabel,
   normalizeTemplateLorawanClass,
   pushTemplateToAssignedDevices,
+  templateSyncPlan,
   getDeviceTemplateById,
   normalizeTelemetryLabelHints,
   hydrateDeviceTemplatesCatalogFromServer,
@@ -62,6 +63,7 @@ const TemplatesPage = () => {
   const [defaultTemplateId, setDefaultTemplateIdState] = useState(() => getDefaultTemplateId());
   /** Propaga plantilla a dispositivos vinculados (decoder, puerto, clase en API; downlinks en local). */
   const [templateSyncBusy, setTemplateSyncBusy] = useState(false);
+  const [templateSyncLabel, setTemplateSyncLabel] = useState('');
   /** Avisos de la página (guardar, importar, «Ajustar»): modal Syscom, sin `alert` nativo. */
   const [templatesNoticeModal, setTemplatesNoticeModal] = useState(() => initialTemplatesNotice());
   const closeTemplatesNotice = () => setTemplatesNoticeModal(initialTemplatesNotice());
@@ -139,6 +141,7 @@ const TemplatesPage = () => {
       });
       return;
     }
+    const previousTemplate = form.id ? getDeviceTemplateById(form.id) : null;
     let entry;
     try {
       entry = saveDeviceTemplate({
@@ -179,10 +182,78 @@ const TemplatesPage = () => {
     }
     refresh();
 
+    const syncPlan = templateSyncPlan(entry, previousTemplate);
+
     setTemplateSyncBusy(true);
+    setTemplateSyncLabel('Publicando catálogo en servidor…');
+    let catalogPublished = false;
     try {
-      const r = await pushTemplateToAssignedDevices(entry, saveDeviceDecodeConfig);
-      const parts = ['Plantilla guardada en el catálogo del servidor (visible para todos los usuarios con acceso a dispositivos).'];
+      await flushDeviceTemplatesCatalogToServer();
+      catalogPublished = true;
+    } catch (fe) {
+      const code = fe?.response?.data?.code;
+      if (code === 'TEMPLATE_MODEL_EXISTS') {
+        const dup = getDuplicateEntityNotice('TEMPLATE_MODEL_EXISTS');
+        setTemplatesNoticeModal({
+          open: true,
+          title: dup.title,
+          message: dup.body,
+          variant: 'warning',
+          wide: true,
+          confirmLabel: 'Aceptar',
+        });
+        setTemplateSyncBusy(false);
+        setTemplateSyncLabel('');
+        return;
+      }
+      console.warn('[TemplatesPage] publicar catálogo:', fe?.message || fe);
+    }
+
+    try {
+      setTemplateSyncLabel(
+        syncPlan.downlinksOnly
+          ? 'Sincronizando downlinks en dispositivos…'
+          : 'Buscando dispositivos vinculados…'
+      );
+      const r = await pushTemplateToAssignedDevices(entry, saveDeviceDecodeConfig, {
+        perDeviceTimeoutMs: syncPlan.downlinksOnly ? 45000 : 120000,
+        concurrency: 3,
+        syncPlan,
+        previousTemplate,
+        onProgress: (p) => {
+          if (!p || p.phase === 'list') {
+            setTemplateSyncLabel(
+              syncPlan.downlinksOnly
+                ? 'Listando dispositivos vinculados…'
+                : 'Buscando dispositivos vinculados…'
+            );
+            return;
+          }
+          const total = Number(p.total) || 0;
+          const current = Number(p.current) || 0;
+          if (total <= 0) {
+            setTemplateSyncLabel('Sin dispositivos vinculados.');
+            return;
+          }
+          const did = String(p.deviceId || '');
+          const short = did.length > 12 ? `…${did.slice(-10)}` : did;
+          const mode = syncPlan.downlinksOnly ? 'downlinks' : 'config';
+          setTemplateSyncLabel(`Dispositivo ${current}/${total} (${short}, ${mode})…`);
+        },
+      });
+      const parts = [];
+      if (catalogPublished) {
+        parts.push(
+          'Plantilla guardada en el catálogo del servidor (visible para todos los usuarios con acceso a dispositivos).'
+        );
+      } else {
+        parts.push('Plantilla guardada en local; no se pudo publicar el catálogo en el servidor (revise red o sesión superadmin).');
+      }
+      if (syncPlan.downlinksOnly) {
+        parts.push(
+          'Solo se actualizaron downlinks y presets (el decoder de ~19 KB no se reenvió porque no cambió).'
+        );
+      }
       if (r.synced > 0) {
         parts.push(
           `Actualizado en servidor y en downlinks locales: ${r.synced} dispositivo(s) vinculados (puerto, clase LoRaWAN, decoder, downlinks). Las claves OTAA de cada equipo no se alteran desde aquí.`
@@ -216,26 +287,9 @@ const TemplatesPage = () => {
         confirmLabel: 'Aceptar',
       });
     } finally {
-      setTemplateSyncBusy(false);
-      try {
-        await flushDeviceTemplatesCatalogToServer();
-      } catch (fe) {
-        const code = fe?.response?.data?.code;
-        if (code === 'TEMPLATE_MODEL_EXISTS') {
-          const dup = getDuplicateEntityNotice('TEMPLATE_MODEL_EXISTS');
-          setTemplatesNoticeModal({
-            open: true,
-            title: dup.title,
-            message: `${dup.body}\n\nRevise si hay modelos repetidos (p. ej. tras importar) y unifique antes de volver a guardar.`,
-            variant: 'warning',
-            wide: true,
-            confirmLabel: 'Aceptar',
-          });
-        } else {
-          console.warn('[TemplatesPage] publicar catálogo:', fe?.message || fe);
-        }
-      }
       refresh();
+      setTemplateSyncBusy(false);
+      setTemplateSyncLabel('');
     }
   };
 
@@ -695,7 +749,9 @@ const TemplatesPage = () => {
                         : undefined
                   }
                 >
-                  {templateSyncBusy ? 'Sincronizando…' : 'Guardar plantilla'}
+                  {templateSyncBusy
+                    ? templateSyncLabel || 'Sincronizando…'
+                    : 'Guardar plantilla'}
                 </button>
               </div>
             </form>
