@@ -211,20 +211,166 @@ body.theme-dark .row-inputs input {
   }
 }
 
-.btn-icon.send {
-  color: var(--accent-blue);
+/* Botones de acción por fila (enviar / eliminar downlink) */
+.downlink-action-btn {
+  position: relative;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition:
+    transform 0.16s cubic-bezier(0.16, 1, 0.3, 1),
+    box-shadow 0.16s ease,
+    border-color 0.16s ease,
+    background 0.16s ease,
+    filter 0.16s ease;
 }
 
-.btn-icon.send:hover {
-  background: rgba(0, 102, 255, 0.1);
+.downlink-action-btn__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
 }
 
-.btn-icon.delete {
-  color: #ef4444;
+.downlink-action-btn--send {
+  color: #ffffff;
+  background: linear-gradient(145deg, #6366f1 0%, #4f46e5 55%, #4338ca 100%);
+  border-color: rgba(99, 102, 241, 0.45);
+  box-shadow:
+    0 4px 14px -3px rgba(99, 102, 241, 0.55),
+    0 2px 6px -2px rgba(15, 23, 42, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.22);
 }
 
-.btn-icon.delete:hover {
-  background: rgba(239, 68, 68, 0.1);
+.downlink-action-btn--send:hover:not(:disabled) {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+  box-shadow:
+    0 8px 22px -4px rgba(99, 102, 241, 0.6),
+    0 4px 10px -4px rgba(15, 23, 42, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+.downlink-action-btn--send:active:not(:disabled) {
+  transform: translateY(1px) scale(0.94);
+  filter: brightness(0.96);
+  box-shadow:
+    inset 0 3px 10px rgba(30, 27, 75, 0.35),
+    0 1px 4px rgba(99, 102, 241, 0.25);
+}
+
+.downlink-action-btn--send.is-sending:disabled {
+  opacity: 0.95;
+  cursor: wait;
+  transform: scale(0.96);
+  filter: brightness(0.98);
+  box-shadow:
+    inset 0 3px 12px rgba(30, 27, 75, 0.4),
+    0 2px 12px rgba(99, 102, 241, 0.35);
+}
+
+.downlink-action-btn--send.is-sending .downlink-action-btn__icon {
+  animation: downlink-send-pulse 0.65s ease-in-out infinite;
+}
+
+.downlink-action-btn--send.is-sent:not(:disabled) {
+  background: linear-gradient(145deg, #22c55e 0%, #16a34a 55%, #15803d 100%);
+  border-color: rgba(34, 197, 94, 0.5);
+  box-shadow:
+    0 4px 16px -2px rgba(34, 197, 94, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  animation: downlink-sent-pop 0.42s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.downlink-action-btn--delete {
+  color: #dc2626;
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.28);
+  box-shadow: 0 1px 4px rgba(239, 68, 68, 0.08);
+}
+
+body.theme-dark .downlink-action-btn--delete {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(248, 113, 113, 0.32);
+}
+
+.downlink-action-btn--delete:hover:not(:disabled) {
+  color: #ffffff;
+  background: linear-gradient(145deg, #f87171 0%, #ef4444 55%, #dc2626 100%);
+  border-color: rgba(239, 68, 68, 0.45);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px -4px rgba(239, 68, 68, 0.45);
+}
+
+.downlink-action-btn--delete:active:not(:disabled) {
+  transform: translateY(1px) scale(0.94);
+  box-shadow: inset 0 3px 10px rgba(127, 29, 29, 0.35);
+}
+
+.downlink-action-btn:disabled:not(.is-sending) {
+  opacity: 0.42;
+  cursor: not-allowed;
+  transform: none;
+  filter: none;
+  box-shadow: none;
+}
+
+.downlink-action-btn:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px rgba(99, 102, 241, 0.35),
+    0 4px 14px -3px rgba(99, 102, 241, 0.4);
+}
+
+.downlink-action-btn--delete:focus-visible {
+  box-shadow:
+    0 0 0 3px rgba(239, 68, 68, 0.3),
+    0 2px 8px rgba(239, 68, 68, 0.2);
+}
+
+@keyframes downlink-send-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.65;
+    transform: scale(0.88);
+  }
+}
+
+@keyframes downlink-sent-pop {
+  0% {
+    transform: scale(0.92);
+  }
+  55% {
+    transform: scale(1.06);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .downlink-action-btn,
+  .downlink-action-btn--send.is-sent:not(:disabled) {
+    transition: none;
+    animation: none;
+  }
+
+  .downlink-action-btn--send.is-sending .downlink-action-btn__icon {
+    animation: none;
+  }
 }
 
 .add-btn {

@@ -18,6 +18,10 @@ const {
   flattenTelemetryProps,
   isMeaningfulTelemetryMergeValue,
 } = require(path.join(__dirname, 'lib', 'telemetryPayloadUtils.js'));
+const {
+  hasDecodedPeopleCountTelemetry,
+  needsMergedTelemetryForList,
+} = require(path.join(__dirname, 'lib', 'vs133-telemetry-aliases.js'));
 const navPerm = require('./navPermissions');
 
 const DATA_DIR = path.join(__dirname, 'data');
@@ -754,6 +758,14 @@ class Store {
         WHERE user_id = ? AND device_id = ? AND ts >= ? AND ts <= ?
         ORDER BY ts DESC
         LIMIT ?
+      `),
+      telemetryHistoryMergedBatch: this.db.prepare(`
+        SELECT id, user_id, device_id, device_name, properties_json, ts FROM (
+          SELECT id, user_id, device_id, device_name, properties_json, ts,
+            ROW_NUMBER() OVER (PARTITION BY device_id ORDER BY ts DESC, id DESC) AS rn
+          FROM telemetry
+          WHERE user_id = ? AND ts >= ? AND ts <= ?
+        ) WHERE rn <= ?
       `),
       telemetryRange: this.db.prepare(`
         SELECT id, user_id, device_id, device_name, properties_json, ts FROM telemetry
@@ -1495,10 +1507,13 @@ class Store {
       }
     }
     this._pruneCounter += 1;
-    if (this._pruneCounter >= 50) {
+    const pruneEvery = Math.min(
+      200,
+      Math.max(10, parseInt(String(process.env.SYSCOM_TELEMETRY_PRUNE_EVERY_N || '').trim(), 10) || 20)
+    );
+    if (this._pruneCounter >= pruneEvery) {
       this._pruneCounter = 0;
-      const cutoff = Date.now() - this.retentionMs;
-      this.st.pruneTelemetry.run(cutoff);
+      this.runRetentionPruneNow();
     }
     const userIds = Array.from(affected);
     if (this._telemetryBroadcastHook) {
@@ -1578,16 +1593,13 @@ class Store {
     return hex.length === 0;
   }
 
-  getMergedLatestTelemetryForDevice(userId, deviceId, opts = {}) {
-    const uid = userId;
-    const did = String(deviceId);
-    const rowLimit = Math.min(
-      500,
-      Math.max(1, Number.isFinite(Number(opts.historyRowLimit)) ? Math.floor(Number(opts.historyRowLimit)) : 500)
-    );
-    const endMs = Date.now();
-    const rows = this.st.telemetryHistory.all(uid, did, 0, endMs, rowLimit);
-    if (!rows.length) return this.getLatestForDevice(uid, did);
+  /**
+   * Fusiona filas de historial (más reciente primero) en un único objeto `properties`.
+   * @param {object[]} rows Filas SQLite de telemetría del mismo dispositivo.
+   * @returns {{ top: object, mergedFlat: Record<string, unknown>, timestamp: number } | null}
+   */
+  _mergeTelemetryHistoryRows(rows) {
+    if (!Array.isArray(rows) || !rows.length) return null;
 
     const appRows = [];
     for (const row of rows) {
@@ -1620,19 +1632,125 @@ class Store {
     const top = rowsForMerge[0];
     const ts = Number(top.ts);
     mergedFlat.lastUpdateTime = ts;
-    if (!appRows.length && rows.length) {
+    if (hasDecodedPeopleCountTelemetry(mergedFlat)) {
+      delete mergedFlat.ingestStatus;
+    } else if (!appRows.length && rows.length) {
       mergedFlat.ingestStatus =
         'Solo join LoRaWAN (sin uplink de aplicación con payload). El contador VS133 aún no ha enviado reporte en puerto 85.';
     }
 
+    return { top, mergedFlat, timestamp: ts };
+  }
+
+  getMergedLatestTelemetryForDevice(userId, deviceId, opts = {}) {
+    const uid = userId;
+    const did = String(deviceId);
+    const rowLimit = Math.min(
+      500,
+      Math.max(1, Number.isFinite(Number(opts.historyRowLimit)) ? Math.floor(Number(opts.historyRowLimit)) : 500)
+    );
+    const endMs = Date.now();
+    const rows = this.st.telemetryHistory.all(uid, did, 0, endMs, rowLimit);
+    if (!rows.length) return this.getLatestForDevice(uid, did);
+
+    const merged = this._mergeTelemetryHistoryRows(rows);
+    if (!merged) return this.getLatestForDevice(uid, did);
+
+    const { top, mergedFlat, timestamp } = merged;
     return {
       id: String(top.id),
       userId: top.user_id,
       deviceId: top.device_id,
       deviceName: top.device_name || top.device_id,
       properties: mergedFlat,
-      timestamp: ts,
+      timestamp,
     };
+  }
+
+  /**
+   * Mapa deviceId → última telemetría fusionada (varios uplinks recientes por equipo).
+   * @param {string} userId
+   * @param {string[]|null} [deviceIds] Si se indica, solo esos dispositivos.
+   * @param {{ historyRowLimit?: number }} [opts]
+   */
+  /**
+   * Telemetría para listado: última fila por defecto; fusiona historial solo si hace falta (VS133 parcial / solo join).
+   * @param {string} userId
+   * @param {string[]} deviceIds
+   * @param {Record<string, { productModel?: string }>} [decodeMap]
+   * @param {{ historyRowLimit?: number }} [opts]
+   */
+  getDeviceListTelemetryMap(userId, deviceIds, decodeMap = {}, opts = {}) {
+    const uid = String(userId || '').trim();
+    const ids = Array.isArray(deviceIds) ? deviceIds.map((d) => String(d).trim()).filter(Boolean) : [];
+    if (!uid || !ids.length) return {};
+
+    const latestMap = this.getLatestMap(uid);
+    const rowLimit = Math.min(
+      32,
+      Math.max(1, Number.isFinite(Number(opts.historyRowLimit)) ? Math.floor(Number(opts.historyRowLimit)) : 12)
+    );
+    const out = {};
+    const needMerge = [];
+
+    for (const did of ids) {
+      const t = latestMap[did];
+      if (!t) continue;
+      const pm =
+        decodeMap[did] && decodeMap[did].productModel != null
+          ? String(decodeMap[did].productModel).trim()
+          : '';
+      if (needsMergedTelemetryForList(t.properties || {}, pm)) {
+        needMerge.push(did);
+      } else {
+        out[did] = t;
+      }
+    }
+
+    if (needMerge.length) {
+      Object.assign(out, this.getMergedLatestMap(uid, needMerge, { historyRowLimit: rowLimit }));
+    }
+    return out;
+  }
+
+  getMergedLatestMap(userId, deviceIds = null, opts = {}) {
+    const uid = String(userId || '').trim();
+    if (!uid) return {};
+    const rowLimit = Math.min(
+      500,
+      Math.max(1, Number.isFinite(Number(opts.historyRowLimit)) ? Math.floor(Number(opts.historyRowLimit)) : 12)
+    );
+    const endMs = Date.now();
+    const filterSet =
+      Array.isArray(deviceIds) && deviceIds.length
+        ? new Set(deviceIds.map((d) => String(d).trim()).filter(Boolean))
+        : null;
+
+    const rawRows = this.st.telemetryHistoryMergedBatch.all(uid, 0, endMs, rowLimit);
+    const grouped = {};
+    for (const row of rawRows) {
+      const did = String(row.device_id || '').trim();
+      if (!did) continue;
+      if (filterSet && !filterSet.has(did)) continue;
+      if (!grouped[did]) grouped[did] = [];
+      grouped[did].push(row);
+    }
+
+    const map = {};
+    for (const [did, rows] of Object.entries(grouped)) {
+      const merged = this._mergeTelemetryHistoryRows(rows);
+      if (!merged) continue;
+      const { top, mergedFlat, timestamp } = merged;
+      map[did] = {
+        id: String(top.id),
+        userId: top.user_id,
+        deviceId: did,
+        deviceName: top.device_name || did,
+        properties: mergedFlat,
+        timestamp,
+      };
+    }
+    return map;
   }
 
   /**
@@ -3849,11 +3967,163 @@ class Store {
     return false;
   }
 
-  runRetentionPruneNow() {
+  /**
+   * @param {{ vacuum?: boolean }} [opts] VACUUM compacta el archivo .db tras borrar muchas filas (lento; usar en mantenimiento).
+   * @returns {{ deleted: number, cutoff: number, retentionMs: number, vacuumed: boolean }}
+   */
+  /**
+   * Los pseudo-dispositivos `gateway-*` y heartbeats UDP generan cientos de miles de filas repetidas.
+   * Conserva solo las últimas `keepMs` (defecto 48 h).
+   */
+  pruneGatewayTelemetryHistory(opts = {}) {
+    const keepMs = Math.max(
+      3600000,
+      Number.isFinite(Number(opts.keepMs)) ? Number(opts.keepMs) : 48 * 60 * 60 * 1000
+    );
+    const cutoff = Date.now() - keepMs;
+    const info = this.db
+      .prepare(
+        `DELETE FROM telemetry
+         WHERE ts < ?
+           AND (
+             device_id LIKE 'gateway-%'
+             OR properties_json LIKE '%"deviceType":"GATEWAY"%'
+             OR properties_json LIKE '%"deviceType": "GATEWAY"%'
+           )`
+      )
+      .run(cutoff);
+    const deleted = Number(info.changes || 0);
+    if (deleted > 0) {
+      console.log(
+        `[Syscom] Telemetría gateway antigua podada: ${deleted} filas (conservando ${Math.round(keepMs / 3600000)} h)`
+      );
+    }
+    return { deleted, cutoff, keepMs };
+  }
+
+  runRetentionPruneNow(opts = {}) {
     const cutoff = Date.now() - this.retentionMs;
     const info = this.st.pruneTelemetry.run(cutoff);
-    const n = Number(info.changes || 0);
-    if (n > 0) console.log(`[Syscom] Telemetría podada al arranque: ${n} filas (> retención)`);
+    const deleted = Number(info.changes || 0);
+    let vacuumed = false;
+    const vacuumMin =
+      parseInt(String(process.env.SYSCOM_TELEMETRY_VACUUM_MIN_DELETED || '').trim(), 10) || 5000;
+    const doVacuum = Boolean(opts.vacuum) || (deleted >= vacuumMin && deleted > 0);
+    if (doVacuum && deleted > 0) {
+      try {
+        this.db.exec('VACUUM');
+        vacuumed = true;
+      } catch (e) {
+        console.warn('[Syscom] VACUUM tras poda:', e.message || e);
+      }
+    }
+    if (deleted > 0) {
+      console.log(
+        `[Syscom] Telemetría podada: ${deleted} filas anteriores a ${new Date(cutoff).toISOString()}${vacuumed ? ' (VACUUM)' : ''}`
+      );
+    }
+    return { deleted, cutoff, retentionMs: this.retentionMs, vacuumed };
+  }
+
+  /**
+   * Mantenimiento automático: retención global + basura de gateways (no borra sensores/VS133 recientes).
+   * @param {{ vacuum?: boolean, skipGateways?: boolean }} [opts]
+   */
+  runStorageMaintenance(opts = {}) {
+    const retention = this.runRetentionPruneNow({ vacuum: false });
+    let gateways = { deleted: 0, keepMs: 0 };
+    const autoGateway = !['0', 'false', 'no', 'off'].includes(
+      String(process.env.SYSCOM_AUTO_PRUNE_GATEWAY_TELEMETRY || '1').trim().toLowerCase()
+    );
+    if (autoGateway && !opts.skipGateways) {
+      const keepMs = Math.max(
+        3600000,
+        parseInt(String(process.env.SYSCOM_GATEWAY_TELEMETRY_KEEP_MS || '').trim(), 10) ||
+          48 * 60 * 60 * 1000
+      );
+      gateways = this.pruneGatewayTelemetryHistory({ keepMs });
+      gateways.keepMs = keepMs;
+    }
+    let vacuumed = false;
+    const totalDeleted = retention.deleted + (gateways.deleted || 0);
+    const vacuumMin =
+      parseInt(String(process.env.SYSCOM_TELEMETRY_VACUUM_MIN_DELETED || '').trim(), 10) || 5000;
+    if (opts.vacuum || totalDeleted >= vacuumMin) {
+      try {
+        this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+      } catch {
+        /* ignore */
+      }
+      if (totalDeleted > 0) {
+        try {
+          this.db.exec('VACUUM');
+          vacuumed = true;
+        } catch (e) {
+          console.warn('[Syscom] VACUUM mantenimiento:', e.message || e);
+        }
+      }
+    }
+    return { retention, gateways, vacuumed, totalDeleted };
+  }
+
+  /** Estadísticas de almacenamiento (diagnóstico de lentitud por BD grande). */
+  getTelemetryStorageStats() {
+    const totalRow = this.db.prepare('SELECT COUNT(*) AS n FROM telemetry').get();
+    const rangeRow = this.db
+      .prepare('SELECT MIN(ts) AS min_ts, MAX(ts) AS max_ts FROM telemetry')
+      .get();
+    const usersRow = this.db.prepare('SELECT COUNT(DISTINCT user_id) AS n FROM telemetry').get();
+    const devicesRow = this.db.prepare('SELECT COUNT(DISTINCT device_id) AS n FROM telemetry').get();
+    const joinRow = this.db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM telemetry WHERE properties_json LIKE '%"lorawan_event"%' AND properties_json LIKE '%join%'`
+      )
+      .get();
+    const topDevices = this.db
+      .prepare(
+        `SELECT device_id, COUNT(*) AS n FROM telemetry GROUP BY device_id ORDER BY n DESC LIMIT 15`
+      )
+      .all();
+    const topUsers = this.db
+      .prepare(
+        `SELECT user_id, COUNT(*) AS n FROM telemetry GROUP BY user_id ORDER BY n DESC LIMIT 10`
+      )
+      .all();
+    const dbPath = this.filePath || DEFAULT_SQLITE;
+    let fileBytes = 0;
+    try {
+      fileBytes = fs.statSync(dbPath).size;
+    } catch {
+      fileBytes = 0;
+    }
+    const walBytes = (() => {
+      try {
+        return fs.statSync(`${dbPath}-wal`).size;
+      } catch {
+        return 0;
+      }
+    })();
+    return {
+      sqlitePath: dbPath,
+      fileBytes,
+      walBytes,
+      totalRows: Number(totalRow?.n || 0),
+      distinctUsers: Number(usersRow?.n || 0),
+      distinctDevices: Number(devicesRow?.n || 0),
+      joinEventRows: Number(joinRow?.n || 0),
+      oldestTs: rangeRow?.min_ts != null ? Number(rangeRow.min_ts) : null,
+      newestTs: rangeRow?.max_ts != null ? Number(rangeRow.max_ts) : null,
+      retentionMs: this.retentionMs,
+      retentionDays: Math.round(this.retentionMs / 86400000),
+      topDevicesByRows: topDevices.map((r) => ({
+        deviceId: r.device_id,
+        rows: Number(r.n || 0),
+      })),
+      topUsersByRows: topUsers.map((r) => ({
+        userId: r.user_id,
+        rows: Number(r.n || 0),
+      })),
+    };
   }
 
   /** Registro del `jti` incluido en JWT de integración LNS (revocable). */
@@ -3961,11 +4231,6 @@ class Store {
 const sqlitePath = process.env.SYSCOM_SQLITE_PATH || DEFAULT_SQLITE;
 const store = new Store(sqlitePath);
 store.setRetentionMs(parseInt(process.env.SYSCOM_TELEMETRY_RETENTION_MS, 10) || 365 * 24 * 60 * 60 * 1000);
-try {
-  store.runRetentionPruneNow();
-} catch (e) {
-  console.warn('[Syscom] Poda inicial:', e.message);
-}
 
 module.exports = {
   store,

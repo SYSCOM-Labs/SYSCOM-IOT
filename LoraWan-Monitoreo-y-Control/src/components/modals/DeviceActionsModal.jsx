@@ -156,6 +156,24 @@ const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
     scheduleDownlinksServerSave(device?.deviceId);
   };
 
+  const [sendingRow, setSendingRow] = useState(null);
+  const [sentFlashRow, setSentFlashRow] = useState(null);
+
+  const handleSendRow = async (index, hex, name) => {
+    const payload = String(hex || '').trim();
+    if (!payload || sendingRow !== null || !onSend) return;
+    setSendingRow(index);
+    try {
+      await Promise.resolve(onSend(device.deviceId, payload, name));
+      setSentFlashRow(index);
+      window.setTimeout(() => {
+        setSentFlashRow((cur) => (cur === index ? null : cur));
+      }, 520);
+    } finally {
+      setSendingRow(null);
+    }
+  };
+
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div
@@ -220,16 +238,36 @@ const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
                     />
                   </div>
                   <div className="row-actions">
-                    <button 
-                      className="btn-icon send" 
-                      onClick={() => onSend(device.deviceId, dl.hex, dl.name)} 
-                      title="Enviar"
-                      disabled={!dl.hex}
+                    <button
+                      type="button"
+                      className={[
+                        'downlink-action-btn',
+                        'downlink-action-btn--send',
+                        sendingRow === index ? 'is-sending' : '',
+                        sentFlashRow === index ? 'is-sent' : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' ')}
+                      onClick={() => handleSendRow(index, dl.hex, dl.name)}
+                      title={sendingRow === index ? 'Enviando…' : 'Enviar downlink'}
+                      aria-label={sendingRow === index ? 'Enviando downlink' : `Enviar ${dl.name || 'comando'}`}
+                      disabled={!String(dl.hex || '').trim() || sendingRow !== null}
                     >
-                      <Send size={16} />
+                      <span className="downlink-action-btn__icon" aria-hidden>
+                        <Send size={17} strokeWidth={2.25} />
+                      </span>
                     </button>
-                    <button className="btn-icon delete" onClick={() => removeDownlinkRow(index)} title="Eliminar">
-                      <Trash2 size={16} />
+                    <button
+                      type="button"
+                      className="downlink-action-btn downlink-action-btn--delete"
+                      onClick={() => removeDownlinkRow(index)}
+                      title="Eliminar comando"
+                      aria-label={`Eliminar ${dl.name || 'comando'}`}
+                      disabled={sendingRow !== null}
+                    >
+                      <span className="downlink-action-btn__icon" aria-hidden>
+                        <Trash2 size={17} strokeWidth={2.25} />
+                      </span>
                     </button>
                   </div>
                 </div>

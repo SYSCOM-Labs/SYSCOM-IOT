@@ -315,8 +315,12 @@ function panelDeviceDeuiLabel(d) {
   return eui.length === 16 ? eui : '';
 }
 
-/** Panel y vista dispositivo: telemetría en vivo / tarjetas (antes 5000 ms). */
-const PANEL_LIVE_REFRESH_MS = 2500;
+/** Panel y vista dispositivo: widgets en vivo (sin volver a pedir todo el listado). */
+const PANEL_LIVE_REFRESH_MS = 5000;
+/** Listado completo GET /api/devices (operación pesada; no cada 2,5 s). */
+const PANEL_DEVICES_LIST_REFRESH_MS = 30000;
+/** Mínimo entre llamadas GET …/properties por dispositivo en el panel. */
+const PANEL_PROPERTIES_FETCH_MIN_MS = 20000;
 /** Consultas de historial de gráficos (línea / barras): <5 s respecto a un evento en backend + red. */
 const DASH_CHART_HISTORY_POLL_MS = 4000;
 
@@ -1807,6 +1811,9 @@ function formatLastTelemetryUpdateLine(ts) {
   return `Última actualización: ${new Date(n).toLocaleString()}`;
 }
 
+/** Evita GET /properties por dispositivo en cada tick del panel. */
+const panelPropertiesFetchAtByDevice = new Map();
+
 /**
  * @param {unknown} [preloadedLatest] si viene de un batch del panel, evita N llamadas idénticas a `/api/devices/latest`.
  */
@@ -1823,9 +1830,39 @@ async function mergeDeviceLive(dev, credentials, token, preloadedLatest = undefi
         latest = [];
       }
     }
-    const propsResp = await fetchDeviceProperties(dev.deviceId, credentials, token);
-    const apiData = propsResp.data?.data || {};
-    const liveFromAPI = apiData.properties || propsResp.data?.properties || {};
+    const did = String(dev.deviceId);
+    const listHasCounts =
+      dev.line_1_total_in != null ||
+      dev.people_count != null ||
+      dev.line_1_total_out != null ||
+      dev.people_count_out != null;
+    const now = Date.now();
+    const lastPropsFetch = panelPropertiesFetchAtByDevice.get(did) || 0;
+    const shouldFetchProperties =
+      !listHasCounts || now - lastPropsFetch >= PANEL_PROPERTIES_FETCH_MIN_MS;
+
+    let liveFromAPI = {};
+    let apiData = {};
+    if (shouldFetchProperties) {
+      const propsResp = await fetchDeviceProperties(dev.deviceId, credentials, token);
+      panelPropertiesFetchAtByDevice.set(did, now);
+      apiData = propsResp.data?.data || {};
+      liveFromAPI = apiData.properties || propsResp.data?.properties || {};
+    } else {
+      liveFromAPI = {};
+      for (const k of Object.keys(dev)) {
+        if (
+          k === 'deviceId' ||
+          k === 'name' ||
+          k === 'assignments' ||
+          k === 'registered' ||
+          k === 'deviceSharedPresets'
+        ) {
+          continue;
+        }
+        if (dev[k] !== undefined && dev[k] !== null) liveFromAPI[k] = dev[k];
+      }
+    }
     const entry = findLocalEntry(dev, latest);
     const liveFromLocal = entry?.properties || {};
     const tsApi = telemetryTsToMs(apiData.lastTimestamp);
@@ -3244,7 +3281,7 @@ export default function BudgetSensorsDashboard({
       }
     };
     panelListTickRef.current = tick;
-    const id = setInterval(tick, PANEL_LIVE_REFRESH_MS);
+    const id = setInterval(tick, PANEL_DEVICES_LIST_REFRESH_MS);
     return () => {
       cancelled = true;
       clearInterval(id);

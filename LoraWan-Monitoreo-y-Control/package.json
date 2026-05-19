@@ -20,6 +20,11 @@
     "test": "node --test server/test/selfhosted.test.cjs",
     "simulate:lns": "node scripts/simulate-lorawan-classes.mjs",
     "reset:bootstrap": "node scripts/reset-bootstrap-local.mjs",
+    "db:stats": "node scripts/db-telemetry-stats.mjs",
+    "db:prune": "node scripts/db-telemetry-stats.mjs --prune",
+    "db:prune:vacuum": "node scripts/db-telemetry-stats.mjs --prune --vacuum",
+    "db:prune:gateways": "node scripts/db-telemetry-stats.mjs --prune-gateways --vacuum",
+    "db:restore": "node scripts/restore-database.mjs",
     "openrouter:sync": "node server/OPENROUTER/sync-settings-from-env.mjs"
   },
   "dependencies": {

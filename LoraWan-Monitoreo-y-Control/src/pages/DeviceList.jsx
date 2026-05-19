@@ -390,16 +390,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
         });
         return;
       }
-      (async () => {
-        try {
-          const latestData = await getLatestDeviceData();
-          if (!latestData?.length) return;
-          lastRealtimeTelemetryMsRef.current = Date.now();
-          applyLatestBatchToDevices(latestData);
-        } catch (err) {
-          console.error('Error merging SSE telemetry:', err);
-        }
-      })();
+      /* Sin deviceId en el evento: no refetch masivo del listado (bloqueaba la UI). */
     };
     window.addEventListener(SYSCOM_REALTIME_TELEMETRY, onRealtimeTelemetry);
     return () => window.removeEventListener(SYSCOM_REALTIME_TELEMETRY, onRealtimeTelemetry);

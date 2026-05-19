@@ -23,6 +23,7 @@ const {
 const { store, readLnsTxAckPruneSilenceMs } = require('./store');
 const navPerm = require('./navPermissions');
 const { flattenTelemetryProps } = require('./lib/telemetryPayloadUtils');
+const { hasDecodedPeopleCountTelemetry } = require('./lib/vs133-telemetry-aliases');
 const { tryBootstrapMilesightAbpSession, retryMilesightAbpBootstrapAll } = require('./milesight-lns-bootstrap');
 const { validatePasswordStrength } = require('./password-policy');
 const { isAllowedGatewayFrequencyBand } = require('./lorawan-gateway-bands');
@@ -44,7 +45,41 @@ const {
 const realtimeSseContract = require(path.join(__dirname, '..', 'shared', 'realtime-sse-contract.json'));
 
 const realtimeHub = createRealtimeHub();
+
+/** Evita reconstruir el listado completo en cada poll del panel (GET /api/devices). */
+const DEVICES_LIST_CACHE_MS = Math.min(
+  30000,
+  Math.max(2000, parseInt(process.env.SYSCOM_DEVICES_LIST_CACHE_MS || '5000', 10) || 5000)
+);
+let devicesListCache = { key: '', at: 0, content: null };
+
+function invalidateDevicesListCache() {
+  devicesListCache = { key: '', at: 0, content: null };
+}
+
+function buildDevicesContentForUser(role, userId) {
+  return role === 'superadmin'
+    ? buildDevicesContentSuperadmin()
+    : buildDevicesContentAssignedOnly(userId);
+}
+
+function getDevicesContentCached(role, userId) {
+  const key = `${role}:${userId}`;
+  const now = Date.now();
+  if (
+    devicesListCache.key === key &&
+    devicesListCache.content &&
+    now - devicesListCache.at < DEVICES_LIST_CACHE_MS
+  ) {
+    return devicesListCache.content;
+  }
+  const content = buildDevicesContentForUser(role, userId);
+  devicesListCache = { key, at: now, content };
+  return content;
+}
+
 store.setTelemetryBroadcastHook(({ userIds, deviceId, deviceName, ts, deviceType, properties }) => {
+  invalidateDevicesListCache();
   const ev = { deviceId, deviceName: deviceName || deviceId, timestamp: ts };
   if (deviceType) ev.deviceType = deviceType;
   if (properties && typeof properties === 'object') ev.properties = properties;
@@ -461,11 +496,34 @@ function normalizeDevIdKey(s) {
 /** Telemetría generada por el LNS al encolar Join-Accept (sin payload de aplicación / conteo). */
 function joinOnlyTelemetryHint(properties) {
   if (!properties || typeof properties !== 'object') return null;
+  if (hasDecodedPeopleCountTelemetry(properties)) return null;
   const ev = properties.lorawan_event != null ? String(properties.lorawan_event).trim() : '';
   if (!ev || !/join/i.test(ev)) return null;
   const hex = properties.payload_hex != null ? String(properties.payload_hex).trim() : '';
   if (hex.length > 0) return null;
   return 'Solo join LoRaWAN (sin uplink de aplicación). El VS133 aún no envió reporte de conteo (puerto 85).';
+}
+
+/** Fila del listado de dispositivos con telemetría fusionada y `ingestStatus` coherente. */
+function mapDeviceListTelemetryRow(t, resolveName) {
+  const p = t.properties || {};
+  const name = resolveName(t, p);
+  const ingestHint = joinOnlyTelemetryHint(p);
+  const row = {
+    deviceId: t.deviceId,
+    name,
+    sn: p.sn || p.deviceSn || t.deviceId,
+    connectStatus: p.connectStatus || p.status,
+    electricity: p.electricity,
+    rssi: p.rssi,
+    ...p,
+    name,
+    model: deviceModelFromTelemetryProps(p),
+    lastUpdateTime: t.timestamp,
+  };
+  if (ingestHint) row.ingestStatus = ingestHint;
+  else delete row.ingestStatus;
+  return row;
 }
 
 /** Última telemetría: por device_id, DevEUI en columna o clave guardada bajo DevEUI (LNS). */
@@ -585,40 +643,22 @@ function resolvedDeviceProductModelFast(deviceId, reg, decodeMap) {
  * No se listan equipos que solo tengan telemetría huérfana bajo su user_id.
  */
 function buildDevicesContentAssignedOnly(userId) {
-  const latestMap = store.getLatestMap(userId);
   const labels = store.getDeviceLabels(userId);
   const labelById = Object.fromEntries(labels.map((l) => [l.deviceId, l.displayName]));
   const registered = store.listUserDevices(userId);
   const regIds = registered.map((r) => r.deviceId).filter(Boolean);
   const decodeMap = store.getDeviceDecodeConfigMap(regIds);
   const licenseMap = store.getDeviceLicenseMetaMap(regIds);
-
-  const mapTelemetryRow = (t) => {
-    const p = t.properties || {};
-    const name = labelById[t.deviceId] || t.deviceName || p.deviceName || t.deviceId;
-    const ingestHint = joinOnlyTelemetryHint(p);
-    return {
-      deviceId: t.deviceId,
-      name,
-      sn: p.sn || p.deviceSn || t.deviceId,
-      connectStatus: p.connectStatus || p.status,
-      electricity: p.electricity,
-      rssi: p.rssi,
-      ...p,
-      ...(ingestHint ? { ingestStatus: ingestHint } : {}),
-      name,
-      model: deviceModelFromTelemetryProps(p),
-      /** Siempre hora de ingesta en servidor (evita que `last_update` / campos del payload congelen la columna «última actualización»). */
-      lastUpdateTime: t.timestamp,
-    };
-  };
+  const mergedMap = store.getDeviceListTelemetryMap(userId, regIds, decodeMap, { historyRowLimit: 12 });
 
   const content = [];
   for (const reg of registered) {
     if (isGatewayPseudoDeviceId(reg.deviceId)) continue;
-    const t = findLatestTelemetryForRegistration(latestMap, reg);
+    const t = mergedMap[reg.deviceId];
     if (t) {
-      const row = mapTelemetryRow(t);
+      const row = mapDeviceListTelemetryRow(t, (tel, p) =>
+        labelById[tel.deviceId] || tel.deviceName || p.deviceName || tel.deviceId
+      );
       applyStaleOfflineFromTelemetryRow(row, t);
       inferFreshOnlineConnectStatus(row, t);
       if (reg.displayName) row.name = reg.displayName;
@@ -661,7 +701,6 @@ function buildDevicesContentAssignedOnly(userId) {
 
 /** Vista global para superadmin: todos los dispositivos + asignaciones (correo / rol). */
 function buildDevicesContentSuperadmin() {
-  const latestMap = store.getGlobalLatestMap();
   const udList = store.listUserDevicesWithAccounts();
   const labelsByDevice = store.getAllLabelsGroupedByDevice();
 
@@ -695,24 +734,31 @@ function buildDevicesContentSuperadmin() {
   const decodeMap = store.getDeviceDecodeConfigMap(deviceIdList);
   const licenseMap = store.getDeviceLicenseMetaMap(deviceIdList);
 
-  const mapTelemetryRow = (t) => {
-    const p = t.properties || {};
-    const name = t.deviceName || p.deviceName || t.deviceId;
-    const ingestHint = joinOnlyTelemetryHint(p);
-    return {
-      deviceId: t.deviceId,
-      name,
-      sn: p.sn || p.deviceSn || t.deviceId,
-      connectStatus: p.connectStatus || p.status,
-      electricity: p.electricity,
-      rssi: p.rssi,
-      ...p,
-      ...(ingestHint ? { ingestStatus: ingestHint } : {}),
-      name,
-      model: deviceModelFromTelemetryProps(p),
-      lastUpdateTime: t.timestamp,
-    };
-  };
+  const superadminIds = store.listSuperadminUserIds();
+  const resolveSeedUserId = superadminIds[0] || '';
+  const telemetryUserCache = new Map();
+  const byTelemetryUser = new Map();
+  for (const deviceId of deviceIdList) {
+    if (isGatewayPseudoDeviceId(deviceId)) continue;
+    const anyUd = anyUdByDevice[deviceId];
+    const reg0 = (assignByDevice[deviceId] || [])[0];
+    const seedUser =
+      (anyUd && anyUd.userId) || (reg0 && reg0.userId) || resolveSeedUserId;
+    let tuid = telemetryUserCache.get(deviceId);
+    if (!tuid) {
+      tuid = store.resolveTelemetryUserId(seedUser, deviceId, { role: 'superadmin' });
+      telemetryUserCache.set(deviceId, tuid);
+    }
+    if (!byTelemetryUser.has(tuid)) byTelemetryUser.set(tuid, []);
+    byTelemetryUser.get(tuid).push(deviceId);
+  }
+  const mergedByDevice = {};
+  for (const [tuid, dids] of byTelemetryUser) {
+    Object.assign(
+      mergedByDevice,
+      store.getDeviceListTelemetryMap(tuid, dids, decodeMap, { historyRowLimit: 12 })
+    );
+  }
 
   const content = [];
   for (const deviceId of deviceIdList) {
@@ -722,14 +768,11 @@ function buildDevicesContentSuperadmin() {
     const labelOpts = labelsByDevice[deviceId] || [];
     const reg0 = assigns[0];
     const decCfg = decodeMap[deviceId];
-    const t = findLatestTelemetryForRegistration(latestMap, {
-      deviceId,
-      devEUI: (anyUd && anyUd.devEUI) || deviceId,
-    });
+    const t = mergedByDevice[deviceId];
 
     let row;
     if (t) {
-      row = mapTelemetryRow(t);
+      row = mapDeviceListTelemetryRow(t, (tel, p) => tel.deviceName || p.deviceName || tel.deviceId);
       applyStaleOfflineFromTelemetryRow(row, t);
       inferFreshOnlineConnectStatus(row, t);
       const lbl = labelOpts.find((l) => assigns.some((a) => a.userId === l.userId));
@@ -1124,6 +1167,11 @@ function saveIngestEntry(userId, data) {
   }
 
   tryApplyStoredDecoder(store, canonicalDeviceId, rawDeviceId, properties);
+
+  if (store.lastPropertiesJsonEqual(userId, canonicalDeviceId, properties)) {
+    metrics.inc('telemetry_duplicate_skipped');
+    return { ok: true, saved: false, reason: 'no_change', deviceId: canonicalDeviceId };
+  }
 
   pushDebugWebhook({
     timestamp: Date.now(),
@@ -2794,11 +2842,62 @@ app.delete('/api/lorawan-gateways/:id', authMiddleware, navGatewayMiddleware, (r
 
 app.get('/api/devices', authMiddleware, (req, res) => {
   const role = req.user.role;
-  const content =
-    role === 'superadmin'
-      ? buildDevicesContentSuperadmin()
-      : buildDevicesContentAssignedOnly(req.user.id);
+  const content = getDevicesContentCached(role, req.user.id);
   res.json({ status: 'Success', data: { content } });
+});
+
+/** Diagnóstico de tamaño de SQLite y telemetría (solo superadmin). */
+app.get('/api/admin/storage-stats', authMiddleware, realSuperAdminMiddleware, (req, res) => {
+  try {
+    const stats = store.getTelemetryStorageStats();
+    const estMirrorFactor =
+      stats.distinctUsers > 0 && stats.topUsersByRows.length >= 2
+        ? Math.round(stats.totalRows / Math.max(1, stats.topUsersByRows[0]?.rows || stats.totalRows))
+        : 1;
+    res.json({
+      status: 'Success',
+      data: {
+        ...stats,
+        fileSizeMB: Math.round((stats.fileBytes / (1024 * 1024)) * 100) / 100,
+        walSizeMB: Math.round((stats.walBytes / (1024 * 1024)) * 100) / 100,
+        hint:
+          stats.totalRows > 500000
+            ? 'BD muy grande: reduzca SYSCOM_TELEMETRY_RETENTION_MS y ejecute npm run db:prune'
+            : stats.joinEventRows > stats.totalRows * 0.2
+              ? 'Muchos eventos join en telemetría; el pool superadmin duplica filas por cuenta'
+              : null,
+        noteMirrorPool:
+          estMirrorFactor > 1
+            ? `Hasta ~${estMirrorFactor}× filas por uplink si el dispositivo está en el pool superadmin (varias cuentas).`
+            : null,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Error leyendo estadísticas' });
+  }
+});
+
+app.post('/api/admin/storage-prune', authMiddleware, realSuperAdminMiddleware, (req, res) => {
+  try {
+    const vacuum = req.body?.vacuum === true || req.query?.vacuum === '1';
+    const pruneGateways = req.body?.pruneGateways === true || req.query?.pruneGateways === '1';
+    const data = { retention: store.runRetentionPruneNow({ vacuum: false }) };
+    if (pruneGateways) {
+      data.gateways = store.pruneGatewayTelemetryHistory();
+    }
+    if (vacuum && (data.retention.deleted > 0 || (data.gateways && data.gateways.deleted > 0))) {
+      try {
+        store.db.exec('VACUUM');
+        data.vacuumed = true;
+      } catch (e) {
+        data.vacuumError = e.message || String(e);
+      }
+    }
+    invalidateDevicesListCache();
+    res.json({ status: 'Success', data });
+  } catch (e) {
+    res.status(500).json({ error: e.message || 'Error en poda' });
+  }
 });
 
 app.get('/api/device-templates', authMiddleware, (req, res) => {
@@ -2996,6 +3095,7 @@ app.post('/api/devices/assign', authMiddleware, (req, res) => {
   } catch (e) {
     console.warn('[devices/assign] BSD prefs / dashboard widgets:', e.message || e);
   }
+  invalidateDevicesListCache();
   res.status(prevA ? 200 : 201).json({ ok: true, userDevice: row });
 });
 
@@ -3529,7 +3629,9 @@ app.get('/api/downlinks', authMiddleware, (req, res) => {
 
 app.get('/api/devices/:deviceId/properties', authMiddleware, deviceAssignmentMiddleware, (req, res) => {
   const tuid = telemetryUserIdForRequest(req, req.params.deviceId);
-  const latest = store.getMergedLatestTelemetryForDevice(tuid, req.params.deviceId);
+  const latest = store.getMergedLatestTelemetryForDevice(tuid, req.params.deviceId, {
+    historyRowLimit: 24,
+  });
   res.json({
     status: 'Success',
     data: {
@@ -3545,7 +3647,9 @@ app.get(
   deviceAssignmentMiddleware,
   (req, res) => {
   const tuid = telemetryUserIdForRequest(req, req.params.deviceId);
-  const latest = store.getMergedLatestTelemetryForDevice(tuid, req.params.deviceId);
+  const latest = store.getMergedLatestTelemetryForDevice(tuid, req.params.deviceId, {
+    historyRowLimit: 24,
+  });
   const props = latest?.properties || {};
   const flat = flattenTelemetryProps(props);
   const list = Object.keys(flat)
@@ -4417,6 +4521,28 @@ const server = app.listen(PORT, '0.0.0.0', () => {
       '[Syscom] Licencias: sin mantenimiento destructivo (defecto). Los datos solo se eliminan con acciones manuales o con SYSCOM_LICENSE_AUTO_ENFORCE=1.'
     );
   }
+  const retentionPruneHours = Math.min(
+    168,
+    Math.max(1, parseInt(String(process.env.SYSCOM_TELEMETRY_PRUNE_INTERVAL_HOURS || '').trim(), 10) || 6)
+  );
+  const runBgMaintenance = (label, withVacuum = false) => {
+    try {
+      const r = store.runStorageMaintenance({ vacuum: withVacuum });
+      if (r.totalDeleted > 0) {
+        console.log(
+          `[Syscom] Mantenimiento BD (${label}): ${r.totalDeleted} filas (retención ${r.retention.deleted}, gateway ${r.gateways.deleted || 0})${r.vacuumed ? ', VACUUM' : ''}`
+        );
+        invalidateDevicesListCache();
+      }
+    } catch (e) {
+      console.warn(`[Syscom] Mantenimiento BD (${label}):`, e.message || e);
+    }
+  };
+  setImmediate(() => runBgMaintenance('arranque', false));
+  setInterval(() => runBgMaintenance('periódico', false), retentionPruneHours * 60 * 60 * 1000);
+  console.log(
+    `[Syscom] Mantenimiento BD automático cada ${retentionPruneHours} h: retención sensores ${Math.round(RETENTION_MS / 86400000)} d; gateways conservan últimas ${Math.round((parseInt(String(process.env.SYSCOM_GATEWAY_TELEMETRY_KEEP_MS || '').trim(), 10) || 48 * 60 * 60 * 1000) / 3600000)} h.`
+  );
   const { startMqttIngest } = require('./mqtt-ingest');
   startMqttIngest();
 
@@ -4501,8 +4627,11 @@ const server = app.listen(PORT, '0.0.0.0', () => {
             : store.findUserIdsBySemtechGatewayMac8(mac);
         const defUid = process.env.SYSCOM_LNS_DEFAULT_USER_ID;
         if (uids.length === 0 && defUid) uids = [String(defUid).trim()];
+        const gwProps = { deviceType: 'GATEWAY', status: 'online', gateway_id: eui };
+        const ts = Date.now();
         for (const uid of uids) {
-          store.appendTelemetry(uid, eui, eui, { deviceType: 'GATEWAY', status: 'online' }, Date.now());
+          if (store.lastPropertiesJsonEqual(uid, eui, gwProps)) continue;
+          store.appendTelemetry(uid, eui, eui, gwProps, ts);
         }
       },
     });

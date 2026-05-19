@@ -17,6 +17,47 @@ function isVs133ProductModel(productModel) {
   return VS133_MODEL_RE.test(String(productModel || ''));
 }
 
+/** Telemetría con conteo de personas ya decodificado (VS133 o alias). */
+function hasDecodedPeopleCountTelemetry(props) {
+  if (!props || typeof props !== 'object') return false;
+  if (looksLikeVs133Decoded(props)) return true;
+  return (
+    numericValue(props.people_count) !== null ||
+    numericValue(props.people_count_out) !== null ||
+    numericValue(props.total_in) !== null ||
+    numericValue(props.total_out) !== null
+  );
+}
+
+function hasBothVs133Totals(props) {
+  if (!props || typeof props !== 'object') return false;
+  const tin =
+    numericValue(props.line_1_total_in) ??
+    numericValue(props.people_count) ??
+    numericValue(props.total_in);
+  const tout =
+    numericValue(props.line_1_total_out) ??
+    numericValue(props.people_count_out) ??
+    numericValue(props.total_out);
+  return tin !== null && tout !== null;
+}
+
+/**
+ * Si el listado debe fusionar historial (costoso) en lugar de usar solo la última fila.
+ * @param {Record<string, unknown>} properties
+ * @param {string} [productModel]
+ */
+function needsMergedTelemetryForList(properties, productModel = '') {
+  if (!properties || typeof properties !== 'object') return false;
+  const ev = properties.lorawan_event != null ? String(properties.lorawan_event).trim() : '';
+  const hex = properties.payload_hex != null ? String(properties.payload_hex).trim() : '';
+  if (ev && /join/i.test(ev) && !hex) return true;
+  const isVs133 = isVs133ProductModel(productModel) || looksLikeVs133Decoded(properties);
+  if (!isVs133) return false;
+  if (!hasDecodedPeopleCountTelemetry(properties)) return true;
+  return !hasBothVs133Totals(properties);
+}
+
 function looksLikeVs133Decoded(props) {
   if (!props || typeof props !== 'object') return false;
   if (
@@ -128,4 +169,7 @@ module.exports = {
   applyVs133TelemetryAliases,
   isVs133ProductModel,
   looksLikeVs133Decoded,
+  hasDecodedPeopleCountTelemetry,
+  hasBothVs133Totals,
+  needsMergedTelemetryForList,
 };
