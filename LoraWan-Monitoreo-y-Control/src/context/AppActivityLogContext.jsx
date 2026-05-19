@@ -200,10 +200,19 @@ export function AppActivityLogProvider({ currentPage, children }) {
       const d = ev.detail || {};
       const id = d.deviceId || d.device_id || '';
       const now = Date.now();
-      const isGw = String(d.deviceType || '').toUpperCase() === 'GATEWAY';
+      const idStr = String(id || '');
+      const isGw =
+        String(d.deviceType || '').toUpperCase() === 'GATEWAY' || /^gateway-/i.test(idStr);
       const dev = normDevId(id);
+      const displayName =
+        d.deviceName != null && String(d.deviceName).trim() && String(d.deviceName).trim() !== idStr
+          ? String(d.deviceName).trim()
+          : '';
+      const props = d.properties && typeof d.properties === 'object' ? d.properties : {};
+      const joinEv =
+        props.lorawan_event != null && /join/i.test(String(props.lorawan_event).trim());
       const key = isGw ? `gw:${dev || '?'}` : `dev:${dev || '?'}`;
-      const minGap = isGw ? 120000 : 1000;
+      const minGap = isGw ? 120000 : joinEv ? 15000 : 1000;
       const prev = lastByKey.get(key) || 0;
       if (now - prev < minGap) return;
       lastByKey.set(key, now);
@@ -213,16 +222,30 @@ export function AppActivityLogProvider({ currentPage, children }) {
           if (lastByKey.size <= 200) break;
         }
       }
-      const label =
-        isGw && dev
-          ? `Gateway en línea · ${dev.length >= 16 ? dev : `${dev}…`}`
-          : dev
-            ? `Uplink / telemetría · ${dev.length >= 16 ? dev : `${dev}…`}`
+      const hexLabel = dev ? (dev.length >= 16 ? dev : `${dev}…`) : '';
+      const gwEuiFromProps = normDevId(props.gateway_id || props.gatewayEui || '');
+      const gwEuiFromId = /^gateway-([0-9a-f]+)$/i.test(idStr)
+        ? normDevId(idStr.replace(/^gateway-/i, ''))
+        : '';
+      const gwHex = (gwEuiFromProps.length >= 16 ? gwEuiFromProps : gwEuiFromId) || hexLabel;
+      const gwNameLooksGeneric =
+        !displayName || /^gateway(\s+gateway)?$/i.test(displayName.trim());
+      const who = isGw
+        ? gwNameLooksGeneric && gwHex
+          ? gwHex
+          : displayName || gwHex || 'gateway'
+        : displayName || hexLabel || 'dispositivo';
+      const label = isGw
+        ? `Gateway en línea · ${who}`
+        : joinEv
+          ? `Join LoRaWAN · ${who}`
+          : hexLabel
+            ? `Uplink · ${displayName ? `${displayName} (${hexLabel})` : hexLabel}`
             : 'Actualización de telemetría';
       append({
         ts: now,
         level: 'info',
-        tag: isGw ? 'Gateway' : 'Telemetría',
+        tag: isGw ? 'Gateway' : joinEv ? 'LoRaWAN' : 'Telemetría',
         message: label,
       });
     };

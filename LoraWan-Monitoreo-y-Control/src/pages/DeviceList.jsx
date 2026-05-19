@@ -198,11 +198,27 @@ function formatDevicePowerCell(device) {
  * Mezcla propiedades leídas de la BD vía `GET /api/devices/latest` (última fila de telemetría por dispositivo; `timestamp` = ts de ingesta).
  * No genera datos nuevos: solo refleja lo persistido en el servidor.
  */
+function deviceRowMatchesTelemetryEvent(dev, detail) {
+  if (!dev || !detail?.deviceId) return false;
+  if (String(dev.deviceId) === String(detail.deviceId)) return true;
+  const norm = (v) => String(v || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+  const rowEui = norm(dev.devEUI || dev.devEui || dev.deviceId);
+  const evEui = norm(detail.properties?.devEUI || detail.properties?.devEui || detail.deviceId);
+  return rowEui.length >= 8 && evEui.length >= 8 && rowEui === evEui;
+}
+
 function mergeDeviceRowWithLatestTelemetry(dev, localUpdate) {
   if (!localUpdate || !localUpdate.properties || typeof localUpdate.properties !== 'object') {
     return applyStaleOfflineConnectStatus(dev);
   }
   const p = localUpdate.properties;
+  let connectStatus = p.connectStatus || p.status || dev.connectStatus;
+  const ev = p.lorawan_event != null ? String(p.lorawan_event).trim() : '';
+  if (ev && /join/i.test(ev)) {
+    connectStatus = 'ONLINE';
+  } else if (!connectStatus && (p.payload_hex || p.fPort != null)) {
+    connectStatus = 'ONLINE';
+  }
   const merged = {
     ...dev,
     ...p,
@@ -220,7 +236,7 @@ function mergeDeviceRowWithLatestTelemetry(dev, localUpdate) {
         ''
     ).trim(),
     devEUI: dev.devEUI || dev.devEui || p.devEUI || p.devEui,
-    connectStatus: p.connectStatus || p.status || dev.connectStatus,
+    connectStatus,
     electricity: p.electricity !== undefined ? p.electricity : dev.electricity,
     lastUpdateTime:
       localUpdate.timestamp > (dev.lastUpdateTime || 0) ? localUpdate.timestamp : dev.lastUpdateTime,
@@ -379,9 +395,9 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
           if (prevDevices.length === 0) return prevDevices;
           const id = String(detail.deviceId);
           return prevDevices.map((dev) =>
-            String(dev.deviceId) === id
+            deviceRowMatchesTelemetryEvent(dev, detail)
               ? mergeDeviceRowWithLatestTelemetry(dev, {
-                  deviceId: id,
+                  deviceId: dev.deviceId,
                   properties: detail.properties,
                   timestamp: detail.timestamp != null ? detail.timestamp : Date.now(),
                 })

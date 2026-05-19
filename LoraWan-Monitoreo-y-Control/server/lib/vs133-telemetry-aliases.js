@@ -49,10 +49,11 @@ function hasBothVs133Totals(props) {
  */
 function needsMergedTelemetryForList(properties, productModel = '') {
   if (!properties || typeof properties !== 'object') return false;
+  const isVs133 = isVs133ProductModel(productModel) || looksLikeVs133Decoded(properties);
   const ev = properties.lorawan_event != null ? String(properties.lorawan_event).trim() : '';
   const hex = properties.payload_hex != null ? String(properties.payload_hex).trim() : '';
-  if (ev && /join/i.test(ev) && !hex) return true;
-  const isVs133 = isVs133ProductModel(productModel) || looksLikeVs133Decoded(properties);
+  /** Join sin payload: fusionar historial solo en VS133 (evita N consultas en WS101/apagador/etc.). */
+  if (ev && /join/i.test(ev) && !hex) return isVs133;
   if (!isVs133) return false;
   if (!hasDecodedPeopleCountTelemetry(properties)) return true;
   return !hasBothVs133Totals(properties);

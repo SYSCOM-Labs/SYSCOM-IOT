@@ -29,8 +29,8 @@ function envFloat(name, def) {
 // ========== Defaults LNS (US915 / UG65; sobreescribibles por env) ==========
 const RX1_DELAY_US_DEFAULT = 5_000_000;
 const RX2_AFTER_RX1_SEC_DEFAULT = 1;
-/** Espacio mínimo entre `imme` clase C al mismo GW (SX130x); defecto 1200 ms (subir si TOO_LATE). */
-const CLASS_C_TX_GAP_MS_DEFAULT = 0;
+/** Espacio mínimo entre downlinks al mismo GW (clase C `imme` + Join-Accept); equilibrio UG65 / Botón OTAA. */
+const CLASS_C_TX_GAP_MS_DEFAULT = 1200;
 const TX_ACK_TIMEOUT_MS_DEFAULT = 5000;
 
 function getRx2AfterRx1Sec() {
@@ -1002,8 +1002,12 @@ function createLorawanLnsEngine(ctx) {
     const pullObj = buildTxpk(phy, rxpk, { imme: false, rxDelaySec, band: gwBand });
     const joinTs = Date.now();
     const radioJoin = radioMetaFromRxpk(rxpk);
-    const joinQueueDelay = joinPullQueueNotBeforeMs();
-    const joinQueueNotBefore = joinQueueDelay > 0 ? Date.now() + joinQueueDelay : 0;
+    const explicitJoinDelay = joinPullQueueNotBeforeMs();
+    /** Misma cola de espaciado que clase C: evita TOO_EARLY/TOO_LATE al encolar Join-Accept tras un `imme` del apagador. */
+    const joinQueueNotBefore =
+      explicitJoinDelay > 0
+        ? joinTs + explicitJoinDelay
+        : scheduleClassCNotBeforeMs(ownerUserId, gatewayEuiNorm, joinTs);
     const joinTelemetryProps = {
       devEUI: devEui,
       lorawan_event: 'join_accept_sent',

@@ -838,6 +838,22 @@ export function resolveTelemetryDisplaySource(telemetryLiveProps, fkStr) {
     }
     return primary;
   }
+  const fkL = fk.toLowerCase();
+  if (fkL === 'temperature' || fkL === 'temperatura') {
+    for (const alt of [
+      'temp',
+      'temperature_c',
+      'indoor_temperature',
+      'ambient_temperature',
+      'current_temperature',
+      'target_temperature',
+      'pt100_1',
+      'pt100_2',
+    ]) {
+      const v = getTelemetryPropertyValue(telemetryLiveProps, alt);
+      if (v !== undefined && v !== null && !(typeof v === 'string' && !String(v).trim())) return v;
+    }
+  }
   if (!isLikelyButtonOrStatusFieldKey(fk)) return undefined;
   const st = getTelemetryPropertyValue(telemetryLiveProps, 'button_event_status');
   if (st !== undefined) return st;

@@ -64,19 +64,20 @@ export const AuthProvider = ({ children }) => {
         const localUser = getLocalUser();
         setUser(localUser);
         setUserProfile(localUser);
-        try {
-          const profile = await getMe();
-          setUserProfile(profile);
-        } catch (e) {
-          if (e?.status === 401) {
-            localLogout();
-            setToken(null);
-            setUser(null);
-            setUserProfile(null);
-          } else {
-            console.warn('Could not refresh profile:', e.message);
-          }
-        }
+        setLoading(false);
+        getMe()
+          .then((profile) => setUserProfile(profile))
+          .catch((e) => {
+            if (e?.status === 401) {
+              localLogout();
+              setToken(null);
+              setUser(null);
+              setUserProfile(null);
+            } else {
+              console.warn('Could not refresh profile:', e.message);
+            }
+          });
+        return;
       }
       setLoading(false);
     };

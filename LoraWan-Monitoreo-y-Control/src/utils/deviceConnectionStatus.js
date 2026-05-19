@@ -43,5 +43,9 @@ export function isDeviceVisuallyOnline(device) {
     return false;
   }
 
+  if (u === 'JOINED' || u === 'CONNECTED' || u === 'ONLINE' || u === 'TRUE' || u === '1') {
+    return true;
+  }
+
   return true;
 }

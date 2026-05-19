@@ -41,6 +41,10 @@ test('needsMergedTelemetryForList: join without payload', () => {
     true
   );
   assert.equal(
+    needsMergedTelemetryForList({ lorawan_event: 'join_accept_sent' }, 'WS101'),
+    false
+  );
+  assert.equal(
     needsMergedTelemetryForList(
       { line_1_total_in: 1, line_1_total_out: 2 },
       'Milesight VS133'

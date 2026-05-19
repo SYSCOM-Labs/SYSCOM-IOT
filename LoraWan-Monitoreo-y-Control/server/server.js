@@ -23,7 +23,11 @@ const {
 const { store, readLnsTxAckPruneSilenceMs } = require('./store');
 const navPerm = require('./navPermissions');
 const { flattenTelemetryProps } = require('./lib/telemetryPayloadUtils');
-const { hasDecodedPeopleCountTelemetry } = require('./lib/vs133-telemetry-aliases');
+const {
+  hasDecodedPeopleCountTelemetry,
+  needsMergedTelemetryForList,
+  applyVs133TelemetryAliases,
+} = require('./lib/vs133-telemetry-aliases');
 const { tryBootstrapMilesightAbpSession, retryMilesightAbpBootstrapAll } = require('./milesight-lns-bootstrap');
 const { validatePasswordStrength } = require('./password-policy');
 const { isAllowedGatewayFrequencyBand } = require('./lorawan-gateway-bands');
@@ -49,12 +53,22 @@ const realtimeHub = createRealtimeHub();
 /** Evita reconstruir el listado completo en cada poll del panel (GET /api/devices). */
 const DEVICES_LIST_CACHE_MS = Math.min(
   30000,
-  Math.max(2000, parseInt(process.env.SYSCOM_DEVICES_LIST_CACHE_MS || '5000', 10) || 5000)
+  Math.max(2000, parseInt(process.env.SYSCOM_DEVICES_LIST_CACHE_MS || '8000', 10) || 8000)
+);
+const DEVICES_LATEST_CACHE_MS = Math.min(
+  15000,
+  Math.max(1000, parseInt(process.env.SYSCOM_DEVICES_LATEST_CACHE_MS || '2500', 10) || 2500)
 );
 let devicesListCache = { key: '', at: 0, content: null };
+let devicesLatestCache = { key: '', at: 0, data: null };
+
+function invalidateDevicesLatestCache() {
+  devicesLatestCache = { key: '', at: 0, data: null };
+}
 
 function invalidateDevicesListCache() {
   devicesListCache = { key: '', at: 0, content: null };
+  invalidateDevicesLatestCache();
 }
 
 function buildDevicesContentForUser(role, userId) {
@@ -78,8 +92,8 @@ function getDevicesContentCached(role, userId) {
   return content;
 }
 
+/** No invalidar el listado en cada uplink (apagador cada pocos s); SSE actualiza la UI. Invalidación explícita en altas/bajas. */
 store.setTelemetryBroadcastHook(({ userIds, deviceId, deviceName, ts, deviceType, properties }) => {
-  invalidateDevicesListCache();
   const ev = { deviceId, deviceName: deviceName || deviceId, timestamp: ts };
   if (deviceType) ev.deviceType = deviceType;
   if (properties && typeof properties === 'object') ev.properties = properties;
@@ -578,6 +592,11 @@ function inferFreshOnlineConnectStatus(row, telemetryRow) {
   if (!Number.isFinite(ts)) return;
   if (isLastDbIngestStale(ts, Date.now(), COMMS_STALE_OFFLINE_MS)) return;
   const cs = row.connectStatus != null ? String(row.connectStatus).trim() : '';
+  const csU = cs.toUpperCase();
+  if (csU === 'JOINED' || csU === 'CONNECTED') {
+    row.connectStatus = 'ONLINE';
+    return;
+  }
   if (cs) return;
   row.connectStatus = 'ONLINE';
 }
@@ -649,7 +668,7 @@ function buildDevicesContentAssignedOnly(userId) {
   const regIds = registered.map((r) => r.deviceId).filter(Boolean);
   const decodeMap = store.getDeviceDecodeConfigMap(regIds);
   const licenseMap = store.getDeviceLicenseMetaMap(regIds);
-  const mergedMap = store.getDeviceListTelemetryMap(userId, regIds, decodeMap, { historyRowLimit: 12 });
+  const mergedMap = store.getDeviceListTelemetryMap(userId, regIds, decodeMap, { historyRowLimit: 6 });
 
   const content = [];
   for (const reg of registered) {
@@ -756,7 +775,7 @@ function buildDevicesContentSuperadmin() {
   for (const [tuid, dids] of byTelemetryUser) {
     Object.assign(
       mergedByDevice,
-      store.getDeviceListTelemetryMap(tuid, dids, decodeMap, { historyRowLimit: 12 })
+      store.getDeviceListTelemetryMap(tuid, dids, decodeMap, { historyRowLimit: 6 })
     );
   }
 
@@ -1158,6 +1177,9 @@ function saveIngestEntry(userId, data) {
   const properties = { ...baseProps };
   properties.deviceId = canonicalDeviceId;
   properties.deviceName = normalizedDeviceName;
+  if (isGatewayPseudoDeviceId(canonicalDeviceId)) {
+    properties.deviceType = 'GATEWAY';
+  }
   if (!properties.devEUI && properties.devEui) properties.devEUI = properties.devEui;
   if (!properties.devEui && properties.devEUI) properties.devEui = properties.devEUI;
   const csRaw = properties.connectStatus != null ? String(properties.connectStatus).trim() : '';
@@ -3629,9 +3651,19 @@ app.get('/api/downlinks', authMiddleware, (req, res) => {
 
 app.get('/api/devices/:deviceId/properties', authMiddleware, deviceAssignmentMiddleware, (req, res) => {
   const tuid = telemetryUserIdForRequest(req, req.params.deviceId);
-  const latest = store.getMergedLatestTelemetryForDevice(tuid, req.params.deviceId, {
-    historyRowLimit: 24,
-  });
+  const did = String(req.params.deviceId);
+  const decodeCfg = store.getDeviceDecodeConfig(did);
+  const pm = decodeCfg && decodeCfg.productModel != null ? String(decodeCfg.productModel).trim() : '';
+  let latest = store.getLatestForDevice(tuid, did);
+  if (latest && latest.properties) {
+    const props = { ...latest.properties };
+    if (needsMergedTelemetryForList(props, pm)) {
+      latest = store.getMergedLatestTelemetryForDevice(tuid, did, { historyRowLimit: 8 });
+    } else {
+      applyVs133TelemetryAliases(props, { productModel: pm });
+      latest = { ...latest, properties: props };
+    }
+  }
   res.json({
     status: 'Success',
     data: {
@@ -4302,15 +4334,18 @@ app.post(
 
 // ── Telemetry (cliente autenticado) ───────────────────────
 app.get('/api/devices/latest', authMiddleware, (req, res) => {
-  const m =
-    req.user.role === 'superadmin' ? store.getGlobalLatestMap() : store.getLatestMap(req.user.id);
-  if (req.user.role === 'superadmin') {
-    res.json(Object.values(m));
-    return;
+  const key = `${req.user.role}:${req.user.id}`;
+  const now = Date.now();
+  if (
+    devicesLatestCache.key === key &&
+    devicesLatestCache.data &&
+    now - devicesLatestCache.at < DEVICES_LATEST_CACHE_MS
+  ) {
+    return res.json(devicesLatestCache.data);
   }
-  const assigned = new Set(store.listUserDevices(req.user.id).map((r) => String(r.deviceId)));
-  const out = Object.values(m).filter((t) => assigned.has(String(t.deviceId)));
-  res.json(out);
+  const data = store.getLatestTelemetryListForActor(req.user.id, req.user.role);
+  devicesLatestCache = { key, at: now, data };
+  res.json(data);
 });
 
 app.post('/api/telemetry', authMiddleware, staffOnlyMiddleware, (req, res) => {

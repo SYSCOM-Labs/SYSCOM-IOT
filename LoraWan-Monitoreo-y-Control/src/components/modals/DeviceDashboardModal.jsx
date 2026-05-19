@@ -5,6 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { getLatestDeviceData } from '../../services/localAuth';
 import { applyStaleOfflineConnectStatus, isDeviceVisuallyOnline } from '../../utils/deviceConnectionStatus';
+import { mergeDeviceTelemetryForWidgets } from '../../utils/gatewayPayload';
 import BudgetSensorsDashboard from '../dashboard/BudgetSensorsDashboard';
 import './DeviceDashboardModal.css';
 
@@ -55,20 +56,25 @@ const DeviceDashboardModal = ({ device: initialDevice, onClose }) => {
     });
 
     const liveFromLocal = localEntry ? localEntry.properties || {} : {};
-    const combinedLive = { ...initialDevice, ...liveFromAPI, ...liveFromLocal };
-    const lastSeen = [apiData.lastTimestamp, localEntry?.timestamp, initialDevice.lastUpdateTime]
+    const flattened = mergeDeviceTelemetryForWidgets(initialDevice, liveFromAPI, liveFromLocal);
+    const lastSeen = [apiData.lastTimestamp, localEntry?.timestamp, initialDevice.lastUpdateTime, flattened.lastUpdateTime]
       .filter((x) => x != null)
       .map((x) => (typeof x === 'number' ? x : new Date(x).getTime()))
       .filter((n) => Number.isFinite(n));
-    const lastUpdateTime = lastSeen.length ? Math.max(...lastSeen) : combinedLive.lastUpdateTime ?? null;
+    const lastUpdateTime = lastSeen.length ? Math.max(...lastSeen) : flattened.lastUpdateTime ?? null;
 
     setLocalDevice(
       applyStaleOfflineConnectStatus({
-        ...combinedLive,
+        ...initialDevice,
+        ...flattened,
         lastUpdateTime,
       })
     );
   }, [initialDevice, credentials, token]);
+
+  useEffect(() => {
+    mergeDeviceData();
+  }, [mergeDeviceData]);
 
   const handleRefresh = async () => {
     setRefreshing(true);

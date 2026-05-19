@@ -222,6 +222,77 @@ export function telemetryKeyPriorityBonus(key) {
   return 0;
 }
 
+const DEVICE_ROW_META_KEYS = new Set([
+  'deviceId',
+  'id',
+  'device_id',
+  'uuid',
+  '_id',
+  'name',
+  'deviceName',
+  'sn',
+  'model',
+  'productModel',
+  'connectStatus',
+  'registered',
+  'registeredOnly',
+  'assignments',
+  'superadminGlobalView',
+  'tag',
+  'notes',
+  'deviceSharedPresets',
+  'lorawanClass',
+  'licenseExpiresAt',
+  'licenseValid',
+  'licenseDaysLeft',
+  'ingestStatus',
+  'properties',
+  'devEUI',
+  'devEui',
+  'lastUpdateTime',
+]);
+
+function assignScalarTelemetryFields(acc, src) {
+  if (!src || typeof src !== 'object' || Array.isArray(src)) return;
+  for (const [k, v] of Object.entries(src)) {
+    if (DEVICE_ROW_META_KEYS.has(k)) continue;
+    if (v === undefined || v === null) continue;
+    if (typeof v === 'object' && !Array.isArray(v)) continue;
+    acc[k] = v;
+  }
+  const nest = src.properties;
+  if (nest && typeof nest === 'object' && !Array.isArray(nest)) {
+    for (const [k, v] of Object.entries(nest)) {
+      if (DEVICE_ROW_META_KEYS.has(k)) continue;
+      if (v === undefined || v === null) continue;
+      if (typeof v === 'object' && !Array.isArray(v)) continue;
+      acc[k] = v;
+    }
+  }
+}
+
+/**
+ * Fusiona fila de listado + capas API/SSE en un objeto plano para widgets (modal dispositivo / BSD).
+ * @param {Record<string, unknown> | null | undefined} deviceRow
+ * @param {...Record<string, unknown>} extraLayers
+ */
+export function mergeDeviceTelemetryForWidgets(deviceRow, ...extraLayers) {
+  const acc = {};
+  assignScalarTelemetryFields(acc, deviceRow);
+  for (const layer of extraLayers) {
+    assignScalarTelemetryFields(acc, layer);
+  }
+  const tsCandidates = [
+    deviceRow?.lastUpdateTime,
+    ...extraLayers.map((l) => l && l.lastUpdateTime),
+  ]
+    .filter((x) => x != null)
+    .map((x) => (typeof x === 'number' ? x : new Date(x).getTime()))
+    .filter((n) => Number.isFinite(n));
+  if (tsCandidates.length) acc.lastUpdateTime = Math.max(...tsCandidates);
+  return expandNestedGatewayTelemetry(acc);
+}
+
 /** Ordenar claves para selectores: proceso/sensores habituales primero, luego alfabético. */
 export function sortTelemetryPickerKeys(keys) {
   return [...keys].sort((a, b) => {

@@ -125,6 +125,7 @@ function initSchema(db) {
     );
     CREATE INDEX IF NOT EXISTS idx_telemetry_user_ts ON telemetry(user_id, ts DESC);
     CREATE INDEX IF NOT EXISTS idx_telemetry_user_device_ts ON telemetry(user_id, device_id, ts DESC);
+    CREATE INDEX IF NOT EXISTS idx_telemetry_device_ts ON telemetry(device_id, ts DESC);
 
     CREATE TABLE IF NOT EXISTS device_labels (
       user_id TEXT NOT NULL,
@@ -1630,7 +1631,11 @@ class Store {
     }
 
     const top = rowsForMerge[0];
-    const ts = Number(top.ts);
+    let ts = Number(top.ts);
+    for (const row of rows) {
+      const t = Number(row.ts);
+      if (Number.isFinite(t) && (!Number.isFinite(ts) || t > ts)) ts = t;
+    }
     mergedFlat.lastUpdateTime = ts;
     if (hasDecodedPeopleCountTelemetry(mergedFlat)) {
       delete mergedFlat.ingestStatus;
@@ -1687,8 +1692,8 @@ class Store {
 
     const latestMap = this.getLatestMap(uid);
     const rowLimit = Math.min(
-      32,
-      Math.max(1, Number.isFinite(Number(opts.historyRowLimit)) ? Math.floor(Number(opts.historyRowLimit)) : 12)
+      16,
+      Math.max(1, Number.isFinite(Number(opts.historyRowLimit)) ? Math.floor(Number(opts.historyRowLimit)) : 6)
     );
     const out = {};
     const needMerge = [];
@@ -1717,14 +1722,38 @@ class Store {
     const uid = String(userId || '').trim();
     if (!uid) return {};
     const rowLimit = Math.min(
-      500,
-      Math.max(1, Number.isFinite(Number(opts.historyRowLimit)) ? Math.floor(Number(opts.historyRowLimit)) : 12)
+      32,
+      Math.max(1, Number.isFinite(Number(opts.historyRowLimit)) ? Math.floor(Number(opts.historyRowLimit)) : 8)
     );
     const endMs = Date.now();
     const filterSet =
       Array.isArray(deviceIds) && deviceIds.length
         ? new Set(deviceIds.map((d) => String(d).trim()).filter(Boolean))
         : null;
+
+    const map = {};
+    const mergeRows = (did, rows) => {
+      const merged = this._mergeTelemetryHistoryRows(rows);
+      if (!merged) return;
+      const { top, mergedFlat, timestamp } = merged;
+      map[did] = {
+        id: String(top.id),
+        userId: top.user_id,
+        deviceId: did,
+        deviceName: top.device_name || did,
+        properties: mergedFlat,
+        timestamp,
+      };
+    };
+
+    /** Consulta por dispositivo (índice user+device+ts); evita WINDOW sobre toda la tabla del usuario. */
+    if (filterSet && filterSet.size > 0 && filterSet.size <= 40) {
+      for (const did of filterSet) {
+        const rows = this.st.telemetryHistory.all(uid, did, 0, endMs, rowLimit);
+        if (rows.length) mergeRows(did, rows);
+      }
+      return map;
+    }
 
     const rawRows = this.st.telemetryHistoryMergedBatch.all(uid, 0, endMs, rowLimit);
     const grouped = {};
@@ -1735,20 +1764,8 @@ class Store {
       if (!grouped[did]) grouped[did] = [];
       grouped[did].push(row);
     }
-
-    const map = {};
     for (const [did, rows] of Object.entries(grouped)) {
-      const merged = this._mergeTelemetryHistoryRows(rows);
-      if (!merged) continue;
-      const { top, mergedFlat, timestamp } = merged;
-      map[did] = {
-        id: String(top.id),
-        userId: top.user_id,
-        deviceId: did,
-        deviceName: top.device_name || did,
-        properties: mergedFlat,
-        timestamp,
-      };
+      mergeRows(did, rows);
     }
     return map;
   }
@@ -2569,6 +2586,16 @@ class Store {
    * @param {Buffer} tokenBuf 2 bytes
    * @param {object} json
    */
+  /** Por defecto activo: UG65 a veces ACK con token distinto; correlaciona el último inflight del GW. `=0` para desactivar. */
+  _lnsTxAckMatchLatestInflightEnabled() {
+    const raw = process.env.SYSCOM_LNS_TX_ACK_MATCH_LATEST_INFLIGHT;
+    if (raw != null && String(raw).trim() !== '') {
+      const v = String(raw).trim().toLowerCase();
+      return v !== '0' && v !== 'false' && v !== 'off';
+    }
+    return true;
+  }
+
   lnsHandleGatewayTxAck(gwNorm, tokenBuf, json) {
     if (!gwNorm || !tokenBuf || tokenBuf.length < 2) return;
     const nGw = normalizeLnsGatewayEuiKey(gwNorm);
@@ -2580,10 +2607,7 @@ class Store {
 
     let row = this.st.lnsTxInflightSelectJoin.get(nGw, th, tl);
     let ackMatchMode = 'token';
-    if (
-      !row &&
-      String(process.env.SYSCOM_LNS_TX_ACK_MATCH_LATEST_INFLIGHT || '').trim() === '1'
-    ) {
+    if (!row && this._lnsTxAckMatchLatestInflightEnabled()) {
       row = this.st.lnsTxInflightSelectLatestAwaitAppByGw.get(nGw);
       if (row) {
         ackMatchMode = 'latest_inflight';
@@ -3585,6 +3609,64 @@ class Store {
       }
     }
     return map;
+  }
+
+  /**
+   * Última telemetría solo de equipos asignados al actor (evita GROUP BY global en superadmin).
+   * @param {string} userId
+   * @param {string} [role]
+   * @returns {Array<{ deviceId: string, properties: object, timestamp: number, … }>}
+   */
+  getLatestTelemetryListForActor(userId, role = '') {
+    const uid = String(userId || '').trim();
+    if (!uid) return [];
+
+    const collectMap = (tuid, deviceIds, decodeMap, rowLimit) => {
+      const ids = deviceIds.filter((did) => did && !/^gateway-/i.test(did));
+      if (!ids.length) return {};
+      return this.getDeviceListTelemetryMap(tuid, ids, decodeMap, { historyRowLimit: rowLimit });
+    };
+
+    const rowLimit = 6;
+
+    if (role !== 'superadmin') {
+      const regIds = this.listUserDevices(uid).map((r) => String(r.deviceId).trim()).filter(Boolean);
+      const decodeMap = this.getDeviceDecodeConfigMap(regIds);
+      return Object.values(collectMap(uid, regIds, decodeMap, rowLimit));
+    }
+
+    const udList = this.listUserDevicesWithAccounts();
+    const anyUdByDevice = {};
+    for (const u of udList) {
+      if (!anyUdByDevice[u.deviceId]) anyUdByDevice[u.deviceId] = u;
+    }
+    const deviceIds = new Set(udList.map((u) => u.deviceId));
+    for (const licDid of this.listLicensedDeviceIds()) deviceIds.add(licDid);
+
+    const deviceIdList = [...deviceIds];
+    const decodeMap = this.getDeviceDecodeConfigMap(deviceIdList);
+    const superadminIds = this.listSuperadminUserIds();
+    const seedUserId = superadminIds[0] || uid;
+    const telemetryUserCache = new Map();
+    const byTelemetryUser = new Map();
+
+    for (const deviceId of deviceIdList) {
+      const anyUd = anyUdByDevice[deviceId];
+      const seedUser = (anyUd && anyUd.userId) || seedUserId;
+      let tuid = telemetryUserCache.get(deviceId);
+      if (!tuid) {
+        tuid = this.resolveTelemetryUserId(seedUser, deviceId, { role: 'superadmin' });
+        telemetryUserCache.set(deviceId, tuid);
+      }
+      if (!byTelemetryUser.has(tuid)) byTelemetryUser.set(tuid, []);
+      byTelemetryUser.get(tuid).push(deviceId);
+    }
+
+    const mergedByDevice = {};
+    for (const [tuid, dids] of byTelemetryUser) {
+      Object.assign(mergedByDevice, collectMap(tuid, dids, decodeMap, rowLimit));
+    }
+    return Object.values(mergedByDevice);
   }
 
   /** [{ deviceId, userId, email, role, displayName, tag, productModel }] */

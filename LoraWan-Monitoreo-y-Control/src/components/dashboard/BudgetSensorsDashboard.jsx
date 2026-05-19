@@ -45,6 +45,7 @@ import {
   parseTelemetryScalar,
   parseTelemetryBoolish,
   expandNestedGatewayTelemetry,
+  mergeDeviceTelemetryForWidgets,
   PROPERTY_INFER_IGNORE_SET,
   GATEWAY_TOGGLE_KEY_HINTS,
 } from '../../utils/gatewayPayload';
@@ -316,11 +317,16 @@ function panelDeviceDeuiLabel(d) {
 }
 
 /** Panel y vista dispositivo: widgets en vivo (sin volver a pedir todo el listado). */
-const PANEL_LIVE_REFRESH_MS = 5000;
+/** Poll de respaldo; la telemetría en vivo llega por SSE. */
+const PANEL_LIVE_REFRESH_MS = 20000;
+/** Vista dispositivo (modal): refresco en segundo plano; la pintura inicial es síncrona desde `device`. */
+const DEVICE_LIVE_REFRESH_MS = 15000;
+/** Tras un evento SSE, omitir GET /devices/latest y /properties (evita tormenta HTTP). */
+const PANEL_SSE_SKIP_HTTP_MS = 18000;
 /** Listado completo GET /api/devices (operación pesada; no cada 2,5 s). */
 const PANEL_DEVICES_LIST_REFRESH_MS = 30000;
 /** Mínimo entre llamadas GET …/properties por dispositivo en el panel. */
-const PANEL_PROPERTIES_FETCH_MIN_MS = 20000;
+const PANEL_PROPERTIES_FETCH_MIN_MS = 90000;
 /** Consultas de historial de gráficos (línea / barras): <5 s respecto a un evento en backend + red. */
 const DASH_CHART_HISTORY_POLL_MS = 4000;
 
@@ -634,6 +640,44 @@ function expandMergedDeviceTelemetryLive(raw) {
   return expandNestedGatewayTelemetry(base);
 }
 
+/** Metadatos del listado de dispositivos; no son lecturas de telemetría. */
+const DEVICE_ROW_META_KEYS = new Set([
+  'deviceId',
+  'id',
+  'device_id',
+  'uuid',
+  '_id',
+  'name',
+  'deviceName',
+  'sn',
+  'model',
+  'productModel',
+  'connectStatus',
+  'registered',
+  'registeredOnly',
+  'assignments',
+  'superadminGlobalView',
+  'tag',
+  'notes',
+  'deviceSharedPresets',
+  'lorawanClass',
+  'licenseExpiresAt',
+  'licenseValid',
+  'licenseDaysLeft',
+  'ingestStatus',
+  'properties',
+  'devEUI',
+  'devEui',
+  'lastUpdateTime',
+]);
+
+/**
+ * Última telemetría conocida del listado/API para pintar widgets al abrir el modal sin esperar fetch.
+ */
+function buildSeedLivePropsFromDevice(dev) {
+  return mergeDeviceTelemetryForWidgets(dev);
+}
+
 /** Clave de telemetría de entrada para la fórmula (si no se indica, la del campo principal). */
 function telemetryFieldKeyForFormula(cfg, defaultKey) {
   const fs = cfg?.data?.formulaSourceKey != null ? String(cfg.data.formulaSourceKey).trim() : '';
@@ -779,15 +823,28 @@ function findLocalEntry(device, latestData) {
   );
 }
 
+/** Propiedades de telemetría en fila de listado (API ya fusiona `...p` en la raíz del objeto). */
+function panelDeviceTelemetryProps(dev) {
+  if (!dev || typeof dev !== 'object') return {};
+  const payload = {};
+  for (const [k, v] of Object.entries(dev)) {
+    if (DEVICE_ROW_META_KEYS.has(k)) continue;
+    if (v == null) continue;
+    if (typeof v === 'object' && !Array.isArray(v)) continue;
+    payload[k] = v;
+  }
+  if (dev.properties && typeof dev.properties === 'object' && !Array.isArray(dev.properties)) {
+    Object.assign(payload, dev.properties);
+  }
+  return payload;
+}
+
 function buildPanelSensors(devices, latestData) {
   const list = [];
   let nextId = 1;
   for (const dev of devices.slice(0, 6)) {
     const entry = findLocalEntry(dev, latestData || []);
-    const fromApiRow =
-      dev.properties && typeof dev.properties === 'object' && !Array.isArray(dev.properties)
-        ? dev.properties
-        : {};
+    const fromApiRow = panelDeviceTelemetryProps(dev);
     const props = { ...fromApiRow, ...(entry?.properties || {}) };
     const prefix = dev.name || dev.sn || String(dev.deviceId || '').slice(0, 8);
     const chunk = propertiesToSensors(props, nextId, prefix, dev.deviceId);
@@ -1777,6 +1834,208 @@ function computeBarChartSeriesFromRows(rows, cfg, barCfg, fk, telSnapshot, now =
   };
 }
 
+/** Monta o actualiza Chart.js del widget de barras (reutilizado para precarga y tras fetch de historial). */
+function mountBarChartFromComputed({
+  computed,
+  cfg,
+  fk,
+  canvasRef,
+  chartRef,
+  tooltipBridgeRef,
+}) {
+  if (!computed) return false;
+  const canvas = canvasRef.current;
+  const ctx = canvas?.getContext('2d');
+  if (!canvas || !ctx) return false;
+
+  const {
+    labels,
+    values,
+    fullLabels,
+    truncated,
+    hasTarget,
+    targetNum,
+    legendActual,
+    legendTarget,
+    dec,
+    unit,
+    nBar,
+    yMin,
+    yMax,
+    barFillColors,
+    maxBarThickness,
+  } = computed;
+
+  if (chartRef.current) {
+    chartRef.current.destroy();
+    chartRef.current = null;
+  }
+
+  const scrollWrap = canvas.parentElement;
+  let distFromRight = null;
+  if (scrollWrap && scrollWrap.scrollWidth > scrollWrap.clientWidth) {
+    distFromRight = scrollWrap.scrollWidth - scrollWrap.clientWidth - scrollWrap.scrollLeft;
+  }
+  const pxPerBar = nBar > 800 ? 2 : nBar > 400 ? 2.5 : nBar > 144 ? 3 : nBar > 60 ? 5 : 12;
+  if (nBar > 36) {
+    canvas.style.minWidth = `${Math.ceil(Math.max(320, nBar * pxPerBar))}px`;
+  } else {
+    canvas.style.minWidth = '';
+  }
+
+  const tickColor = 'rgba(255,255,255,0.92)';
+  const xGrid = { display: true, color: 'rgba(255,255,255,0.07)', drawBorder: false };
+  const yGrid = { display: true, color: 'rgba(255,255,255,0.08)', drawBorder: false };
+
+  let chart;
+  try {
+    chart = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          {
+            type: 'bar',
+            label: legendActual,
+            data: values,
+            backgroundColor: barFillColors,
+            borderColor: 'rgba(13, 148, 136, 1)',
+            borderWidth: 0,
+            borderRadius: nBar > 200 ? 1 : 4,
+            maxBarThickness,
+          },
+          ...(hasTarget
+            ? [
+                {
+                  type: 'line',
+                  label: legendTarget,
+                  data: labels.map(() => targetNum),
+                  borderColor: '#ef4444',
+                  backgroundColor: '#ef4444',
+                  borderWidth: 2,
+                  pointRadius: 0,
+                  pointHoverRadius: 4,
+                  pointBackgroundColor: '#ef4444',
+                  tension: 0,
+                  order: 0,
+                },
+              ]
+            : []),
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        datasets: {
+          bar: {
+            categoryPercentage: nBar > 120 ? 1 : 0.88,
+            barPercentage: nBar > 120 ? 1 : 0.92,
+          },
+        },
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: {
+              color: tickColor,
+              font: { weight: '600', size: 11 },
+              usePointStyle: true,
+              padding: 14,
+            },
+          },
+          tooltip: {
+            callbacks: {
+              title(items) {
+                const i = items[0]?.dataIndex ?? 0;
+                return fullLabels[i] ?? labels[i] ?? '';
+              },
+              label(item) {
+                const ch = item.chart;
+                const t = ch.$barTooltipCtx;
+                const dsIdx = item.datasetIndex ?? 0;
+                const leg = dsIdx > 0 ? legendTarget : legendActual;
+                const v = item.parsed?.y;
+                if (v == null || !Number.isFinite(v)) return `${leg}: sin dato`;
+                const processed = formatTelemetryChartTooltipValue(
+                  v,
+                  t?.fieldKey || fk,
+                  t?.model ?? null,
+                  t?.hints ?? null,
+                  {
+                    unit,
+                    decimals: dec,
+                    ranges: t?.gauge?.ranges,
+                    scaleMin: t?.gauge?.scaleMin,
+                    scaleMax: t?.gauge?.scaleMax,
+                  }
+                );
+                return `${leg}: ${processed}`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            grid: xGrid,
+            ticks: {
+              color: tickColor,
+              font: { weight: '600', size: 10 },
+              maxRotation: nBar > 80 ? 60 : 0,
+              autoSkip: true,
+              autoSkipPadding: 4,
+              maxTicksLimit: nBar > 400 ? 16 : nBar > 120 ? 12 : nBar > 60 ? 10 : 24,
+            },
+          },
+          y: {
+            beginAtZero: false,
+            suggestedMin: yMin,
+            suggestedMax: yMax,
+            grid: yGrid,
+            ticks: {
+              color: tickColor,
+              font: { weight: '700', size: 11 },
+              callback(v) {
+                const n = Number(v);
+                return Number.isFinite(n) ? n.toFixed(dec) : v;
+              },
+            },
+            title: {
+              display: true,
+              text: unit ? `Valor (${unit})` : 'Valor',
+              color: tickColor,
+              font: { size: 11, weight: '600' },
+            },
+          },
+        },
+      },
+    });
+  } catch (e) {
+    console.warn('[BSD bar chart] Chart init', e);
+    return false;
+  }
+
+  chart.$barTooltipCtx = {
+    fieldKey: fk,
+    model: tooltipBridgeRef.current.model,
+    hints: tooltipBridgeRef.current.hints,
+    unit,
+    dec,
+    gauge: cfg.gauge,
+  };
+  chartRef.current = chart;
+  chart.update('none');
+  requestAnimationFrame(() => {
+    const w = canvasRef.current?.parentElement;
+    if (w && distFromRight != null) {
+      const max = w.scrollWidth - w.clientWidth;
+      if (max > 0) w.scrollLeft = Math.max(0, max - distFromRight);
+    }
+    safeChartResize(chartRef.current);
+  });
+  return { chart, truncated };
+}
+
 function loadDownlinksFromStorage(deviceId) {
   if (!deviceId) return [];
   try {
@@ -1813,42 +2072,91 @@ function formatLastTelemetryUpdateLine(ts) {
 
 /** Evita GET /properties por dispositivo en cada tick del panel. */
 const panelPropertiesFetchAtByDevice = new Map();
+/** Vista dispositivo (modal): /properties al abrir y como máximo cada 12 s. */
+const deviceModalPropertiesFetchAtByDevice = new Map();
+const DEVICE_MODAL_PROPERTIES_MIN_MS = 12000;
+
+function deviceRowHasScalarTelemetry(dev) {
+  if (!dev || typeof dev !== 'object') return false;
+  for (const [k, v] of Object.entries(dev)) {
+    if (DEVICE_ROW_META_KEYS.has(k)) continue;
+    if (v === undefined || v === null) continue;
+    if (typeof v === 'object' && !Array.isArray(v)) continue;
+    if (typeof v === 'string' && !String(v).trim()) continue;
+    return true;
+  }
+  return false;
+}
+
+function deviceRowMatchesRealtimeId(dev, deviceId) {
+  if (!dev || deviceId == null) return false;
+  if (String(dev.deviceId) === String(deviceId)) return true;
+  const norm = (v) => String(v || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+  const rowEui = norm(dev.devEUI || dev.devEui || dev.deviceId);
+  const evEui = norm(deviceId);
+  return rowEui.length >= 8 && evEui.length >= 8 && rowEui === evEui;
+}
+
+/** Mezcla payload SSE sobre fila de dispositivo sin round-trip HTTP. */
+function mergeRealtimeTelemetryIntoDeviceRow(dev, detail) {
+  if (!dev || !detail?.properties || typeof detail.properties !== 'object') return dev;
+  const p = detail.properties;
+  const merged = {
+    ...dev,
+    ...p,
+    deviceId: dev.deviceId,
+    name: dev.name,
+    tag: dev.tag,
+    productModel: dev.productModel,
+    lastUpdateTime: detail.timestamp != null ? detail.timestamp : dev.lastUpdateTime,
+  };
+  const ev = p.lorawan_event != null ? String(p.lorawan_event).trim() : '';
+  if (ev && /join/i.test(ev)) merged.connectStatus = 'ONLINE';
+  else if (p.connectStatus || p.status || p.payload_hex || p.fPort != null) {
+    merged.connectStatus = p.connectStatus || p.status || merged.connectStatus || 'ONLINE';
+  }
+  return applyStaleOfflineConnectStatus(merged);
+}
 
 /**
  * @param {unknown} [preloadedLatest] si viene de un batch del panel, evita N llamadas idénticas a `/api/devices/latest`.
+ * @param {{ alwaysFetchProperties?: boolean }} [opts] vista dispositivo: siempre refresca `/properties` en paralelo.
  */
-async function mergeDeviceLive(dev, credentials, token, preloadedLatest = undefined) {
+async function mergeDeviceLive(dev, credentials, token, preloadedLatest = undefined, opts = {}) {
   if (!dev?.deviceId) return {};
   try {
-    let latest = [];
-    if (preloadedLatest !== undefined) {
-      latest = Array.isArray(preloadedLatest) ? preloadedLatest : [];
-    } else {
-      try {
-        latest = (await getLatestDeviceData()) || [];
-      } catch {
-        latest = [];
-      }
-    }
     const did = String(dev.deviceId);
-    const listHasCounts =
-      dev.line_1_total_in != null ||
-      dev.people_count != null ||
-      dev.line_1_total_out != null ||
-      dev.people_count_out != null;
     const now = Date.now();
-    const lastPropsFetch = panelPropertiesFetchAtByDevice.get(did) || 0;
-    const shouldFetchProperties =
-      !listHasCounts || now - lastPropsFetch >= PANEL_PROPERTIES_FETCH_MIN_MS;
+    const isDeviceView = opts.view === 'device';
+    const lastDeviceModalFetch = deviceModalPropertiesFetchAtByDevice.get(did) || 0;
+    const lastPanelFetch = panelPropertiesFetchAtByDevice.get(did) || 0;
+    const shouldFetchProperties = isDeviceView
+      ? opts.alwaysFetchProperties === true ||
+        !deviceRowHasScalarTelemetry(dev) ||
+        now - lastDeviceModalFetch >= DEVICE_MODAL_PROPERTIES_MIN_MS
+      : opts.alwaysFetchProperties === true ||
+        !deviceRowHasScalarTelemetry(dev) ||
+        now - lastPanelFetch >= PANEL_PROPERTIES_FETCH_MIN_MS;
+
+    const latestPromise =
+      preloadedLatest !== undefined
+        ? Promise.resolve(Array.isArray(preloadedLatest) ? preloadedLatest : [])
+        : getLatestDeviceData().catch(() => []);
+
+    const propsPromise = shouldFetchProperties
+      ? fetchDeviceProperties(dev.deviceId, credentials, token).catch(() => null)
+      : Promise.resolve(null);
+
+    const [latest, propsResp] = await Promise.all([latestPromise, propsPromise]);
 
     let liveFromAPI = {};
     let apiData = {};
-    if (shouldFetchProperties) {
-      const propsResp = await fetchDeviceProperties(dev.deviceId, credentials, token);
-      panelPropertiesFetchAtByDevice.set(did, now);
+    if (propsResp) {
+      if (isDeviceView) deviceModalPropertiesFetchAtByDevice.set(did, now);
+      else panelPropertiesFetchAtByDevice.set(did, now);
       apiData = propsResp.data?.data || {};
       liveFromAPI = apiData.properties || propsResp.data?.properties || {};
-    } else {
+    } else if (!shouldFetchProperties) {
       liveFromAPI = {};
       for (const k of Object.keys(dev)) {
         if (
@@ -2132,10 +2440,14 @@ export default function BudgetSensorsDashboard({
   const deviceLiveTickRef = useRef(() => Promise.resolve());
   const panelListTickRef = useRef(() => Promise.resolve());
   const panelMergeTickRef = useRef(() => Promise.resolve());
+  const lastRealtimeTelemetryMsRef = useRef(0);
   const [controlDeviceId, setControlDeviceId] = useState(null);
-  const [liveProps, setLiveProps] = useState({});
+  const [liveProps, setLiveProps] = useState(() =>
+    variant === 'device' && device ? mergeDeviceTelemetryForWidgets(device) : {}
+  );
   /** Panel: telemetría fusionada por deviceId (widgets enlazan dispositivos distintos al «control»). */
   const [panelTelemetryByDeviceId, setPanelTelemetryByDeviceId] = useState({});
+  const panelTelemetryByDeviceIdRef = useRef(panelTelemetryByDeviceId);
   /** Conserva claves de telemetría entre refrescos si el nuevo payload no las trae (p. ej. RSSI ausente en una tanda). */
   const telemetryStickyRef = useRef({ key: '', merged: {} });
   /**
@@ -2150,10 +2462,13 @@ export default function BudgetSensorsDashboard({
         : controlDeviceId != null
           ? `p:${String(controlDeviceId)}`
           : '';
-    const rawBase =
-      liveProps && typeof liveProps === 'object' && !Array.isArray(liveProps) ? liveProps : {};
-    const base = hoistTelemetryPropertiesLayer(rawBase);
-    const expanded = expandNestedGatewayTelemetry(base);
+    const deviceLayer =
+      variant === 'device' && device ? mergeDeviceTelemetryForWidgets(device) : {};
+    const rawBase = hoistTelemetryPropertiesLayer({
+      ...deviceLayer,
+      ...(liveProps && typeof liveProps === 'object' && !Array.isArray(liveProps) ? liveProps : {}),
+    });
+    const expanded = expandNestedGatewayTelemetry(rawBase);
     if (telemetryStickyRef.current.key !== deviceKey) {
       telemetryStickyRef.current = { key: deviceKey, merged: {} };
     }
@@ -2177,7 +2492,7 @@ export default function BudgetSensorsDashboard({
     if (mergedTs != null) next.lastUpdateTime = mergedTs;
     telemetryStickyRef.current.merged = next;
     return next;
-  }, [liveProps, variant, dashDeviceId, controlDeviceId]);
+  }, [liveProps, device, variant, dashDeviceId, controlDeviceId]);
 
   const panelTelemetryExpandedByDeviceId = useMemo(() => {
     const o = {};
@@ -2202,6 +2517,49 @@ export default function BudgetSensorsDashboard({
   useEffect(() => {
     textWidgetDisplayStickyRef.current = {};
   }, [variant, dashDeviceId, controlDeviceId]);
+
+  /** Pintura instantánea al abrir / actualizar el modal de dispositivo (fila listado + props en `device`). */
+  useEffect(() => {
+    if (variant !== 'device' || !device) return;
+    const key = `d:${String(device.deviceId || '').trim()}`;
+    telemetryStickyRef.current = { key, merged: {} };
+    textWidgetDisplayStickyRef.current = {};
+    const seed = mergeDeviceTelemetryForWidgets(device);
+    setLiveProps(seed);
+    const devSid =
+      resolveDeviceDashboardStorageId(device) ||
+      (device.deviceId != null ? String(device.deviceId) : '');
+    const built = propertiesToSensors(seed, 1, '', devSid);
+    if (built.length) setSensors(built);
+  }, [variant, device]);
+
+  /** Refresco /properties en cuanto se abre el modal (sin esperar al intervalo). */
+  useEffect(() => {
+    if (variant !== 'device' || !device?.deviceId) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const merged = await mergeDeviceLive(device, credentials, token, {
+          view: 'device',
+          alwaysFetchProperties: true,
+        });
+        if (cancelled) return;
+        const flat = mergeDeviceTelemetryForWidgets(device, merged);
+        setLiveProps(flat);
+        const devSid =
+          resolveDeviceDashboardStorageId(device) ||
+          (device.deviceId != null ? String(device.deviceId) : '');
+        const built = propertiesToSensors(flat, 1, '', devSid);
+        if (built.length) setSensors(built);
+        setSatisfactionPct(isDeviceVisuallyOnline({ ...device, ...flat }) ? 100 : 0);
+      } catch (e) {
+        console.warn('[BudgetSensorsDashboard] device initial properties', e?.message || e);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [variant, device?.deviceId, credentials, token]);
 
   const resolveTelemetryRowModel = useCallback(
     (sourceDeviceId) => {
@@ -2241,6 +2599,10 @@ export default function BudgetSensorsDashboard({
   useEffect(() => {
     panelDevicesRef.current = panelDevices;
   }, [panelDevices]);
+
+  useEffect(() => {
+    panelTelemetryByDeviceIdRef.current = panelTelemetryByDeviceId;
+  }, [panelTelemetryByDeviceId]);
 
   const [widgetConfigs, setWidgetConfigs] = useState(() =>
     migrateLegacySharedDeviceWidgetConfigs(loadAllWidgetConfigs(), variant, device)
@@ -3045,6 +3407,7 @@ export default function BudgetSensorsDashboard({
   const isVis = useCallback((id) => visibilityMap[id] !== false, [visibilityMap]);
 
   useEffect(() => {
+    if (variant === 'panel' && panelLoading) return undefined;
     let cancelled = false;
     (async () => {
       const next = {};
@@ -3087,7 +3450,7 @@ export default function BudgetSensorsDashboard({
     return () => {
       cancelled = true;
     };
-  }, [sensors, widgetConfigs, configKeyForSensor]);
+  }, [sensors, widgetConfigs, configKeyForSensor, variant, panelLoading]);
 
   useEffect(() => {
     if (variant !== 'panel') return;
@@ -3095,13 +3458,11 @@ export default function BudgetSensorsDashboard({
     (async () => {
       setPanelLoading(true);
       try {
-        const [resp, latest] = await Promise.all([
+        const resp = await withTimeout(
           fetchDevices(credentials, token),
-          getLatestDeviceData().catch((e) => {
-            console.warn('[BudgetSensorsDashboard] panel local telemetry', e?.message || e);
-            return [];
-          }),
-        ]);
+          15000,
+          'panel_devices_timeout'
+        );
         if (cancelled) return;
         const rawList = resp.data?.data?.content || resp.data?.content || [];
         const deviceList = rawList.map((d) => applyStaleOfflineConnectStatus(d));
@@ -3119,10 +3480,27 @@ export default function BudgetSensorsDashboard({
         const online = deviceList.filter((d) => isDeviceVisuallyOnline(d)).length;
         const sat = deviceList.length ? Math.round((online / deviceList.length) * 100) : 83;
         setSatisfactionPct(Math.min(100, Math.max(0, sat)));
-        const latestArr = Array.isArray(latest) ? latest : [];
-        const built = buildPanelSensors(deviceList, latestArr);
-        setSensors(built.map((s) => ({ ...s })));
+        const builtFromList = buildPanelSensors(deviceList, []);
+        setSensors(builtFromList.map((s) => ({ ...s })));
+        if (initialControl) {
+          const controlDev = deviceList.find((d) => String(d.deviceId) === String(initialControl));
+          if (controlDev) {
+            const seed = buildSeedLivePropsFromDevice(controlDev);
+            if (Object.keys(seed).length) setLiveProps(seed);
+          }
+        }
         if (!cancelled) setPanelLoading(false);
+
+        getLatestDeviceData()
+          .then((latest) => {
+            if (cancelled) return;
+            const latestArr = Array.isArray(latest) ? latest : [];
+            const built = buildPanelSensors(deviceList, latestArr);
+            setSensors(built.map((s) => ({ ...s })));
+          })
+          .catch((e) => {
+            console.warn('[BudgetSensorsDashboard] panel local telemetry', e?.message || e);
+          });
       } catch (e) {
         console.warn('[BudgetSensorsDashboard] panel load', e);
         setPanelDevices([]);
@@ -3141,7 +3519,10 @@ export default function BudgetSensorsDashboard({
     let cancelled = false;
     const tick = async () => {
       try {
-        const merged = await mergeDeviceLive(device, credentials, token);
+        const merged = await mergeDeviceLive(device, credentials, token, undefined, {
+          view: 'device',
+          alwaysFetchProperties: true,
+        });
         if (cancelled) return;
         const devSid =
           resolveDeviceDashboardStorageId(device) ||
@@ -3150,12 +3531,12 @@ export default function BudgetSensorsDashboard({
         setSensors(built.length ? built : DEFAULT_SENSORS.map((s, i) => ({ ...s, id: i + 1 })));
         const online = isDeviceVisuallyOnline(merged);
         setSatisfactionPct(online ? 100 : 0);
-        setLiveProps(merged);
+        setLiveProps(mergeDeviceTelemetryForWidgets(device, merged));
         setDownlinkList(loadDownlinksFromStorage(device.deviceId));
       } catch (e) {
         console.warn('[BudgetSensorsDashboard] device load', e);
         if (cancelled) return;
-        const merged = { ...device };
+        const merged = mergeDeviceTelemetryForWidgets(device);
         const devSid =
           resolveDeviceDashboardStorageId(device) ||
           (device.deviceId != null ? String(device.deviceId) : '');
@@ -3166,8 +3547,7 @@ export default function BudgetSensorsDashboard({
       }
     };
     deviceLiveTickRef.current = tick;
-    tick();
-    const id = setInterval(tick, PANEL_LIVE_REFRESH_MS);
+    const id = setInterval(tick, DEVICE_LIVE_REFRESH_MS);
     return () => {
       cancelled = true;
       clearInterval(id);
@@ -3205,11 +3585,21 @@ export default function BudgetSensorsDashboard({
         }
         return;
       }
+      if (controlDeviceId && !cancelled) {
+        const controlDev = list.find((d) => String(d.deviceId) === String(controlDeviceId));
+        if (controlDev) {
+          const seed = buildSeedLivePropsFromDevice(controlDev);
+          if (Object.keys(seed).length) setLiveProps(seed);
+        }
+      }
+      const skipHttp = Date.now() - lastRealtimeTelemetryMsRef.current < PANEL_SSE_SKIP_HTTP_MS;
       let latestBatch = [];
-      try {
-        latestBatch = (await getLatestDeviceData()) || [];
-      } catch {
-        latestBatch = [];
+      if (!skipHttp) {
+        try {
+          latestBatch = (await getLatestDeviceData()) || [];
+        } catch {
+          latestBatch = [];
+        }
       }
       let results = [];
       try {
@@ -3217,7 +3607,13 @@ export default function BudgetSensorsDashboard({
           idArr.map(async (id) => {
             try {
               const dev = list.find((d) => String(d.deviceId) === String(id));
-              const merged = dev ? await mergeDeviceLive(dev, credentials, token, latestBatch) : {};
+              if (!dev) return [id, {}];
+              if (skipHttp) {
+                const cached = panelTelemetryByDeviceIdRef.current?.[id];
+                const base = cached && typeof cached === 'object' ? { ...dev, ...cached } : { ...dev };
+                return [id, applyStaleOfflineConnectStatus(base)];
+              }
+              const merged = await mergeDeviceLive(dev, credentials, token, latestBatch);
               return [id, merged && typeof merged === 'object' && !Array.isArray(merged) ? merged : {}];
             } catch (e) {
               console.warn('[BudgetSensorsDashboard] panel merge device', id, e?.message || e);
@@ -3265,7 +3661,9 @@ export default function BudgetSensorsDashboard({
     let cancelled = false;
     const tick = async () => {
       try {
-        const [resp, latest] = await Promise.all([fetchDevices(credentials, token), getLatestDeviceData()]);
+        const skipHttp = Date.now() - lastRealtimeTelemetryMsRef.current < PANEL_SSE_SKIP_HTTP_MS;
+        const resp = await fetchDevices(credentials, token);
+        const latest = skipHttp ? [] : await getLatestDeviceData().catch(() => []);
         if (cancelled) return;
         const deviceList = (resp.data?.data?.content || resp.data?.content || []).map((d) =>
           applyStaleOfflineConnectStatus(d)
@@ -3290,25 +3688,48 @@ export default function BudgetSensorsDashboard({
 
   useEffect(() => {
     const onTel = (e) => {
-      const id = e.detail?.deviceId;
-      const idStr = id != null ? String(id) : '';
-      const matchesDevice =
-        variant === 'device' &&
-        device &&
-        idStr &&
-        (idStr === String(device.deviceId ?? '') ||
-          (dashDeviceId != null && idStr === String(dashDeviceId)));
-      if (matchesDevice) {
-        deviceLiveTickRef.current();
+      const detail = e?.detail;
+      const idStr = detail?.deviceId != null ? String(detail.deviceId) : '';
+      if (!idStr || !detail?.properties || typeof detail.properties !== 'object') return;
+      lastRealtimeTelemetryMsRef.current = Date.now();
+
+      if (variant === 'device' && device && deviceRowMatchesRealtimeId(device, idStr)) {
+        const merged = mergeRealtimeTelemetryIntoDeviceRow(device, detail);
+        const flat = mergeDeviceTelemetryForWidgets(device, merged);
+        setLiveProps(flat);
+        const expanded = flat;
+        const devSid =
+          resolveDeviceDashboardStorageId(device) ||
+          (device.deviceId != null ? String(device.deviceId) : '');
+        const built = propertiesToSensors(expanded, 1, '', devSid);
+        setSensors(built.length ? built : DEFAULT_SENSORS.map((s, i) => ({ ...s, id: i + 1 })));
+        setSatisfactionPct(isDeviceVisuallyOnline(merged) ? 100 : 0);
+        return;
       }
+
       if (variant === 'panel' && !panelLoading) {
-        panelListTickRef.current();
-        panelMergeTickRef.current();
+        setPanelDevices((prev) =>
+          prev.map((d) => (deviceRowMatchesRealtimeId(d, idStr) ? mergeRealtimeTelemetryIntoDeviceRow(d, detail) : d))
+        );
+        setPanelTelemetryByDeviceId((prev) => ({
+          ...prev,
+          [idStr]: {
+            ...(prev[idStr] && typeof prev[idStr] === 'object' ? prev[idStr] : {}),
+            ...detail.properties,
+            lastUpdateTime: detail.timestamp != null ? detail.timestamp : prev[idStr]?.lastUpdateTime,
+          },
+        }));
+        if (controlDeviceId && String(controlDeviceId) === idStr) {
+          const dev = panelDevicesRef.current?.find((d) => deviceRowMatchesRealtimeId(d, idStr));
+          if (dev) {
+            setLiveProps(expandMergedDeviceTelemetryLive(mergeRealtimeTelemetryIntoDeviceRow(dev, detail)));
+          }
+        }
       }
     };
     window.addEventListener(SYSCOM_REALTIME_TELEMETRY, onTel);
     return () => window.removeEventListener(SYSCOM_REALTIME_TELEMETRY, onTel);
-  }, [variant, device, panelLoading, dashDeviceId]);
+  }, [variant, device, panelLoading, dashDeviceId, controlDeviceId]);
 
   /** Circular (porcentaje): anillo y texto desde telemetría si hay campo configurado (no __bsd_*). */
   const satisfactionUi = useMemo(() => {
@@ -3503,6 +3924,7 @@ export default function BudgetSensorsDashboard({
     textDashSlotIds,
     dk,
     widgetConfigs,
+    telemetryLiveProps,
     telemetryLivePropsForPanelWidget,
     resolveLiveDeviceModelForPanelWidget,
     resolveTelemetryHintsForPanelWidget,
@@ -4305,18 +4727,55 @@ export default function BudgetSensorsDashboard({
       const fastPath =
         barHistoryRowsCacheKeyRef.current === rowCacheKey && Array.isArray(barHistoryRowsRef.current);
 
+      const now = Date.now();
+      const barCfgEarly = barChartWidgetCfgRef.current;
+      const instantComputed = computeBarChartSeriesFromRows(
+        fastPath ? barHistoryRowsRef.current : [],
+        cfg,
+        barCfgEarly,
+        fk,
+        barWidgetTelSnapshotRef.current,
+        now,
+        barChartLivePulseBufferRef.current
+      );
+      let instantPainted = false;
+      if (instantComputed && !isStale()) {
+        const tryInstant = () => {
+          if (isStale()) return false;
+          const mounted = mountBarChartFromComputed({
+            computed: instantComputed,
+            cfg,
+            fk,
+            canvasRef: barChartCanvasRef,
+            chartRef: barChartJsRef,
+            tooltipBridgeRef: barChartTooltipBridgeRef,
+          });
+          if (mounted) {
+            instantPainted = true;
+            setBarChartLoading(false);
+            setBarChartError(null);
+            if (!fastPath) {
+              setBarChartHint('Último valor en pantalla; cargando historial…');
+            }
+          }
+          return Boolean(mounted);
+        };
+        if (!tryInstant()) requestAnimationFrame(tryInstant);
+      }
+
       if (fastPath) {
         if (!isStale()) setBarChartLoading(false);
-      } else {
+      } else if (!instantPainted) {
         setBarChartLoading(true);
         setBarChartError(null);
         setBarChartHint('');
+      } else {
+        setBarChartError(null);
       }
 
       const barHistoryNetwork = !fastPath;
       if (barHistoryNetwork) barChartHistoryFetchInFlightRef.current = true;
       try {
-      const now = Date.now();
       const gran = normalizeBarChartGranularity(cfg.timeframe?.granularity) || 'hour';
       const rollingWin = barChartPresetDisplayBounds(gran, now);
       let fromMs;
@@ -4342,7 +4801,7 @@ export default function BudgetSensorsDashboard({
                 : gran === 'minute'
                   ? 4000
                   : gran === 'hour'
-                    ? 1200
+                    ? 180
                     : 2000;
 
       let rows = [];
@@ -4352,7 +4811,7 @@ export default function BudgetSensorsDashboard({
       } else {
         try {
           const raw = await withTimeout(
-            queryTelemetry(barChartHistoryDeviceId, null, fetchFrom, fetchTo, pageSize),
+            queryTelemetry(barChartHistoryDeviceId, fk, fetchFrom, fetchTo, pageSize),
             BAR_CHART_FETCH_TIMEOUT_MS,
             'bar_telemetry_timeout'
           );
@@ -4384,12 +4843,18 @@ export default function BudgetSensorsDashboard({
             console.warn('[BSD bar chart] fetchDeviceHistory', e2);
           }
         }
-        if (isStale()) return;
+        if (isStale()) {
+          setBarChartLoading(false);
+          return;
+        }
         barHistoryRowsRef.current = rows;
         barHistoryRowsCacheKeyRef.current = rowCacheKey;
       }
 
-      if (isStale()) return;
+      if (isStale()) {
+        setBarChartLoading(false);
+        return;
+      }
 
       const barCfg = barChartWidgetCfgRef.current;
       const computed = computeBarChartSeriesFromRows(
@@ -4419,210 +4884,26 @@ export default function BudgetSensorsDashboard({
         return;
       }
 
-      const {
-        labels,
-        values,
-        fullLabels,
-        truncated,
-        hasTarget,
-        targetNum,
-        legendActual,
-        legendTarget,
-        dec,
-        unit,
-        nBar,
-        yMin,
-        yMax,
-        barFillColors,
-        maxBarThickness,
-      } = computed;
-
-      const tickColor = 'rgba(255,255,255,0.92)';
-      const xGrid = { display: true, color: 'rgba(255,255,255,0.07)', drawBorder: false };
-      const yGrid = { display: true, color: 'rgba(255,255,255,0.08)', drawBorder: false };
-      const pxPerBar = nBar > 800 ? 2 : nBar > 400 ? 2.5 : nBar > 144 ? 3 : nBar > 60 ? 5 : 12;
-
       const paintBarChart = () => {
         if (isStale()) return false;
-        const canvas = barChartCanvasRef.current;
-        const ctx = canvas?.getContext('2d');
-        if (!canvas || !ctx) return false;
-
-        if (barChartJsRef.current) {
-          barChartJsRef.current.destroy();
-          barChartJsRef.current = null;
-        }
-
-        const scrollWrap = canvas.parentElement;
-        let distFromRight = null;
-        if (scrollWrap && scrollWrap.scrollWidth > scrollWrap.clientWidth) {
-          distFromRight = scrollWrap.scrollWidth - scrollWrap.clientWidth - scrollWrap.scrollLeft;
-        }
-        if (canvas && nBar > 36) {
-          canvas.style.minWidth = `${Math.ceil(Math.max(320, nBar * pxPerBar))}px`;
-        } else {
-          canvas.style.minWidth = '';
-        }
-
-        let chart;
-        try {
-          chart = new Chart(ctx, {
-        type: 'bar',
-        data: {
-          labels,
-          datasets: [
-            {
-              type: 'bar',
-              label: legendActual,
-              data: values,
-              backgroundColor: barFillColors,
-              borderColor: 'rgba(13, 148, 136, 1)',
-              borderWidth: 0,
-              borderRadius: nBar > 200 ? 1 : 4,
-              maxBarThickness,
-            },
-            ...(hasTarget
-              ? [
-                  {
-                    type: 'line',
-                    label: legendTarget,
-                    data: labels.map(() => targetNum),
-                    borderColor: '#ef4444',
-                    backgroundColor: '#ef4444',
-                    borderWidth: 2,
-                    pointRadius: 0,
-                    pointHoverRadius: 4,
-                    pointBackgroundColor: '#ef4444',
-                    tension: 0,
-                    order: 0,
-                  },
-                ]
-              : []),
-          ],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          animation: false,
-          datasets: {
-            bar: {
-              categoryPercentage: nBar > 120 ? 1 : 0.88,
-              barPercentage: nBar > 120 ? 1 : 0.92,
-            },
-          },
-          interaction: { mode: 'index', intersect: false },
-          plugins: {
-            legend: {
-              position: 'bottom',
-              labels: {
-                color: tickColor,
-                font: { weight: '600', size: 11 },
-                usePointStyle: true,
-                padding: 14,
-              },
-            },
-            tooltip: {
-              callbacks: {
-                title(items) {
-                  const i = items[0]?.dataIndex ?? 0;
-                  return fullLabels[i] ?? labels[i] ?? '';
-                },
-                label(item) {
-                  const ch = item.chart;
-                  const t = ch.$barTooltipCtx;
-                  const dsIdx = item.datasetIndex ?? 0;
-                  const leg = dsIdx > 0 ? legendTarget : legendActual;
-                  const v = item.parsed?.y;
-                  if (v == null || !Number.isFinite(v)) return `${leg}: sin dato`;
-                  const processed = formatTelemetryChartTooltipValue(
-                    v,
-                    t?.fieldKey || fk,
-                    t?.model ?? null,
-                    t?.hints ?? null,
-                    {
-                      unit,
-                      decimals: dec,
-                      ranges: t?.gauge?.ranges,
-                      scaleMin: t?.gauge?.scaleMin,
-                      scaleMax: t?.gauge?.scaleMax,
-                    }
-                  );
-                  return `${leg}: ${processed}`;
-                },
-              },
-            },
-          },
-          scales: {
-            x: {
-              grid: xGrid,
-              ticks: {
-                color: tickColor,
-                font: { weight: '600', size: 10 },
-                maxRotation: nBar > 80 ? 60 : 0,
-                autoSkip: true,
-                autoSkipPadding: 4,
-                maxTicksLimit: nBar > 400 ? 16 : nBar > 120 ? 12 : nBar > 60 ? 10 : 24,
-              },
-            },
-            y: {
-              beginAtZero: false,
-              suggestedMin: yMin,
-              suggestedMax: yMax,
-              grid: yGrid,
-              ticks: {
-                color: tickColor,
-                font: { weight: '700', size: 11 },
-                callback(v) {
-                  const n = Number(v);
-                  return Number.isFinite(n) ? n.toFixed(dec) : v;
-                },
-              },
-              title: {
-                display: true,
-                text: unit ? `Valor (${unit})` : 'Valor',
-                color: tickColor,
-                font: { size: 11, weight: '600' },
-              },
-            },
-          },
-        },
-          });
-        } catch (e) {
-          console.warn('[BSD bar chart] Chart init', e);
-          return false;
-        }
-
-        chart.$barTooltipCtx = {
-          fieldKey: fk,
-          model: barChartTooltipBridgeRef.current.model,
-          hints: barChartTooltipBridgeRef.current.hints,
-          unit,
-          dec,
-          gauge: cfg.gauge,
-        };
-
-        barChartJsRef.current = chart;
-        chart.update('none');
-        if (!isStale()) {
+        const mounted = mountBarChartFromComputed({
+          computed,
+          cfg,
+          fk,
+          canvasRef: barChartCanvasRef,
+          chartRef: barChartJsRef,
+          tooltipBridgeRef: barChartTooltipBridgeRef,
+        });
+        if (mounted && !isStale()) {
           setBarChartLoading(false);
           setBarChartError(null);
           setBarChartHint(
-            truncated
+            mounted.truncated
               ? 'Muchos eventos en el intervalo: se muestran solo los más recientes (límite de rendimiento).'
               : ''
           );
         }
-        requestAnimationFrame(() => {
-          if (isStale()) return;
-          const c = barChartCanvasRef.current;
-          const w = c?.parentElement;
-          if (w && distFromRight != null) {
-            const max = w.scrollWidth - w.clientWidth;
-            if (max > 0) w.scrollLeft = Math.max(0, max - distFromRight);
-          }
-          safeChartResize(barChartJsRef.current);
-        });
-        return true;
+        return Boolean(mounted);
       };
 
       if (!paintBarChart()) {
@@ -4656,6 +4937,54 @@ export default function BudgetSensorsDashboard({
     token,
     variant,
     visibilityMap[DASH_WIDGET.BAR_CHART],
+  ]);
+
+  /** Precarga del gráfico de barras en cuanto hay telemetría (listado o /properties), sin esperar al historial. */
+  useLayoutEffect(() => {
+    if (visibilityMap[DASH_WIDGET.BAR_CHART] === false) return undefined;
+    if (!barChartHistoryDeviceId) return undefined;
+    if (barChartJsRef.current) return undefined;
+
+    const barKey = dk(DASH_WIDGET.BAR_CHART);
+    const fullCfg = loadAllWidgetConfigs()[barKey];
+    const cfg = mergeWidgetConfig(dashboardWidgetSensorStub(DASH_WIDGET.BAR_CHART), fullCfg);
+    const fkRaw = cfg?.data?.fieldKey;
+    const fk = fkRaw != null ? String(fkRaw).trim() : '';
+    if (!fk || fk.startsWith('__bsd_')) return undefined;
+
+    const computed = computeBarChartSeriesFromRows(
+      barHistoryRowsRef.current || [],
+      cfg,
+      barChartWidgetCfgRef.current,
+      fk,
+      barWidgetTelSnapshotRef.current,
+      Date.now(),
+      barChartLivePulseBufferRef.current
+    );
+    if (!computed) return undefined;
+
+    const mounted = mountBarChartFromComputed({
+      computed,
+      cfg,
+      fk,
+      canvasRef: barChartCanvasRef,
+      chartRef: barChartJsRef,
+      tooltipBridgeRef: barChartTooltipBridgeRef,
+    });
+    if (mounted) {
+      setBarChartLoading(false);
+      setBarChartError(null);
+      if (!barHistoryRowsRef.current?.length) {
+        setBarChartHint('Último valor en pantalla; cargando historial…');
+      }
+    }
+    return undefined;
+  }, [
+    barChartLiveValueSig,
+    barChartHistoryDeviceId,
+    barChartCfgSig,
+    visibilityMap[DASH_WIDGET.BAR_CHART],
+    dk,
   ]);
 
   /** Repinta barras con telemetría en vivo sin re-disparar fetch (barChartLiveValueSig cambia muy a menudo). */

@@ -49,6 +49,22 @@ const headers = () => ({
   ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {})
 });
 
+/** Evita pantallas «Cargando…» colgadas si la API no responde. */
+export async function fetchWithTimeout(url, options = {}, ms = 10000) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { ...options, signal: ctrl.signal });
+  } catch (e) {
+    if (e && e.name === 'AbortError') {
+      throw new Error(`Tiempo de espera agotado (${ms}ms) al contactar el servidor`);
+    }
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const handle = async (res) => {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -101,11 +117,11 @@ export const localLogout = () => {
 };
 
 export const getMe = async () => {
-  return handle(await fetch(`${API}/auth/me`, { headers: headers() }));
+  return handle(await fetchWithTimeout(`${API}/auth/me`, { headers: headers() }, 8000));
 };
 
 export const checkSetup = async () => {
-  const res = await fetch(`${API}/setup/status`, { cache: 'no-store' });
+  const res = await fetchWithTimeout(`${API}/setup/status`, { cache: 'no-store' }, 6000);
   return handle(res);
 };
 
@@ -145,10 +161,14 @@ export const refreshSession = async () => {
   refreshPromise = (async () => {
     try {
       const data = await handle(
-        await fetch(`${API}/auth/refresh`, {
-          method: 'POST',
-          headers: headers(),
-        })
+        await fetchWithTimeout(
+          `${API}/auth/refresh`,
+          {
+            method: 'POST',
+            headers: headers(),
+          },
+          8000
+        )
       );
       if (data.token) setToken(data.token);
       try {
@@ -279,9 +299,15 @@ export const queryTelemetry = async (deviceId, propKey, startMs, endMs, limit) =
   if (limit != null && Number.isFinite(Number(limit))) {
     params.set('limit', String(Math.min(4000, Math.max(1, Math.floor(Number(limit))))));
   }
-  return handle(await fetch(`${API}/telemetry/${deviceId}?${params.toString()}`, { headers: headers() }));
+  return handle(
+    await fetchWithTimeout(
+      `${API}/telemetry/${deviceId}?${params.toString()}`,
+      { headers: headers() },
+      12000
+    )
+  );
 };
 
 export const getLatestDeviceData = async () => {
-  return handle(await fetch(`${API}/devices/latest`, { headers: headers() }));
+  return handle(await fetchWithTimeout(`${API}/devices/latest`, { headers: headers() }, 12000));
 };
