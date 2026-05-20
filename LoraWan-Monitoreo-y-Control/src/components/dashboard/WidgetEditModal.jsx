@@ -33,7 +33,7 @@ import {
   dashboardWidgetBaseId,
   MAX_WIDGET_IMAGE_DATA_URL_CHARS,
 } from './widgetConfigUtils';
-import { tryTelemetryDisplayLabel } from '../../utils/telemetryDisplayFormat';
+import { formatWidgetTelemetryDisplay, tryTelemetryDisplayLabel } from '../../utils/telemetryDisplayFormat';
 import { resolveMapCoords, openStreetMapEmbedUrl, toFloatCoord } from './mapWidgetCoords';
 import {
   PROPERTY_INFER_IGNORE_SET,
@@ -201,23 +201,24 @@ function computeModalTextWidgetUi(liveProps, draft, liveDeviceModel, telemetryHi
     const hint = !fkStr || fkStr.startsWith('__bsd_') ? 'Configura el campo en edición' : 'Sin dato en vivo';
     return { display: '—', hint, lastAtLine };
   }
-  const friendly = formulaActive
-    ? null
-    : tryTelemetryDisplayLabel(liveDeviceModel, fkStr, raw, telemetryHintMap);
-  if (friendly != null && String(friendly).trim()) {
-    return { display: String(friendly).trim(), hint: fkStr, lastAtLine };
-  }
-  const n = parseTelemetryScalar(raw);
-  if (n !== null && Number.isFinite(n)) {
-    const nd = transformWidgetNumeric(draft, n);
-    return { display: `${nd.toFixed(dec)}${unit ? ` ${unit}` : ''}`.trim(), hint: fkStr, lastAtLine };
-  }
-  if (typeof raw === 'boolean') return { display: raw ? 'Sí' : 'No', hint: fkStr, lastAtLine };
-  if (typeof raw === 'object') {
-    try {
-      return { display: JSON.stringify(raw), hint: fkStr, lastAtLine };
-    } catch {
-      return { display: String(raw), hint: fkStr, lastAtLine };
+  if (formulaActive) {
+    const n = parseTelemetryScalar(raw);
+    if (n !== null && Number.isFinite(n)) {
+      const nd = transformWidgetNumeric(draft, n);
+      return { display: `${nd.toFixed(dec)}${unit ? ` ${unit}` : ''}`.trim(), hint: fkStr, lastAtLine };
+    }
+  } else {
+    const formatted = formatWidgetTelemetryDisplay({
+      model: liveDeviceModel,
+      fieldKey: fkStr,
+      raw,
+      hintMap: telemetryHintMap,
+      decimals: dec,
+      unit,
+      formulaActive: false,
+    });
+    if (formatted.display !== '—') {
+      return { display: formatted.display, hint: fkStr, lastAtLine };
     }
   }
   const s = String(raw).trim();

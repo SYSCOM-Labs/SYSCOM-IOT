@@ -6,8 +6,11 @@ import { SYSCOM_REALTIME_LNS } from '../constants/realtimeEvents';
 const STORAGE_KEY = 'syscom_lns_ui_last_id';
 
 /** No toast: el usuario ve el detalle en Registro de actividad (`AppActivityLogContext`). */
-function isGatewayTooEarlyToastSuppressed(err) {
-  return /TOO_EARLY/i.test(String(err ?? ''));
+function isGatewayTimingToastSuppressed(err, orphan) {
+  const e = String(err ?? '');
+  if (/TOO_EARLY/i.test(e)) return true;
+  if (orphan && /TOO_LATE/i.test(e)) return true;
+  return false;
 }
 
 function readStoredLastId() {
@@ -62,7 +65,7 @@ export default function LnsDownlinkToastBridge() {
       if (d?.eventType === 'gateway_tx_rejected') {
         const m = d.meta && typeof d.meta === 'object' ? d.meta : {};
         const err = m.txpkError != null ? String(m.txpkError) : 'TX rechazada';
-        if (!isGatewayTooEarlyToastSuppressed(err)) {
+        if (!isGatewayTimingToastSuppressed(err, Boolean(m.orphanAck))) {
           setToast({ type: 'error', message: `Gateway: ${err}` });
         }
       }
@@ -78,7 +81,7 @@ export default function LnsDownlinkToastBridge() {
           setToast({ type: 'success', message: 'Gateway confirmó transmisión del downlink (TX_ACK)' });
         } else {
           const err = m.error != null ? String(m.error) : 'error';
-          if (!isGatewayTooEarlyToastSuppressed(err)) {
+          if (!isGatewayTimingToastSuppressed(err, Boolean(m.orphanAck))) {
             setToast({ type: 'error', message: `Gateway TX_ACK: ${err}` });
           }
         }
@@ -115,7 +118,7 @@ export default function LnsDownlinkToastBridge() {
           if (ev.eventType === 'gateway_tx_rejected') {
             const m = ev.meta && typeof ev.meta === 'object' ? ev.meta : {};
             const err = m.txpkError != null ? String(m.txpkError) : 'TX rechazada';
-            if (!isGatewayTooEarlyToastSuppressed(err)) {
+            if (!isGatewayTimingToastSuppressed(err, Boolean(m.orphanAck))) {
               setToast({ type: 'error', message: `Gateway: ${err}` });
             }
           }
@@ -131,7 +134,7 @@ export default function LnsDownlinkToastBridge() {
               setToast({ type: 'success', message: 'Gateway confirmó transmisión del downlink (TX_ACK)' });
             } else {
               const err = m.error != null ? String(m.error) : 'error';
-              if (!isGatewayTooEarlyToastSuppressed(err)) {
+              if (!isGatewayTimingToastSuppressed(err, Boolean(m.orphanAck))) {
                 setToast({ type: 'error', message: `Gateway TX_ACK: ${err}` });
               }
             }

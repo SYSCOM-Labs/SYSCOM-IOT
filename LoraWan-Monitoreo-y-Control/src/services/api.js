@@ -418,6 +418,9 @@ export const sendDownlink = async (deviceId, hex, _credentials, _token, opts = {
         /** Medidores clase A: permite respuesta 202 y cola SQLite si la ventana RX ya cerró (anula SYSCOM_LNS_DEFER_APP_DOWNLINK=0). */
         deferUntilUplink: opts?.deferUntilUplink !== false,
       };
+      if (opts?.priority != null && Number.isFinite(Number(opts.priority))) {
+        body.priority = Math.max(0, Math.min(255, Math.floor(Number(opts.priority))));
+      }
       if (opts?.lorawanClass != null && String(opts.lorawanClass).trim() !== '') {
         body.lorawanClass = normalizeTemplateLorawanClass(opts.lorawanClass);
       }
@@ -445,6 +448,7 @@ export const sendDownlink = async (deviceId, hex, _credentials, _token, opts = {
               gatewayEui: d.gatewayEui,
               confirmed: d.confirmedDown,
               imme: d.imme,
+              txScheduledTmst: d.txScheduledTmst,
               classARxWindow: d.classARxWindow,
               txAckPending: Boolean(d.txAckPending),
               txAckMaxWaitMs:

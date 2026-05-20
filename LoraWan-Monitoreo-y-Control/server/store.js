@@ -363,6 +363,14 @@ class Store {
     this._lnsGatewayTxFailHook = null;
     /** @type {null | function({ userId: string, devEui: string, ok: boolean, error?: string|null, fCnt?: number|null, gatewayEui?: string|null, timeout?: boolean }): void} */
     this._lnsTxAckOutcomeHook = null;
+    /** @type {Map<string, number>} */
+    this._orphanAckRetryAt = new Map();
+    /** @type {Map<string, number>} */
+    this._orphanAckRetryCount = new Map();
+    /** Gateways que deben usar `imme` en clase C tras TOO_EARLY/TOO_LATE (UG65 saturado). */
+    this._gwForceClassCImme = new Set();
+    /** @type {Map<string, { at: number, data: object[] }>} */
+    this._telemetrySeriesCache = new Map();
   }
 
   /**
@@ -1467,6 +1475,76 @@ class Store {
   /**
    * @returns {string[]} userIds que recibieron fila de telemetría (propietario + cuentas con el mismo dispositivo asignado).
    */
+  /** Actualiza properties_json de una fila existente (re-decode / corrección). */
+  patchTelemetryPropertiesAt(userId, deviceId, ts, properties) {
+    const payload = JSON.stringify(properties || {});
+    const info = this.db
+      .prepare(
+        `UPDATE telemetry SET properties_json = ? WHERE user_id = ? AND device_id = ? AND ts = ?`
+      )
+      .run(payload, String(userId), String(deviceId), Number(ts));
+    return info.changes > 0;
+  }
+
+  /** Usuarios que deben recibir SSE / automatización para un dispositivo. */
+  _telemetryAffectedUserIds(userId, deviceId) {
+    const did = String(deviceId);
+    const affected = new Set([String(userId)]);
+    const peers = this.st.udUserIdsForDevice.all(did);
+    for (const p of peers) {
+      const uid = String(p.user_id);
+      if (uid === String(userId)) continue;
+      affected.add(uid);
+    }
+    if (this.deviceInSuperadminPool(did, userId)) {
+      for (const sid of this.listSuperadminUserIds()) {
+        affected.add(String(sid));
+      }
+    }
+    return Array.from(affected);
+  }
+
+  _emitTelemetryRealtimeHooks(userId, deviceId, deviceName, properties, ts) {
+    const did = String(deviceId);
+    const tss = ts || Date.now();
+    const userIds = this._telemetryAffectedUserIds(userId, did);
+    const props = properties && typeof properties === 'object' ? properties : {};
+    const deviceType = props.deviceType != null ? String(props.deviceType) : undefined;
+    if (this._telemetryBroadcastHook) {
+      try {
+        this._telemetryBroadcastHook({
+          userIds,
+          deviceId: did,
+          deviceName: deviceName != null ? String(deviceName) : null,
+          ts: tss,
+          deviceType,
+          properties: { ...props },
+        });
+      } catch (e) {
+        console.warn('[store] telemetry broadcast hook:', e.message);
+      }
+    }
+    if (this._automationTelemetryHook) {
+      try {
+        this._automationTelemetryHook({
+          userIds,
+          deviceId: did,
+          deviceName: deviceName != null ? String(deviceName) : null,
+          ts: tss,
+          properties: { ...props },
+        });
+      } catch (e) {
+        console.warn('[store] automation telemetry hook:', e.message);
+      }
+    }
+    return userIds;
+  }
+
+  /** SSE / reglas sin insertar fila (p. ej. dedup SQLite pero UI en vivo). */
+  broadcastTelemetryRealtime(userId, deviceId, deviceName, properties, ts) {
+    return this._emitTelemetryRealtimeHooks(userId, deviceId, deviceName, properties, ts);
+  }
+
   appendTelemetry(userId, deviceId, deviceName, properties, ts) {
     const payload = JSON.stringify(properties || {});
     const did = String(deviceId);
@@ -1516,39 +1594,7 @@ class Store {
       this._pruneCounter = 0;
       this.runRetentionPruneNow();
     }
-    const userIds = Array.from(affected);
-    if (this._telemetryBroadcastHook) {
-      try {
-        const props = properties && typeof properties === 'object' ? properties : {};
-        const deviceType = props.deviceType != null ? String(props.deviceType) : undefined;
-        this._telemetryBroadcastHook({
-          userIds,
-          deviceId: did,
-          deviceName: deviceName != null ? String(deviceName) : null,
-          ts: tss,
-          deviceType,
-          /** Copia superficial para SSE / automatización (mismo snapshot que se persiste). */
-          properties: { ...props },
-        });
-      } catch (e) {
-        console.warn('[store] telemetry broadcast hook:', e.message);
-      }
-    }
-    if (this._automationTelemetryHook) {
-      try {
-        const props = properties && typeof properties === 'object' ? properties : {};
-        this._automationTelemetryHook({
-          userIds,
-          deviceId: did,
-          deviceName: deviceName != null ? String(deviceName) : null,
-          ts: tss,
-          properties: { ...props },
-        });
-      } catch (e) {
-        console.warn('[store] automation telemetry hook:', e.message);
-      }
-    }
-    return userIds;
+    return this._emitTelemetryRealtimeHooks(userId, did, deviceName, properties, tss);
   }
 
   setRetentionMs(ms) {
@@ -1572,7 +1618,10 @@ class Store {
   }
 
   getLatestForDevice(userId, deviceId) {
-    const row = this.st.latestForDevice.get(userId, String(deviceId));
+    const did = String(deviceId);
+    const merged = this.getMergedLatestTelemetryForDevice(userId, did, { historyRowLimit: 12 });
+    if (merged) return merged;
+    const row = this.st.latestForDevice.get(userId, did);
     return row ? rowToTelemetryRow(row) : null;
   }
 
@@ -1815,8 +1864,16 @@ class Store {
     const e = parseInt(endMs, 10) || Date.now();
     const cap = Math.min(maxRows || 500, 4000);
     const pk = propKey != null && String(propKey).trim() !== '' ? String(propKey).trim() : '';
+    const cacheTtl = Math.max(
+      1000,
+      parseInt(String(process.env.SYSCOM_TELEMETRY_SERIES_CACHE_MS || '4000').trim(), 10) || 4000
+    );
+    const cacheKey = `${uid}|${did}|${s}|${e}|${pk}|${cap}`;
+    const hit = this._telemetrySeriesCache.get(cacheKey);
+    if (hit && Date.now() - hit.at < cacheTtl) return hit.data;
+
     /** Con filtro por clave, pedir más filas porque muchas no traen la propiedad (mismo tope duro 4000). */
-    const fetchLimit = pk ? Math.min(4000, Math.max(cap * 8, cap, 200)) : cap;
+    const fetchLimit = pk ? Math.min(4000, Math.max(cap * 3, cap, 120)) : cap;
 
     const rows = this.st.telemetryHistory.all(uid, did, s, e, fetchLimit);
     const chron = rows.slice().reverse();
@@ -1825,7 +1882,18 @@ class Store {
       list = list.filter((t) => t.properties && telemetryRowHasPropertyKey(t.properties, pk));
       if (list.length > cap) list = list.slice(-cap);
     }
+    this._telemetrySeriesCache.set(cacheKey, { at: Date.now(), data: list });
+    if (this._telemetrySeriesCache.size > 300) {
+      const cutoff = Date.now() - cacheTtl * 4;
+      for (const [k, v] of this._telemetrySeriesCache) {
+        if (v.at < cutoff) this._telemetrySeriesCache.delete(k);
+      }
+    }
     return list;
+  }
+
+  getLastTelemetryRow(userId, deviceId) {
+    return this.st.lastTelemetrySameProps.get(userId, String(deviceId));
   }
 
   lastPropertiesJsonEqual(userId, deviceId, properties) {
@@ -1915,14 +1983,82 @@ class Store {
   }
 
   /**
-   * Cuentas que deben procesar PUSH_DATA de un gateway: dueños del EUI + todas las superadmin (pool unificado).
+   * Cuentas que procesan PUSH_DATA: dueños del EUI en `lorawan_gateways` (varios GW por cuenta OK).
+   * Sin replicar entre cuentas salvo SYSCOM_SUPERADMIN_POOL_MIRROR=1.
    * @param {Buffer} mac8
    * @returns {string[]}
    */
   findUserIdsForSemtechPush(mac8) {
-    const out = new Set(this.findUserIdsBySemtechGatewayMac8(mac8).map((id) => String(id)));
+    const owners = this.findUserIdsBySemtechGatewayMac8(mac8).map((id) => String(id));
+    if (owners.length > 0) {
+      let list = owners;
+      if (String(process.env.SYSCOM_LNS_PUSH_INCLUDE_SUPERADMIN || '0').trim() === '1') {
+        const out = new Set(owners);
+        for (const sid of this.listSuperadminUserIds()) out.add(sid);
+        list = Array.from(out);
+      }
+      if (list.length > 1 && String(process.env.SYSCOM_LNS_MULTI_OWNER_PUSH || '0').trim() !== '1') {
+        const primary = process.env.SYSCOM_LNS_GATEWAY_PRIMARY_USER_ID;
+        if (primary != null && String(primary).trim()) {
+          const p = String(primary).trim();
+          if (list.includes(p)) return [p];
+        }
+        const eui16 = this.lnsResolveGatewayEuiNorm(mac8);
+        if (eui16 && eui16.length === 16) {
+          const gwLike = `%${eui16.slice(-12)}%`;
+          try {
+            const best = this.db
+              .prepare(
+                `SELECT user_id, COUNT(*) AS c FROM lorawan_lns_sessions
+                 WHERE lower(replace(replace(replace(ifnull(last_gateway_eui,''),':',''),'-',''),' ','')) LIKE ?
+                 GROUP BY user_id ORDER BY c DESC LIMIT 1`
+              )
+              .get(gwLike);
+            if (best && best.user_id && list.includes(String(best.user_id))) {
+              return [String(best.user_id)];
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+        return [list[0]];
+      }
+      return list;
+    }
+    const out = new Set();
     for (const sid of this.listSuperadminUserIds()) out.add(sid);
+    const defUid = process.env.SYSCOM_LNS_DEFAULT_USER_ID;
+    if (defUid != null && String(defUid).trim()) out.add(String(defUid).trim());
     return Array.from(out);
+  }
+
+  lnsGwForceClassCImme(gatewayEuiNorm16) {
+    const gwKey = normalizeLnsGatewayEuiKey(gatewayEuiNorm16);
+    return this._gwForceClassCImme.has(gwKey);
+  }
+
+  lnsMarkGwForceClassCImme(gatewayEuiNorm16) {
+    const gwKey = normalizeLnsGatewayEuiKey(gatewayEuiNorm16);
+    this._gwForceClassCImme.add(gwKey);
+    if (this._gwForceClassCImme.size > 200) {
+      const arr = Array.from(this._gwForceClassCImme);
+      this._gwForceClassCImme = new Set(arr.slice(-100));
+    }
+  }
+
+  lnsHasPendingPullRespForDev(userId, devEuiNorm16) {
+    const h = String(devEuiNorm16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (h.length !== 16) return false;
+    const row = this.db
+      .prepare(
+        `SELECT 1 AS x FROM lorawan_lns_downlink
+         WHERE user_id = ? AND lower(replace(replace(replace(ifnull(tx_dev_eui,''),':',''),'-',''),' ','')) = ?
+           AND status IN ('pending','await_tx_ack') LIMIT 1`
+      )
+      .get(String(userId), h);
+    return Boolean(row);
   }
 
   /**
@@ -2108,6 +2244,7 @@ class Store {
    * Si ya existía la fila en otra cuenta, se actualizan DevEUI, AppKey, clase, etc.
    */
   syncUserDeviceToSuperadminPool(sourceRow) {
+    if (!this._superadminPoolMirrorEnabled()) return;
     if (!sourceRow || !sourceRow.deviceId) return;
     const srcUid = String(sourceRow.userId || '').trim();
     if (!this.isSuperadminUserId(srcUid)) return;
@@ -2140,7 +2277,15 @@ class Store {
   }
 
   /** Replica un gateway dado de alta por un superadmin al resto del pool (mismo EUI). */
+  _superadminPoolMirrorEnabled() {
+    const raw = process.env.SYSCOM_SUPERADMIN_POOL_MIRROR;
+    if (raw == null || String(raw).trim() === '') return false;
+    const v = String(raw).trim().toLowerCase();
+    return v === '1' || v === 'true' || v === 'on';
+  }
+
   mirrorLorawanGatewayToSuperadminPool(sourceRow) {
+    if (!this._superadminPoolMirrorEnabled()) return;
     if (!sourceRow || !sourceRow.gatewayEui) return;
     const srcUid = String(sourceRow.userId || '').trim();
     if (!this.isSuperadminUserId(srcUid)) return;
@@ -2165,6 +2310,7 @@ class Store {
    * Sincroniza dispositivos y gateways existentes entre cuentas superadmin (arranque / migración ligera).
    */
   reconcileSuperadminPool() {
+    if (!this._superadminPoolMirrorEnabled()) return { devicesMirrored: 0, gatewaysMirrored: 0 };
     const supers = this.listSuperadminUserIds();
     if (supers.length < 2) return { devicesMirrored: 0, gatewaysMirrored: 0 };
     let devicesMirrored = 0;
@@ -2480,14 +2626,18 @@ class Store {
     const ts = Date.now();
     const joinCommit = txMeta && txMeta.joinSessionCommit ? txMeta.joinSessionCommit : null;
     const joinJson = joinCommit ? JSON.stringify(joinCommit) : null;
-    const track = txMeta && (joinCommit || txMeta.devEui) ? 1 : 0;
+    /** Solo join o downlink app con seguimiento explícito (`newFcnt`); `devEui` en fila siempre si viene en meta. */
+    const track =
+      txMeta && (joinCommit || (txMeta.devEui && txMeta.newFcnt != null)) ? 1 : 0;
     let deui = null;
     let nfc = null;
     let pfc = null;
     let retr = null;
     let isConf = 0;
-    if (track) {
+    if (txMeta && txMeta.devEui) {
       deui = String(txMeta.devEui || (joinCommit && joinCommit.upsert && joinCommit.upsert.devEui) || '');
+    }
+    if (track) {
       nfc = joinCommit ? null : txMeta.newFcnt != null ? Number(txMeta.newFcnt) : null;
       pfc = joinCommit ? null : txMeta.prevFcnt != null ? Number(txMeta.prevFcnt) : null;
       retr =
@@ -2552,6 +2702,112 @@ class Store {
       }
       throw e;
     }
+  }
+
+  /**
+   * GW_TX_ACK huérfano (p. ej. SYSCOM_LNS_TX_ACK=0): reencola el último PULL_RESP enviado tras TOO_EARLY/TOO_LATE.
+   * @param {string} gatewayEuiNorm16
+   * @param {string} error
+   */
+  lnsRetryOrphanTxAck(gatewayEuiNorm16, error) {
+    if (String(process.env.SYSCOM_LNS_ORPHAN_TX_ACK_RETRY || '1').trim() === '0') return;
+    const errUp = String(error || '').toUpperCase();
+    if (!errUp.includes('TOO_EARLY') && !errUp.includes('TOO_LATE')) return;
+    const gwKey = normalizeLnsGatewayEuiKey(gatewayEuiNorm16);
+    this.lnsMarkGwForceClassCImme(gwKey);
+    const now = Date.now();
+    const minGap = Math.max(
+      2000,
+      parseInt(String(process.env.SYSCOM_LNS_ORPHAN_ACK_RETRY_GAP_MS || '2800').trim(), 10) || 2800
+    );
+    const gapKey = `orph:${gwKey}`;
+    if ((this._orphanAckRetryAt.get(gapKey) || 0) + minGap > now) return;
+    this._orphanAckRetryAt.set(gapKey, now);
+
+    const pending = this.db
+      .prepare(
+        `SELECT 1 AS x FROM lorawan_lns_downlink
+         WHERE lower(replace(replace(replace(gateway_eui,':',''),'-',''),' ','')) = ?
+           AND status IN ('pending','await_tx_ack') LIMIT 1`
+      )
+      .get(gwKey);
+    if (pending) return;
+
+    const lookbackMs = Math.max(
+      5000,
+      parseInt(String(process.env.SYSCOM_LNS_ORPHAN_ACK_LOOKBACK_MS || '25000').trim(), 10) || 25000
+    );
+    const row = this.db
+      .prepare(
+        `SELECT id, user_id, gateway_eui, pull_resp_json, tx_dev_eui, priority
+         FROM lorawan_lns_downlink
+         WHERE lower(replace(replace(replace(gateway_eui,':',''),'-',''),' ','')) = ?
+           AND status = 'sent' AND created_at >= ?
+         ORDER BY created_at DESC LIMIT 1`
+      )
+      .get(gwKey, now - lookbackMs);
+    if (!row || !row.pull_resp_json) return;
+
+    let pullJson = String(row.pull_resp_json);
+    try {
+      const pullObj = JSON.parse(pullJson);
+      const tx = pullObj && pullObj.txpk;
+      if (tx && typeof tx === 'object') {
+        tx.imme = true;
+        delete tx.tmst;
+        pullJson = JSON.stringify(pullObj);
+      }
+    } catch {
+      /* keep original */
+    }
+
+    const deui = String(row.tx_dev_eui || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    const maxRetries = Math.max(
+      0,
+      parseInt(String(process.env.SYSCOM_LNS_ORPHAN_ACK_MAX_RETRIES || '3').trim(), 10) || 3
+    );
+    const retryKey = `${gwKey}:${deui.length === 16 ? deui : 'any'}`;
+    const used = this._orphanAckRetryCount.get(retryKey) || 0;
+    if (used >= maxRetries) return;
+    this._orphanAckRetryCount.set(retryKey, used + 1);
+
+    const rawClassGap = parseInt(String(process.env.SYSCOM_LNS_CLASS_C_TX_GAP_MS || '2800').trim(), 10);
+    const classCGapMs = Number.isFinite(rawClassGap) ? Math.max(0, rawClassGap) : 2800;
+    const timingExtra = errUp.includes('TOO_EARLY')
+      ? parseInt(String(process.env.SYSCOM_LNS_TX_ACK_TOO_EARLY_EXTRA_MS || '1200').trim(), 10) || 1200
+      : parseInt(String(process.env.SYSCOM_LNS_TX_ACK_TOO_LATE_EXTRA_MS || '900').trim(), 10) || 900;
+    const delayMs = classCGapMs + Math.max(0, timingExtra);
+    const pr = row.priority != null ? Math.max(0, Math.min(255, Math.floor(Number(row.priority)))) : 0;
+    this.st.lnsDlInsert.run(
+      row.user_id,
+      gwKey,
+      pullJson,
+      now,
+      now + delayMs,
+      pr,
+      0,
+      deui.length === 16 ? deui : null,
+      null,
+      null,
+      null,
+      0,
+      null
+    );
+    console.warn(
+      '[LNS] GW_TX_ACK huérfano',
+      error,
+      '→ reencolado DL',
+      deui.length === 16 ? deui : '(join/mac)',
+      'en',
+      delayMs,
+      'ms (intento',
+      used + 1,
+      '/',
+      maxRetries,
+      ')'
+    );
   }
 
   _lnsTxAckIsSuccess(txpkAck) {
@@ -2638,6 +2894,11 @@ class Store {
         );
       }
       if (hasRejection) {
+        try {
+          this.lnsRetryOrphanTxAck(nGw, errRaw);
+        } catch (eOrph) {
+          console.warn('[store] lnsRetryOrphanTxAck:', eOrph.message);
+        }
         if (typeof this._lnsGatewayTxFailHook === 'function') {
           try {
             this._lnsGatewayTxFailHook({
@@ -2669,8 +2930,8 @@ class Store {
       isTooLate ? parseInt(process.env.SYSCOM_LNS_TX_ACK_TOO_LATE_EXTRA_MS || '900', 10) || 900 : 0,
       isTooEarly ? parseInt(process.env.SYSCOM_LNS_TX_ACK_TOO_EARLY_EXTRA_MS || '900', 10) || 900 : 0
     );
-    const rawClassGap = parseInt(String(process.env.SYSCOM_LNS_CLASS_C_TX_GAP_MS || '1200').trim(), 10);
-    const classCGapMs = Number.isFinite(rawClassGap) ? Math.max(0, rawClassGap) : 1200;
+    const rawClassGap = parseInt(String(process.env.SYSCOM_LNS_CLASS_C_TX_GAP_MS || '2200').trim(), 10);
+    const classCGapMs = Number.isFinite(rawClassGap) ? Math.max(0, rawClassGap) : 2200;
     let delayMs = baseRetryMs + timingExtraMs;
     /**
      * TOO_LATE: reintento antes del hueco clase C → el GW suele rechazar otra vez.
@@ -2746,6 +3007,9 @@ class Store {
           row.tx_dev_eui,
           timingHint
         );
+        if (errN.includes('TOO_EARLY') || errN.includes('TOO_LATE')) {
+          this.lnsMarkGwForceClassCImme(nGw);
+        }
         if (typeof this._lnsGatewayTxFailHook === 'function') {
           try {
             this._lnsGatewayTxFailHook({

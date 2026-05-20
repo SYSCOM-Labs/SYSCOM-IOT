@@ -12,8 +12,12 @@ import {
   Clock,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { fetchDeviceHistory } from '../../services/api';
-import { expandNestedGatewayTelemetry } from '../../utils/gatewayPayload';
+import { fetchDeviceHistory, fetchDeviceProperties } from '../../services/api';
+import {
+  expandNestedGatewayTelemetry,
+  hasMeaningfulAppTelemetry,
+  mergeDeviceTelemetryForWidgets,
+} from '../../utils/gatewayPayload';
 import { formatTelemetryForSummaryRow } from '../../utils/telemetryDisplayFormat';
 import { getTelemetryLabelHintsForDevice } from '../../services/deviceTemplates';
 import './DeviceDataModal.css';
@@ -67,7 +71,7 @@ function formatScalar(v) {
   return String(v);
 }
 
-function buildViewTelemetry(device, snapshot) {
+function buildViewTelemetry(device, snapshot, mergedLive) {
   if (snapshot && snapshot.properties && typeof snapshot.properties === 'object') {
     return expandNestedGatewayTelemetry({ ...snapshot.properties });
   }
@@ -75,6 +79,9 @@ function buildViewTelemetry(device, snapshot) {
   const base = {};
   for (const [k, v] of Object.entries(device)) {
     if (!INTERNAL_FIELDS.has(k)) base[k] = v;
+  }
+  if (mergedLive && typeof mergedLive === 'object') {
+    Object.assign(base, mergeDeviceTelemetryForWidgets(mergedLive));
   }
   return expandNestedGatewayTelemetry(base);
 }
@@ -132,6 +139,7 @@ const DeviceDataModal = ({ device, onClose }) => {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState(null);
   const [selectedSnapshot, setSelectedSnapshot] = useState(null);
+  const [mergedLive, setMergedLive] = useState(null);
   const historyAutoFetchRef = useRef(false);
 
   const deviceId = device?.deviceId != null ? String(device.deviceId) : '';
@@ -141,11 +149,27 @@ const DeviceDataModal = ({ device, onClose }) => {
     setHistoryRows([]);
     setHistoryError(null);
     setSelectedSnapshot(null);
+    setMergedLive(null);
   }, [deviceId]);
 
+  useEffect(() => {
+    if (!deviceId || !token) return;
+    let cancelled = false;
+    fetchDeviceProperties(deviceId, credentials, token)
+      .then((resp) => {
+        if (cancelled) return;
+        const live = resp?.data?.data?.properties || resp?.data?.properties || {};
+        if (hasMeaningfulAppTelemetry(live)) setMergedLive(live);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [deviceId, token, credentials]);
+
   const viewTelemetry = useMemo(
-    () => buildViewTelemetry(device, selectedSnapshot),
-    [device, selectedSnapshot]
+    () => buildViewTelemetry(device, selectedSnapshot, mergedLive),
+    [device, selectedSnapshot, mergedLive]
   );
 
   const { connectivity, telemetry } = useMemo(() => partitionCards(viewTelemetry), [viewTelemetry]);

@@ -4,6 +4,8 @@ const crypto = require('crypto');
 const lora_packet = require('lora-packet');
 const { deriveSessionKeys10x, parseKeyHex32 } = require('./lorawan-lns-crypto');
 const { lorawanUs915Only } = require('./lorawan-us915-region');
+const { resolveDownlinkDeviceClassForLns } = require('./lib/resolve-downlink-class.cjs');
+const { syncDeviceTemplateFromCatalog } = require('./lib/auto-fleet-sync.cjs');
 
 const LORAWAN_US915_ONLY = lorawanUs915Only();
 
@@ -29,8 +31,8 @@ function envFloat(name, def) {
 // ========== Defaults LNS (US915 / UG65; sobreescribibles por env) ==========
 const RX1_DELAY_US_DEFAULT = 5_000_000;
 const RX2_AFTER_RX1_SEC_DEFAULT = 1;
-/** Espacio mínimo entre downlinks al mismo GW (clase C `imme` + Join-Accept); equilibrio UG65 / Botón OTAA. */
-const CLASS_C_TX_GAP_MS_DEFAULT = 1200;
+/** Espacio mínimo entre downlinks al mismo GW (clase C `imme` + Join-Accept + LinkCheckAns); UG65 / apagador + botón OTAA. */
+const CLASS_C_TX_GAP_MS_DEFAULT = 4500;
 const TX_ACK_TIMEOUT_MS_DEFAULT = 5000;
 
 function getRx2AfterRx1Sec() {
@@ -39,6 +41,12 @@ function getRx2AfterRx1Sec() {
 
 function getClassCTxGapMs() {
   return Math.max(0, envInt('SYSCOM_LNS_CLASS_C_TX_GAP_MS', CLASS_C_TX_GAP_MS_DEFAULT));
+}
+
+/** Tras cada uplink en el GW, evitar downlink clase C inmediato (TOO_EARLY en UG65). */
+function getClassCPostUplinkQuietMs() {
+  const gap = getClassCTxGapMs();
+  return Math.max(1200, envInt('SYSCOM_LNS_CLASS_C_POST_UPLINK_MS', Math.max(1600, Math.floor(gap * 0.55))));
 }
 
 /** Alineado con `store.readLnsTxAckPruneSilenceMs` (timeout sin GW_TX_ACK). */
@@ -105,7 +113,8 @@ function appDownlinkTxAckWanted(deviceClassNorm) {
     return true;
   }
   if (deviceClassNorm === 'C') return false;
-  return true;
+  /** Sin variable: no bloquear la flota por GW_TX_ACK (FCnt al encolar; reintentos sin 429). */
+  return false;
 }
 
 /**
@@ -131,7 +140,12 @@ function joinSessionCommitDeferred() {
  * Desactivar: SYSCOM_LNS_JOIN_REUSE_DEVADDR_MS=0
  */
 function joinReuseDevAddrWindowMs() {
-  return Math.max(0, envInt('SYSCOM_LNS_JOIN_REUSE_DEVADDR_MS', 45000));
+  return Math.max(0, envInt('SYSCOM_LNS_JOIN_REUSE_DEVADDR_MS', 120000));
+}
+
+/** Margen extra (ms) tras el hueco clase C antes de encolar Join-Accept (mismo GW que el apagador). */
+function joinExtraTxGapMs() {
+  return Math.max(0, envInt('SYSCOM_LNS_JOIN_EXTRA_TX_GAP_MS', 400));
 }
 
 function txPower() {
@@ -142,9 +156,21 @@ function classARx1WindowMs() {
   return envInt('SYSCOM_LNS_CLASS_A_RX1_WINDOW_MS', 35000);
 }
 
-/** Clase C: si `SYSCOM_LNS_CLASS_C_USE_GATEWAY_TMST=1`, programar TX con `tmst` del reloj del GW (último uplink), no `imme`. */
+/**
+ * Clase C: programar TX con `tmst` del reloj del GW (último uplink), no `imme`.
+ * Por defecto **imme** (UG65 con apagador clase A + termostato C: `tmst` suele dar TOO_EARLY).
+ * `SYSCOM_LNS_CLASS_C_USE_GATEWAY_TMST=1` activa programación por tmst.
+ */
 function classCUseGatewayTmst() {
-  return String(process.env.SYSCOM_LNS_CLASS_C_USE_GATEWAY_TMST || '').trim() === '1';
+  const raw = process.env.SYSCOM_LNS_CLASS_C_USE_GATEWAY_TMST;
+  if (raw != null && String(raw).trim() !== '') {
+    return String(raw).trim() === '1';
+  }
+  return false;
+}
+
+function appDownlinkDefaultPriority() {
+  return Math.max(0, Math.min(255, envInt('SYSCOM_LNS_APP_DOWNLINK_PRIORITY', 128)));
 }
 
 /** µs a sumar a `rxpk.tmst` para downlink clase C programado (defecto 500 ms). No usar wall-clock: el GW ignora Date.now. */
@@ -729,6 +755,48 @@ function createLorawanLnsEngine(ctx) {
    * Predeterminado **0** (máxima inmediatez); suba el valor si el concentrador rechaza TX en ráfaga.
    */
   const classCNextEligibleMsByGw = new Map();
+  /** Último `rxpk.tmst` / wall-time visto en el GW (cualquier nodo), para no programar clase C en el pasado del reloj SX130x. */
+  const gwLastRxTmstByKey = new Map();
+  const gwLastRxWallMsByKey = new Map();
+
+  function gwActivityKey(userId, gatewayEuiNorm16) {
+    return `${String(userId)}:${String(gatewayEuiNorm16 || '').toLowerCase()}`;
+  }
+
+  /** @param {number} tmst µs del concentrador (uint32) */
+  function noteGwRxActivity(userId, gatewayEuiNorm16, tmst) {
+    const k = gwActivityKey(userId, gatewayEuiNorm16);
+    gwLastRxWallMsByKey.set(k, Date.now());
+    const t = Number(tmst);
+    if (!Number.isFinite(t) || t <= 0) return;
+    const next = t >>> 0;
+    const prev = gwLastRxTmstByKey.get(k);
+    if (prev == null) {
+      gwLastRxTmstByKey.set(k, next);
+      return;
+    }
+    const delta = (next - (prev >>> 0)) >>> 0;
+    if (delta > 0 && delta < 0x80000000) gwLastRxTmstByKey.set(k, next);
+  }
+
+  function resolveTmstBaseForGw(userId, gatewayEuiNorm16, sessionTmst) {
+    const k = gwActivityKey(userId, gatewayEuiNorm16);
+    const gw = gwLastRxTmstByKey.get(k);
+    const sess = Number(sessionTmst) > 0 ? Number(sessionTmst) >>> 0 : 0;
+    if (gw == null || gw === 0) return sess;
+    if (sess === 0) return gw >>> 0;
+    const dGw = (gw - sess) >>> 0;
+    const dSess = (sess - gw) >>> 0;
+    return dGw < dSess ? gw >>> 0 : sess;
+  }
+
+  function gwLastUplinkWallMs(userId, gatewayEuiNorm16, sessionWallMs) {
+    const k = gwActivityKey(userId, gatewayEuiNorm16);
+    const gwWall = gwLastRxWallMsByKey.get(k);
+    const sw = sessionWallMs != null ? Number(sessionWallMs) : 0;
+    if (gwWall == null) return sw || null;
+    return Math.max(gwWall, sw || 0);
+  }
 
   function scheduleClassCNotBeforeMs(userId, gatewayEuiNorm16, wallFloorMs) {
     const gap = getClassCTxGapMs();
@@ -902,6 +970,9 @@ function createLorawanLnsEngine(ctx) {
       console.warn('[LNS] Join Request MIC inválido o AppKey incorrecto');
       return false;
     }
+    if (rxpk && rxpk.tmst != null) {
+      noteGwRxActivity(ownerUserId, gatewayEuiNorm, Number(rxpk.tmst));
+    }
 
     let devAddrBuf;
     try {
@@ -1005,9 +1076,9 @@ function createLorawanLnsEngine(ctx) {
     const explicitJoinDelay = joinPullQueueNotBeforeMs();
     /** Misma cola de espaciado que clase C: evita TOO_EARLY/TOO_LATE al encolar Join-Accept tras un `imme` del apagador. */
     const joinQueueNotBefore =
-      explicitJoinDelay > 0
+      (explicitJoinDelay > 0
         ? joinTs + explicitJoinDelay
-        : scheduleClassCNotBeforeMs(ownerUserId, gatewayEuiNorm, joinTs);
+        : scheduleClassCNotBeforeMs(ownerUserId, gatewayEuiNorm, joinTs)) + joinExtraTxGapMs();
     const joinTelemetryProps = {
       devEUI: devEui,
       lorawan_event: 'join_accept_sent',
@@ -1042,7 +1113,9 @@ function createLorawanLnsEngine(ctx) {
         properties: joinTelemetryProps,
         ts: joinTs,
       });
-      store.lnsEnqueuePullResp(ownerUserId, gatewayEuiNorm, pullObj, joinQueueNotBefore, 255, null);
+      store.lnsEnqueuePullResp(ownerUserId, gatewayEuiNorm, pullObj, joinQueueNotBefore, 255, {
+        devEui,
+      });
       console.log(
         '[LNS] OTAA Join-Accept encolado (sesión ya en BD; sin esperar GW_TX_ACK — predeterminado; use SYSCOM_LNS_JOIN_COMMIT_ON_TX_ACK=1 para diferir) →',
         devEui,
@@ -1210,11 +1283,13 @@ function createLorawanLnsEngine(ctx) {
     session.fcntUp = fcnt32;
     session.lastGatewayEui = gatewayEuiNorm;
     session.lastRxTmst = rxpk.tmst != null ? Number(rxpk.tmst) : null;
+    noteGwRxActivity(ownerUserId, gatewayEuiNorm, session.lastRxTmst);
     session.lastRxFreq = rxpk.freq != null ? Number(rxpk.freq) : null;
     session.lastRxDatr = rxpk.datr != null ? String(rxpk.datr) : '';
     session.lastRxCodr = rxpk.codr != null ? String(rxpk.codr) : '';
     session.lastRxRfch = rxpk.rfch != null ? Number(rxpk.rfch) : null;
     session.lastUplinkWallMs = Date.now();
+    scheduleClassCNotBeforeMs(ownerUserId, gatewayEuiNorm, Date.now() + getClassCPostUplinkQuietMs());
     const uplinkConfirmed = p.isConfirmed() && p.getDir() === 'up';
     session.pendingMacAck = uplinkConfirmed || session.pendingMacAck;
 
@@ -1231,6 +1306,12 @@ function createLorawanLnsEngine(ctx) {
     }
 
     store.lnsUpdateSessionAfterUplink(devEui, session);
+
+    try {
+      syncDeviceTemplateFromCatalog(store, telemetryDeviceId, ud, ownerUserId);
+    } catch (eSync) {
+      console.warn('[LNS] syncDeviceTemplateFromCatalog (uplink):', eSync.message);
+    }
 
     const radioUp = radioMetaFromRxpk(rxpk);
     /** No expandir `session` aquí: incluye NwkSKey/AppSKey (Buffer) y userId; al JSON.parse en BD aparecen como `appSKey.data` y todas las cuentas veían las mismas claves en selectores. */
@@ -1267,7 +1348,10 @@ function createLorawanLnsEngine(ctx) {
     });
 
     let linkCheckQueuedOk = false;
-    if (linkCheckAnsToDeviceEnabled() && otaaUplinkHasLinkCheckReq(p, fPort, plain)) {
+    const deferLinkCheck =
+      typeof store.lnsHasPendingPullRespForDev === 'function' &&
+      store.lnsHasPendingPullRespForDev(ownerUserId, devEui);
+    if (linkCheckAnsToDeviceEnabled() && !deferLinkCheck && otaaUplinkHasLinkCheckReq(p, fPort, plain)) {
       try {
         const margin = Math.max(0, Math.min(254, envInt('SYSCOM_LNS_LINK_CHECK_ANS_MARGIN', 10)));
         const gwcnt = Math.max(0, Math.min(255, envInt('SYSCOM_LNS_LINK_CHECK_ANS_GW_CNT', 1)));
@@ -1314,7 +1398,6 @@ function createLorawanLnsEngine(ctx) {
         confirmed: row.confirmed,
         delayMs: row.delayMs,
         priority: row.priority,
-        deviceClass: row.deviceClass,
         gatewayEui: row.gatewayEui && row.gatewayEui.length === 16 ? row.gatewayEui : undefined,
         skipTxAckTrack: false,
       });
@@ -1479,9 +1562,10 @@ function createLorawanLnsEngine(ctx) {
     const gwRow = store.lnsGetGatewayByEui(userId, gatewayQueueEui);
     const gwBand = gwRow ? String(gwRow.frequencyBand || '').trim() : '';
 
-    const cls = normalizeDeviceClass(
-      opt.deviceClass != null && String(opt.deviceClass).trim() !== '' ? opt.deviceClass : session.deviceClass
-    );
+    const cls = resolveDownlinkDeviceClassForLns(store, userId, devEuiNorm16, {
+      explicitClass: opt.deviceClass,
+      sessionClass: session.deviceClass,
+    });
     const nextDown = session.fcntDown < 0 ? 0 : (session.fcntDown + 1) % 65536;
     const skipTrack = Boolean(opt.skipTxAckTrack);
     const useTrack =
@@ -1518,8 +1602,9 @@ function createLorawanLnsEngine(ctx) {
 
     const gwBandU = gwBand.toUpperCase();
     const r2Stub = rx2Defaults(isUs915Plan({ band: gwBandU }, null));
+    const tmstBase = resolveTmstBaseForGw(userId, gatewayQueueEui, session.lastRxTmst);
     const rxpkStub = {
-      tmst: session.lastRxTmst || 0,
+      tmst: tmstBase || 0,
       freq: session.lastRxFreq || r2Stub.freq,
       datr: session.lastRxDatr || r2Stub.datr,
       codr: session.lastRxCodr || '4/5',
@@ -1535,7 +1620,15 @@ function createLorawanLnsEngine(ctx) {
       useImme = true;
       const extraDelay =
         opt.delayMs != null && Number.isFinite(Number(opt.delayMs)) ? Math.max(0, Number(opt.delayMs)) : 0;
-      notBeforeMs = scheduleClassCNotBeforeMs(userId, gatewayQueueEui, Date.now() + extraDelay);
+      const quietAfterRx =
+        session.lastUplinkWallMs != null
+          ? Number(session.lastUplinkWallMs) + getClassCPostUplinkQuietMs()
+          : Date.now();
+      notBeforeMs = scheduleClassCNotBeforeMs(
+        userId,
+        gatewayQueueEui,
+        Math.max(Date.now() + extraDelay, quietAfterRx)
+      );
     } else if (cls === 'B') {
       useImme = false;
       const strictB = String(process.env.SYSCOM_LNS_CLASS_B_STRICT_PING || '').trim() === '1';
@@ -1568,8 +1661,7 @@ function createLorawanLnsEngine(ctx) {
       useImme = false;
       const lastUplinkWall = session.lastUplinkWallMs;
       const now = Date.now();
-      const rx1Micros = classARx1DelayUs(rxDelaySec);
-      const maxAgeMs = Math.ceil(rx1Micros / 1000) + 2000;
+      const maxAgeMs = classARx1WindowMs();
       if (lastUplinkWall == null || now - lastUplinkWall > maxAgeMs) {
         const err = new Error(
           'Downlink clase A: no hay uplink reciente. El dispositivo solo recibe justo después de enviar datos. ' +
@@ -1593,8 +1685,13 @@ function createLorawanLnsEngine(ctx) {
       classAWindow = classARxWindowMode();
     }
 
-    const classCScheduledTmst = cls === 'C' && classCUseGatewayTmst();
-    if (classCScheduledTmst && !(session.lastRxTmst > 0)) {
+    const gwForceImme =
+      cls === 'C' &&
+      typeof store.lnsGwForceClassCImme === 'function' &&
+      store.lnsGwForceClassCImme(gatewayQueueEui);
+    const classCScheduledTmst =
+      cls === 'C' && classCUseGatewayTmst() && !gwForceImme && tmstBase > 0;
+    if (classCUseGatewayTmst() && cls === 'C' && !gwForceImme && !(tmstBase > 0)) {
       console.warn(
         '[LNS] SYSCOM_LNS_CLASS_C_USE_GATEWAY_TMST=1 pero sin tmst de uplink en sesión; se usa imme para clase C. Tras un uplink con tmst válido se programará por tmst.'
       );
@@ -1602,7 +1699,7 @@ function createLorawanLnsEngine(ctx) {
 
     const pullObj = buildTxpk(phy, rxpkStub, {
       imme: useImme,
-      classCScheduledTmst: classCScheduledTmst && session.lastRxTmst > 0,
+      classCScheduledTmst,
       rxDelaySec,
       classAWindow: cls === 'A' && !useImme ? classAWindow : 'RX1',
       band: gwBandU,
@@ -1618,6 +1715,7 @@ function createLorawanLnsEngine(ctx) {
           rxDelaySec,
           classARxWindow: cls === 'A' && !useImme ? classAWindow : null,
           lastRxTmst: session.lastRxTmst,
+          gwLastRxTmst: tmstBase,
           freq: tx.freq,
           rfch: tx.rfch,
           datr: tx.datr,
@@ -1626,28 +1724,45 @@ function createLorawanLnsEngine(ctx) {
     } catch {
       /* ignore log */
     }
-    const dlPriority = opt.priority != null ? Number(opt.priority) : 0;
+    const dlPriority =
+      opt.priority != null && Number.isFinite(Number(opt.priority))
+        ? Math.max(0, Math.min(255, Math.floor(Number(opt.priority))))
+        : appDownlinkDefaultPriority();
+    /** Mismo espaciado por GW que clase C: LinkCheckAns / clase A no compiten con `imme` del apagador. */
+    const gwFloorMs = scheduleClassCNotBeforeMs(userId, gatewayQueueEui, Date.now());
+    notBeforeMs = Math.max(notBeforeMs || 0, gwFloorMs);
+
+    const ackMeta = {
+      devEui: devEuiNorm16,
+      ...(useTrack
+        ? {
+            newFcnt: nextDown,
+            prevFcnt: session.fcntDown,
+            confirmedDown: Boolean(opt.confirmed),
+          }
+        : {}),
+    };
+    store.lnsEnqueuePullResp(userId, gatewayQueueEui, pullObj, notBeforeMs, dlPriority, ackMeta);
     if (useTrack) {
-      store.lnsEnqueuePullResp(userId, gatewayQueueEui, pullObj, notBeforeMs, dlPriority, {
-        devEui: devEuiNorm16,
-        newFcnt: nextDown,
-        prevFcnt: session.fcntDown,
-        confirmedDown: Boolean(opt.confirmed),
-      });
       storePendingDownlink(userId, gatewayQueueEui, devEuiNorm16, nextDown, getTxAckTimeoutMs());
-    } else {
-      store.lnsEnqueuePullResp(userId, gatewayQueueEui, pullObj, notBeforeMs, dlPriority);
     }
 
     if (macAck) {
       store.lnsClearPendingMacAck(userId, devEuiNorm16);
     }
 
+    const txpkOut = pullObj && pullObj.txpk ? pullObj.txpk : null;
+    const txImme = txpkOut && txpkOut.imme != null ? Boolean(txpkOut.imme) : useImme;
+    const txScheduledTmst = Boolean(
+      cls === 'C' && txpkOut && txpkOut.tmst != null && !txImme
+    );
+
     return {
       ok: true,
       fPort,
       fCnt: nextDown,
-      imme: useImme,
+      imme: txImme,
+      txScheduledTmst,
       deviceClass: cls,
       gatewayEui: gatewayQueueEui,
       notBeforeMs,
@@ -1659,7 +1774,170 @@ function createLorawanLnsEngine(ctx) {
     };
   }
 
-  return { processPushJson, enqueueAppDownlink, processRxpk, normalizeDeviceClass, handleTxAck };
+  /**
+   * Recalcula `tmst`/`imme` al enviar PULL_RESP (el `not_before_ms` de clase C retrasa la TX y deja tmst obsoleto).
+   * @param {{ userId: string, json: string, txDevEui?: string }} row
+   */
+  function refreshPullRespJsonBeforeSend(row) {
+    if (String(process.env.SYSCOM_LNS_PULL_TMST_REFRESH || '1').trim() === '0') {
+      return row.json;
+    }
+    const devEui = row.txDevEui ? String(row.txDevEui).replace(/[^0-9a-fA-F]/g, '').toLowerCase() : '';
+    if (devEui.length !== 16 || !row.json) return row.json;
+    let pullObj;
+    try {
+      pullObj = JSON.parse(row.json);
+    } catch {
+      return row.json;
+    }
+    const tx = pullObj && pullObj.txpk;
+    if (!tx || typeof tx !== 'object') return row.json;
+
+    let sessionUserId = String(row.userId || '').trim();
+    let session = store.lnsGetSessionByDevEui(sessionUserId, devEui);
+    if (!session) {
+      try {
+        const r = store.db
+          .prepare(
+            `SELECT user_id FROM lorawan_lns_sessions WHERE dev_eui = ? ORDER BY datetime(updated_at) DESC LIMIT 1`
+          )
+          .get(devEui);
+        if (r && r.user_id) {
+          sessionUserId = String(r.user_id);
+          session = store.lnsGetSessionByDevEui(sessionUserId, devEui);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!session) return row.json;
+
+    const ud =
+      store.getUserDeviceByDevEuiNorm(sessionUserId, devEui) ||
+      (typeof store.getAnyUserDeviceByDevEuiNorm === 'function'
+        ? store.getAnyUserDeviceByDevEuiNorm(devEui)
+        : null);
+    const cls = resolveDownlinkDeviceClassForLns(store, sessionUserId, devEui, {
+      sessionClass: session.deviceClass,
+      deviceId: ud?.deviceId || devEui,
+      productModel: ud?.productModel,
+    });
+
+    const gwEui = session.lastGatewayEui
+      ? resolveQueueGatewayEui(sessionUserId, session.lastGatewayEui)
+      : '';
+    const gwRow = gwEui ? store.lnsGetGatewayByEui(sessionUserId, gwEui) : null;
+    const gwBandU = gwRow ? String(gwRow.frequencyBand || '').trim().toUpperCase() : '';
+    const tmstBase = gwEui
+      ? resolveTmstBaseForGw(sessionUserId, gwEui, session.lastRxTmst)
+      : Number(session.lastRxTmst) > 0
+        ? Number(session.lastRxTmst) >>> 0
+        : 0;
+    const rxpkStub = {
+      tmst: tmstBase || 0,
+      freq: session.lastRxFreq || rx2Defaults(isUs915Plan({ band: gwBandU }, null)).freq,
+      datr: session.lastRxDatr || '',
+      codr: session.lastRxCodr || '4/5',
+      rfch: session.lastRxRfch != null ? session.lastRxRfch : 0,
+    };
+    const isUs = isUs915Plan({ band: gwBandU }, rxpkStub);
+    const r2 = rx2Defaults(isUs);
+    const omitCodr500 =
+      String(process.env.SYSCOM_LNS_TXPK_OMIT_CODR_BW500 || '').trim() === '1' &&
+      String(r2.datr || '').includes('BW500');
+
+    const lastWall = gwEui
+      ? gwLastUplinkWallMs(sessionUserId, gwEui, session.lastUplinkWallMs)
+      : session.lastUplinkWallMs;
+    const maxAge = envInt('SYSCOM_LNS_PULL_TMST_REFRESH_MAX_AGE_MS', 12000);
+    const tmstStale = lastWall == null || Date.now() - Number(lastWall) > maxAge;
+    const hasTmst = tmstBase > 0;
+    const prevTmst = tx.tmst;
+    const prevImme = Boolean(tx.imme);
+
+    const gwForceImme =
+      cls === 'C' &&
+      gwEui &&
+      typeof store.lnsGwForceClassCImme === 'function' &&
+      store.lnsGwForceClassCImme(gwEui);
+    if (cls === 'C' && classCUseGatewayTmst() && hasTmst && !tmstStale && !gwForceImme) {
+      tx.imme = false;
+      tx.tmst = (tmstBase + classCTmstOffsetUs()) >>> 0;
+      tx.freq = r2.freq;
+      tx.datr = r2.datr;
+      if (!omitCodr500) tx.codr = r2.codr;
+      if (isUs && Number(r2.freq) >= 920) {
+        const rawRf = process.env.SYSCOM_LNS_TX_RFCH_IMME_US915;
+        if (rawRf != null && String(rawRf).trim() !== '') {
+          const forced = parseInt(String(rawRf).trim(), 10);
+          if (Number.isFinite(forced) && forced >= 0 && forced <= 7) tx.rfch = forced;
+        } else {
+          tx.rfch = 0;
+        }
+      }
+    } else if (cls === 'A' && hasTmst && !tmstStale) {
+      const rxDelaySec = session.rxDelaySec != null ? session.rxDelaySec : 1;
+      const win = classARxWindowMode();
+      tx.imme = false;
+      if (win === 'RX2') {
+        const afterRx1Sec = getRx2AfterRx1Sec();
+        const secOffset = rxDelaySec + afterRx1Sec;
+        tx.tmst = (tmstBase + secOffset * 1_000_000) >>> 0;
+        tx.freq = r2.freq;
+        tx.datr = r2.datr;
+      } else {
+        tx.tmst = (tmstBase + classARx1DelayUs(rxDelaySec)) >>> 0;
+        if (isUs) {
+          tx.freq = getUs915Rx1Freq(Number(rxpkStub.freq));
+          tx.datr = getUs915Rx1Datr(rxpkStub.datr);
+        } else {
+          tx.freq = Number(rxpkStub.freq);
+          tx.datr = String(rxpkStub.datr || r2.datr);
+        }
+      }
+      if (!omitCodr500) tx.codr = r2.codr;
+    } else {
+      tx.imme = true;
+      delete tx.tmst;
+      tx.freq = r2.freq;
+      tx.datr = r2.datr;
+      if (!omitCodr500) tx.codr = r2.codr;
+      if (isUs && Number(r2.freq) >= 920) {
+        const rawRf = process.env.SYSCOM_LNS_TX_RFCH_IMME_US915;
+        if (rawRf != null && String(rawRf).trim() !== '') {
+          const forced = parseInt(String(rawRf).trim(), 10);
+          if (Number.isFinite(forced) && forced >= 0 && forced <= 7) tx.rfch = forced;
+        } else {
+          tx.rfch = 0;
+        }
+      }
+    }
+
+    if (String(process.env.SYSCOM_LNS_LOG_DOWNLINK_SCHEDULE || '').trim() === '1') {
+      const changed = prevTmst !== tx.tmst || prevImme !== Boolean(tx.imme);
+      if (changed) {
+        console.log('[LNS] txpk refrescado en PULL_RESP', {
+          devEui,
+          cls,
+          imme: Boolean(tx.imme),
+          tmst: tx.tmst != null ? tx.tmst : null,
+          lastRxTmst: session.lastRxTmst,
+          gwLastRxTmst: tmstBase,
+          staleMs: lastWall != null ? Date.now() - Number(lastWall) : null,
+        });
+      }
+    }
+    return JSON.stringify(pullObj);
+  }
+
+  return {
+    processPushJson,
+    enqueueAppDownlink,
+    processRxpk,
+    normalizeDeviceClass,
+    handleTxAck,
+    refreshPullRespJsonBeforeSend,
+  };
 }
 
 module.exports = { createLorawanLnsEngine };

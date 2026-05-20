@@ -32,9 +32,14 @@ function formatClientDownlinkLine(d) {
   if (d.deviceClass) parts.push(`LoRaWAN clase ${d.deviceClass}`);
   if (d.confirmed === true) parts.push('confirmado');
   else if (d.confirmed === false) parts.push('no confirmado');
-  if (d.imme === true) parts.push('TX inmediata');
+  const cls = d.deviceClass != null ? String(d.deviceClass).toUpperCase() : '';
+  if (cls === 'C') {
+    if (d.txScheduledTmst) parts.push('TX programada (tmst)');
+    else if (d.imme === true) parts.push('TX inmediata');
+    else parts.push('TX clase C');
+  } else if (d.imme === true) parts.push('TX inmediata');
   else if (d.imme === false) parts.push('TX en ventana RX');
-  if (d.classARxWindow) parts.push(`ventana ${d.classARxWindow}`);
+  if (d.classARxWindow && cls !== 'C') parts.push(`ventana ${d.classARxWindow}`);
   if (d.fCnt != null && d.fCnt !== '') parts.push(`FCnt↓ ${d.fCnt}`);
   if (d.txAckPending === true) {
     const w = d.txAckMaxWaitMs != null && Number.isFinite(Number(d.txAckMaxWaitMs)) ? Number(d.txAckMaxWaitMs) : 8000;
@@ -63,6 +68,8 @@ export function AppActivityLogProvider({ currentPage, children }) {
   ]);
   const [autoScroll, setAutoScroll] = useState(true);
   const prevPageRef = useRef(null);
+  /** Dedup de líneas LNS / telemetría en el registro (compartido entre listeners SSE). */
+  const activityLogDedupeRef = useRef(new Map());
 
   const append = useCallback((entry) => {
     setLines((prev) => {
@@ -117,6 +124,7 @@ export function AppActivityLogProvider({ currentPage, children }) {
   }, [append]);
 
   useEffect(() => {
+    const lastByKey = activityLogDedupeRef.current;
     const onLns = (ev) => {
       const d = ev.detail || {};
       const t = d.eventType || d.type || 'evento';
@@ -139,6 +147,12 @@ export function AppActivityLogProvider({ currentPage, children }) {
         const meta = d.meta && typeof d.meta === 'object' ? d.meta : {};
         const err = meta.txpkError != null ? String(meta.txpkError) : 'error';
         const gw = normDevId(meta.gatewayEui);
+        const deui = normDevId(meta.devEui || d.devEui);
+        const rejectKey = `txrej:${gw}:${err}:${deui}`;
+        const rejectGap = /TOO_EARLY|TOO_LATE/i.test(String(err)) ? 30000 : 15000;
+        const prevRej = lastByKey.get(rejectKey) || 0;
+        if (Date.now() - prevRej < rejectGap) return;
+        lastByKey.set(rejectKey, Date.now());
         const orphan = Boolean(meta.orphanAck);
         append({
           ts: Date.now(),
@@ -195,7 +209,7 @@ export function AppActivityLogProvider({ currentPage, children }) {
   }, [append]);
 
   useEffect(() => {
-    const lastByKey = new Map();
+    const lastByKey = activityLogDedupeRef.current;
     const onTel = (ev) => {
       const d = ev.detail || {};
       const id = d.deviceId || d.device_id || '';
@@ -212,7 +226,7 @@ export function AppActivityLogProvider({ currentPage, children }) {
       const joinEv =
         props.lorawan_event != null && /join/i.test(String(props.lorawan_event).trim());
       const key = isGw ? `gw:${dev || '?'}` : `dev:${dev || '?'}`;
-      const minGap = isGw ? 120000 : joinEv ? 15000 : 1000;
+      const minGap = isGw ? 300000 : joinEv ? 120000 : 8000;
       const prev = lastByKey.get(key) || 0;
       if (now - prev < minGap) return;
       lastByKey.set(key, now);

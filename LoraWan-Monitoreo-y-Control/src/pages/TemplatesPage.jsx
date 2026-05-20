@@ -673,7 +673,21 @@ const TemplatesPage = () => {
                       <ul className="templates-telemetry-labels-preview__list">
                         {Object.entries(normalizeTelemetryLabelHints(form.telemetryLabels)).map(([k, h]) => (
                           <li key={k}>
-                            <code>{k}</code>: {h.trueText || '—'} / {h.falseText || '—'}
+                            <code>{k}</code>
+                            {h.valueLabels && Object.keys(h.valueLabels).length > 0 ? (
+                              <>
+                                :{' '}
+                                {Object.entries(h.valueLabels)
+                                  .filter(([rk]) => /^[0-9]+$/.test(rk))
+                                  .sort((a, b) => Number(a[0]) - Number(b[0]))
+                                  .map(([rk, lab]) => `${rk}→${lab}`)
+                                  .join(', ')}
+                              </>
+                            ) : (
+                              <>
+                                : {h.trueText || '—'} / {h.falseText || '—'}
+                              </>
+                            )}
                           </li>
                         ))}
                       </ul>

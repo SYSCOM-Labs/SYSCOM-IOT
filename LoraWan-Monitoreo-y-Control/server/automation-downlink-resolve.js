@@ -10,6 +10,7 @@
  * Referencia payloads WT201: encoder oficial Milesight (`wt201-encoder.js`), p. ej.
  * `temperature_control_enable` → FF C5 01 / 00.
  */
+const { resolveWt201DownlinkHex } = require('./lib/wt201-downlink-encode.cjs');
 
 /** @param {unknown} s */
 function stripToHex(s) {
@@ -54,6 +55,10 @@ function resolveAutomationDownlinkHex(action) {
   for (const raw of candidates) {
     const h = stripToHex(raw);
     if (h) return h;
+  }
+  for (const raw of candidates) {
+    const wt = resolveWt201DownlinkHex(raw);
+    if (wt) return wt;
   }
   for (const raw of candidates) {
     const tok = normToken(raw);

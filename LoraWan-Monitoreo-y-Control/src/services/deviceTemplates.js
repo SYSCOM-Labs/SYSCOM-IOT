@@ -13,6 +13,8 @@
  * HTTP si hay `payload_b64` o `payload_hex`; el JSON decodificado se fusiona con los metadatos LoRaWAN.
  */
 import { SEED_DEVICE_TEMPLATES } from '../constants/seedDeviceTemplates';
+import { downlinkDeferUntilUplink } from '../utils/lorawanClassBehavior';
+import { remapWs501DownlinkList } from '../utils/ws501DownlinkHex';
 
 const STORAGE_KEY = 'device_profile_templates_v1';
 /** id de plantilla aplicada automáticamente al crear dispositivos (decoder + downlinks). */
@@ -223,10 +225,15 @@ function seedDefaultLorawanClassForTemplate(t) {
   return String(lc).trim();
 }
 
-export function getDownlinkLorawanClassForDevice(deviceId) {
+/**
+ * Clase LoRaWAN efectiva desde plantilla (catálogo / id vinculado / modelo de producto).
+ * @param {string} deviceId
+ * @param {string} [deviceModel]
+ * @returns {'A'|'B'|'C'|null}
+ */
+export function getDownlinkLorawanClassForDevice(deviceId, deviceModel) {
   if (typeof window === 'undefined' || !deviceId) return null;
-  const tid = getStoredTemplateIdForDevice(deviceId);
-  const tpl = getDeviceTemplateById(tid);
+  const tpl = findTemplateForDevice(deviceId, deviceModel);
   if (!tpl) return null;
   const explicit = tpl.lorawanClass != null && String(tpl.lorawanClass).trim() !== '';
   const raw = explicit ? tpl.lorawanClass : seedDefaultLorawanClassForTemplate(tpl);
@@ -234,15 +241,98 @@ export function getDownlinkLorawanClassForDevice(deviceId) {
   return normalizeTemplateLorawanClass(raw);
 }
 
-const normalizeDownlinks = (arr) =>
-  (Array.isArray(arr) ? arr : [])
+/**
+ * Opciones para POST /devices/:id/downlink según **clase de la plantilla** (C = inmediato, sin esperar uplink).
+ * @param {string} deviceId
+ * @param {{ lorawanClass?: string, model?: string, productModel?: string }} [deviceRow]
+ */
+export function getDownlinkSendOptionsForDevice(deviceId, deviceRow) {
+  const deviceModel = deviceRow?.productModel || deviceRow?.model || '';
+  const fromTpl = getDownlinkLorawanClassForDevice(deviceId, deviceModel);
+  const fromRow =
+    deviceRow?.lorawanClass != null && String(deviceRow.lorawanClass).trim() !== ''
+      ? normalizeTemplateLorawanClass(deviceRow.lorawanClass)
+      : null;
+  const cls = fromTpl || fromRow;
+  return {
+    confirmed: false,
+    ...(cls ? { lorawanClass: cls } : {}),
+    deferUntilUplink: cls ? downlinkDeferUntilUplink(cls) : true,
+    priority: 200,
+  };
+}
+
+const normalizeDownlinks = (arr, productModelOrTpl) => {
+  const base = (Array.isArray(arr) ? arr : [])
     .map((d) => ({
       name: String(d?.name || '').trim(),
       hex: String(d?.hex || '').trim().replace(/\s/g, '').toLowerCase().replace(/^0x/, ''),
     }))
     .filter((d) => d.name && d.hex);
+  const pm =
+    typeof productModelOrTpl === 'string'
+      ? productModelOrTpl
+      : productModelOrTpl
+        ? productModelLabelFromTemplate(productModelOrTpl)
+        : '';
+  return remapWs501DownlinkList(base, pm);
+};
 
-/** Mapa campo (minúsculas) → textos para valores booleanos/on-off (desde «Ajustar» en plantillas). */
+/**
+ * Plantilla vinculada al dispositivo (id guardado) o por modelo de producto.
+ * @param {string} deviceId
+ * @param {string} [deviceModel]
+ */
+export function findTemplateForDevice(deviceId, deviceModel) {
+  const tid = getStoredTemplateIdForDevice(deviceId);
+  if (tid) {
+    const byId = getDeviceTemplateById(tid);
+    if (byId) return byId;
+  }
+  const pm = String(deviceModel || '').toUpperCase();
+  if (!pm) return null;
+  return (
+    getDeviceTemplates().find((t) => {
+      const m = String(t.modelo || '').trim().toUpperCase();
+      return m && pm.includes(m);
+    }) || null
+  );
+}
+
+function cacheDownlinksForDevice(deviceId, template, downlinks) {
+  if (typeof window === 'undefined' || !deviceId) return;
+  const norm = deviceKeyNorm(deviceId);
+  const dls = Array.isArray(downlinks) ? downlinks : [];
+  try {
+    localStorage.setItem(downlinksLocalStorageKey(deviceId), JSON.stringify(dls));
+    const tid = template?.id != null ? String(template.id).trim() : '';
+    if (tid) localStorage.setItem(templateSourceLocalStorageKey(deviceId), tid);
+  } catch {
+    /* ignore quota */
+  }
+  if (norm) {
+    primedDownlinksByNorm.set(norm, dls);
+    const tid = template?.id != null ? String(template.id).trim() : '';
+    if (tid) primedCatalogTemplateIdByNorm.set(norm, tid);
+  }
+}
+
+/**
+ * Downlinks efectivos: **siempre** prioriza la plantilla del catálogo sobre localStorage manual.
+ * @param {string} deviceId
+ * @param {string} [deviceModel] p. ej. `Milesight · WS501`
+ */
+export function resolveDownlinksForDevice(deviceId, deviceModel) {
+  const tpl = findTemplateForDevice(deviceId, deviceModel);
+  if (tpl) {
+    const dls = normalizeDownlinks(tpl.downlinks, tpl);
+    cacheDownlinksForDevice(deviceId, tpl, dls);
+    return dls;
+  }
+  return readDownlinksFromLocalStorage(deviceId, { deviceModel, preferTemplate: false });
+}
+
+/** Mapa campo (minúsculas) → textos para UI (booleanos, enums desde «Ajustar» en plantillas). */
 export function normalizeTelemetryLabelHints(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
   const out = {};
@@ -252,10 +342,20 @@ export function normalizeTelemetryLabelHints(raw) {
     if (!v || typeof v !== 'object') continue;
     const trueText = v.trueText != null ? String(v.trueText).trim() : '';
     const falseText = v.falseText != null ? String(v.falseText).trim() : '';
-    if (!trueText && !falseText) continue;
+    let valueLabels = null;
+    if (v.valueLabels && typeof v.valueLabels === 'object' && !Array.isArray(v.valueLabels)) {
+      valueLabels = {};
+      for (const [rk, rv] of Object.entries(v.valueLabels)) {
+        const lab = rv != null ? String(rv).trim() : '';
+        if (lab) valueLabels[String(rk).trim().toLowerCase()] = lab;
+      }
+      if (!Object.keys(valueLabels).length) valueLabels = null;
+    }
+    if (!trueText && !falseText && !valueLabels) continue;
     out[fk] = {
       ...(trueText ? { trueText } : {}),
       ...(falseText ? { falseText } : {}),
+      ...(valueLabels ? { valueLabels } : {}),
     };
   }
   return out;
@@ -320,22 +420,37 @@ export function downlinksLocalStorageKey(deviceId) {
   return `downlinks_${n}`;
 }
 
-/** Lee downlinks guardados (clave normalizada o legado `downlinks_<id>`). */
-export function readDownlinksFromLocalStorage(deviceId) {
+/**
+ * Lee downlinks (plantilla del catálogo predomina; si no hay plantilla, caché local/servidor).
+ * @param {string} deviceId
+ * @param {{ deviceModel?: string, preferTemplate?: boolean }} [opts]
+ */
+export function readDownlinksFromLocalStorage(deviceId, opts = {}) {
   if (typeof window === 'undefined' || !deviceId) return [];
+  const preferTemplate = opts.preferTemplate !== false;
+  const deviceModel = opts.deviceModel != null ? String(opts.deviceModel) : '';
+  if (preferTemplate) {
+    const tpl = findTemplateForDevice(deviceId, deviceModel);
+    if (tpl) {
+      const dls = normalizeDownlinks(tpl.downlinks, tpl);
+      cacheDownlinksForDevice(deviceId, tpl, dls);
+      return dls;
+    }
+  }
   const k = storageDeviceIdKey(deviceId) || String(deviceId).trim().toLowerCase();
   if (k && primedDownlinksByNorm.has(k)) {
-    return [...primedDownlinksByNorm.get(k)];
+    return remapWs501DownlinkList([...primedDownlinksByNorm.get(k)], deviceModel);
   }
   try {
-    const k = downlinksLocalStorageKey(deviceId);
-    let raw = localStorage.getItem(k);
+    const key = downlinksLocalStorageKey(deviceId);
+    let raw = localStorage.getItem(key);
     if (!raw) {
       const leg = `downlinks_${String(deviceId).trim()}`;
-      if (leg !== k) raw = localStorage.getItem(leg);
+      if (leg !== key) raw = localStorage.getItem(leg);
     }
     const list = raw ? JSON.parse(raw) : [];
-    return Array.isArray(list) ? list : [];
+    const arr = Array.isArray(list) ? list : [];
+    return remapWs501DownlinkList(arr, deviceModel);
   } catch {
     return [];
   }
@@ -466,7 +581,7 @@ export function saveDeviceTemplate(payload) {
     channel: String(payload.channel || '').trim(),
     lorawanClass: normalizeTemplateLorawanClass(payload.lorawanClass),
     decoderScript: String(payload.decoderScript || ''),
-    downlinks: normalizeDownlinks(payload.downlinks),
+    downlinks: normalizeDownlinks(payload.downlinks, productModelLabelFromTemplate(payload)),
     otaaAppEui: otaa.otaaAppEui,
     otaaAppKey: otaa.otaaAppKey,
     telemetryLabels: normalizeTelemetryLabelHints(payload.telemetryLabels),
@@ -585,7 +700,7 @@ export async function persistTemplateForDeviceId(deviceId, template, saveDeviceD
       productModel: productModelLabelFromTemplate(template),
     });
   }
-  const dls = normalizeDownlinks(template.downlinks);
+  const dls = normalizeDownlinks(template.downlinks, template);
   const tid = template.id != null && String(template.id).trim() ? String(template.id).trim() : '';
   if (typeof localStorage !== 'undefined') {
     const kDl = downlinksLocalStorageKey(deviceId);

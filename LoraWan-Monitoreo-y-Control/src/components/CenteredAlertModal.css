@@ -1,3 +1,13 @@
+#syscom-centered-alert-portal {
+  position: relative;
+  z-index: 10060;
+  pointer-events: none;
+}
+
+#syscom-centered-alert-portal .centered-alert-overlay {
+  pointer-events: auto;
+}
+
 .centered-alert-overlay {
   position: fixed;
   inset: 0;
@@ -6,9 +16,20 @@
   align-items: center;
   justify-content: center;
   padding: 24px 16px;
+  margin: 0;
+  box-sizing: border-box;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
   background: rgba(15, 23, 42, 0.45);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+}
+
+.centered-alert-modal.card:hover {
+  transform: none;
 }
 
 .centered-alert-modal {

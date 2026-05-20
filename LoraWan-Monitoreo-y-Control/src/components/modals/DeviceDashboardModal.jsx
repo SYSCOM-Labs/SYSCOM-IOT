@@ -1,11 +1,17 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import { fetchDeviceProperties } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { getLatestDeviceData } from '../../services/localAuth';
 import { applyStaleOfflineConnectStatus, isDeviceVisuallyOnline } from '../../utils/deviceConnectionStatus';
-import { mergeDeviceTelemetryForWidgets } from '../../utils/gatewayPayload';
+import { hasMeaningfulAppTelemetry, mergeDeviceTelemetryForWidgets } from '../../utils/gatewayPayload';
+import {
+  deviceRowWithPreloadedTelemetry,
+  getDeviceTelemetryPreload,
+  isDeviceTelemetryPreloadFresh,
+  setDeviceTelemetryPreload,
+} from '../../utils/deviceTelemetryPreload';
 import BudgetSensorsDashboard from '../dashboard/BudgetSensorsDashboard';
 import './DeviceDashboardModal.css';
 
@@ -16,16 +22,33 @@ import './DeviceDashboardModal.css';
 const DeviceDashboardModal = ({ device: initialDevice, onClose }) => {
   const { credentials, token } = useAuth();
   const { t } = useLanguage();
-  /** Datos del listado al instante; `BudgetSensorsDashboard` ya fusiona API + SQLite en vivo (`mergeDeviceLive`). */
-  const [localDevice, setLocalDevice] = useState(() => applyStaleOfflineConnectStatus(initialDevice));
+  /** Telemetría del listado + caché: primer frame con valores en widgets. */
+  const [localDevice, setLocalDevice] = useState(() =>
+    applyStaleOfflineConnectStatus(deviceRowWithPreloadedTelemetry(initialDevice))
+  );
+  const preloadedLive = useMemo(() => mergeDeviceTelemetryForWidgets(localDevice), [localDevice]);
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    setLocalDevice(applyStaleOfflineConnectStatus(initialDevice));
+    setLocalDevice(applyStaleOfflineConnectStatus(deviceRowWithPreloadedTelemetry(initialDevice)));
   }, [initialDevice]);
 
-  const mergeDeviceData = useCallback(async () => {
+  const mergeDeviceData = useCallback(async (opts = {}) => {
+    const force = Boolean(opts.force);
     const canonicalDeviceId = initialDevice.deviceId?.toString() || '';
+    if (!force && isDeviceTelemetryPreloadFresh(canonicalDeviceId, 45000)) {
+      const hit = getDeviceTelemetryPreload(canonicalDeviceId);
+      if (hit?.flat && hasMeaningfulAppTelemetry(hit.flat)) {
+        setLocalDevice(
+          applyStaleOfflineConnectStatus({
+            ...initialDevice,
+            ...hit.flat,
+            lastUpdateTime: hit.flat.lastUpdateTime ?? initialDevice.lastUpdateTime ?? null,
+          })
+        );
+        return;
+      }
+    }
     const [propsResp, localEntries] = await Promise.all([
       fetchDeviceProperties(canonicalDeviceId, credentials, token).catch((err) => {
         console.warn('[DeviceDashboard] Properties fetch failed:', err.message);
@@ -63,6 +86,7 @@ const DeviceDashboardModal = ({ device: initialDevice, onClose }) => {
       .filter((n) => Number.isFinite(n));
     const lastUpdateTime = lastSeen.length ? Math.max(...lastSeen) : flattened.lastUpdateTime ?? null;
 
+    setDeviceTelemetryPreload(canonicalDeviceId, flattened);
     setLocalDevice(
       applyStaleOfflineConnectStatus({
         ...initialDevice,
@@ -73,13 +97,13 @@ const DeviceDashboardModal = ({ device: initialDevice, onClose }) => {
   }, [initialDevice, credentials, token]);
 
   useEffect(() => {
-    mergeDeviceData();
-  }, [mergeDeviceData]);
+    mergeDeviceData({ force: true });
+  }, [mergeDeviceData, initialDevice.deviceId]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      await mergeDeviceData();
+      await mergeDeviceData({ force: true });
     } catch (err) {
       console.error('Refresh failed:', err);
     } finally {
@@ -115,6 +139,7 @@ const DeviceDashboardModal = ({ device: initialDevice, onClose }) => {
           <BudgetSensorsDashboard
             variant="device"
             device={localDevice}
+            preloadedTelemetry={preloadedLive}
             embedded
             loadingExternal={false}
             onRefresh={handleRefresh}

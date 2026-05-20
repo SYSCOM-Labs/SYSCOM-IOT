@@ -46,6 +46,7 @@ import {
   hydrateDeviceTemplatesCatalogFromServer,
   publishLocalCustomTemplatesIfServerEmpty,
   primeDeviceSharedPresetsFromDeviceRows,
+  getDownlinkSendOptionsForDevice,
 } from '../services/deviceTemplates';
 import { getLatestDeviceData, getUsers } from '../services/localAuth';
 import { applyStaleOfflineConnectStatus, isDeviceVisuallyOnline } from '../utils/deviceConnectionStatus';
@@ -53,6 +54,11 @@ import { pushAppActivityLog } from '../utils/appActivityLog';
 import { SYSCOM_REALTIME_TELEMETRY } from '../constants/realtimeEvents';
 import { collectDeviceBsdBundle, deviceBsdBundleIsEmpty } from '../utils/deviceBsdPreferencesBundle';
 import { hexDigitsBorderClass, requiredTrimBorderClass } from '../utils/formFieldBorderClasses';
+import {
+  deviceRowWithPreloadedTelemetry,
+  prefetchDevicePropertiesBatch,
+  primeDeviceTelemetryPreloadFromListRow,
+} from '../utils/deviceTelemetryPreload';
 
 const EMPTY_CREATE = { devEUI: '', appEUI: '', appKey: '', displayName: '', tag: '' };
 
@@ -241,7 +247,9 @@ function mergeDeviceRowWithLatestTelemetry(dev, localUpdate) {
     lastUpdateTime:
       localUpdate.timestamp > (dev.lastUpdateTime || 0) ? localUpdate.timestamp : dev.lastUpdateTime,
   };
-  return applyStaleOfflineConnectStatus(merged);
+  const out = applyStaleOfflineConnectStatus(merged);
+  primeDeviceTelemetryPreloadFromListRow(out);
+  return out;
 }
 
 const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
@@ -308,7 +316,9 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
         }
         mapped.sort((a, b) => String(a.deviceId).localeCompare(String(b.deviceId)));
       }
+      for (const d of mapped) primeDeviceTelemetryPreloadFromListRow(d);
       setDevices(mapped);
+      void prefetchDevicePropertiesBatch(mapped, credentials, token);
       setError(null);
     } catch (err) {
       const msg =
@@ -348,7 +358,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
     setActiveDataDevice((prev) => {
       if (!prev?.deviceId) return prev;
       const fresh = devices.find((d) => String(d.deviceId) === String(prev.deviceId));
-      return fresh || prev;
+      return fresh ? deviceRowWithPreloadedTelemetry(fresh) : prev;
     });
   }, [devices, showDataModal]);
 
@@ -509,7 +519,14 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
 
   const handleSendDownlink = async (deviceId, hex, commandName) => {
     try {
-      await sendDownlink(deviceId, hex, credentials, token, { confirmed: false });
+      const devRow = devices.find((d) => String(d.deviceId) === String(deviceId));
+      await sendDownlink(
+        deviceId,
+        hex,
+        credentials,
+        token,
+        getDownlinkSendOptionsForDevice(deviceId, devRow)
+      );
       /* Toast global: LnsDownlinkToastBridge → "Downlink enviado" */
     } catch (err) {
       const status = err.response?.status;
@@ -564,7 +581,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
   };
 
   const openDeviceDashboard = (d) => {
-    setActiveDevice(d);
+    setActiveDevice(deviceRowWithPreloadedTelemetry(d));
     setShowDashboard(true);
   };
 
@@ -1011,7 +1028,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                           title="Datos"
                           aria-label="Datos"
                           onClick={() => {
-                            setActiveDataDevice(device);
+                            setActiveDataDevice(deviceRowWithPreloadedTelemetry(device));
                             setShowDataModal(true);
                           }}
                         >

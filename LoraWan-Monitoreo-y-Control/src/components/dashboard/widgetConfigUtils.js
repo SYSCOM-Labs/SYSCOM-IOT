@@ -854,6 +854,23 @@ export function resolveTelemetryDisplaySource(telemetryLiveProps, fkStr) {
       if (v !== undefined && v !== null && !(typeof v === 'string' && !String(v).trim())) return v;
     }
   }
+  if (fkL === 'estatus' || fkL === 'status' || fkL === 'estado') {
+    for (const alt of ESTATUS_FIELD_PROBE_KEYS) {
+      const v = getTelemetryPropertyValue(telemetryLiveProps, alt);
+      if (v !== undefined && v !== null && !(typeof v === 'string' && !String(v).trim())) return v;
+    }
+  }
+  if (fkL === 'configuracion' || fkL === 'configuration' || fkL === 'control') {
+    for (const alt of [
+      'temperature_control_mode',
+      'target_temperature',
+      'fan_mode',
+      'temperature_control_status',
+    ]) {
+      const v = getTelemetryPropertyValue(telemetryLiveProps, alt);
+      if (v !== undefined && v !== null && !(typeof v === 'string' && !String(v).trim())) return v;
+    }
+  }
   if (!isLikelyButtonOrStatusFieldKey(fk)) return undefined;
   const st = getTelemetryPropertyValue(telemetryLiveProps, 'button_event_status');
   if (st !== undefined) return st;
@@ -870,6 +887,58 @@ export function textWidgetTitleSuggestsButtonOrStatus(cfg) {
   return /bot[oó]n|pulsador|button|estatus|estado|salida|output|input/.test(t);
 }
 
+/** Títulos de termostato / HVAC (WT201, etc.) cuando el `fieldKey` no coincide con la telemetría decodificada. */
+export function textWidgetTitleSuggestsHvacOrStatus(cfg) {
+  const t = String(cfg?.basics?.title || '').toLowerCase();
+  return /estatus|estado|status|configuraci[oó]n|control|modo|fan|hvac|calefacci[oó]n|refrigeraci[oó]n/.test(t);
+}
+
+/** Milesight WS501/WS558: relé on/off (`readOnOffStatus` → `switch_1`). */
+export const MILESIGHT_SWITCH_ON_OFF_PROBE_KEYS = ['switch_1', 'switch_2'];
+
+/**
+ * Orden al resolver `fieldKey` genérico «estatus»: interruptor Milesight antes que HVAC (WT201).
+ */
+export const ESTATUS_FIELD_PROBE_KEYS = [
+  ...MILESIGHT_SWITCH_ON_OFF_PROBE_KEYS,
+  'temperature_control_status',
+  'system_status',
+  'fan_status',
+  'device_status',
+  'temperature_control_mode',
+];
+
+export const HVAC_STATUS_PROBE_KEYS = [
+  'temperature_control_status',
+  'system_status',
+  'fan_status',
+  'device_status',
+  'temperature_control_mode',
+  'fan_mode',
+  'hvac_status',
+  'operating_status',
+  'relay_status',
+];
+
+function scalarFromTelemetryValue(v) {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v === 'string' && !v.trim()) return undefined;
+  if (typeof v === 'object' && !Array.isArray(v) && v.status != null) return v.status;
+  return v;
+}
+
+/** Primer escalar no vacío entre claves conocidas (alias de campo). */
+export function pickFirstTelemetryScalar(telemetryLiveProps, keys) {
+  if (!telemetryLiveProps || typeof telemetryLiveProps !== 'object' || Array.isArray(telemetryLiveProps)) {
+    return undefined;
+  }
+  for (const k of keys) {
+    const s = scalarFromTelemetryValue(getTelemetryPropertyValue(telemetryLiveProps, k));
+    if (s !== undefined) return s;
+  }
+  return undefined;
+}
+
 /**
  * Valor crudo alineado con el widget Texto del tablero: campo configurado + alias y claves típicas de gateway.
  * @param {Record<string, unknown> | null | undefined} telemetryLiveProps
@@ -879,9 +948,26 @@ export function textWidgetTitleSuggestsButtonOrStatus(cfg) {
 export function resolveTextWidgetRawScalar(telemetryLiveProps, fkStr, cfg) {
   let v = resolveTelemetryDisplaySource(telemetryLiveProps, fkStr);
   if (v !== undefined && v !== null && !(typeof v === 'string' && !String(v).trim())) return v;
+
+  const fkL = fkStr != null ? String(fkStr).trim().toLowerCase() : '';
+  if (fkL === 'estatus' || fkL === 'status' || fkL === 'estado') {
+    v = pickFirstTelemetryScalar(telemetryLiveProps, ESTATUS_FIELD_PROBE_KEYS);
+    if (v !== undefined) return v;
+  }
+  const hvacProbe =
+    textWidgetTitleSuggestsHvacOrStatus(cfg) ||
+    fkL === 'configuracion' ||
+    fkL === 'configuration' ||
+    fkL === 'control';
+  if (hvacProbe) {
+    v = pickFirstTelemetryScalar(telemetryLiveProps, HVAC_STATUS_PROBE_KEYS);
+    if (v !== undefined) return v;
+  }
+
   const probe = isLikelyButtonOrStatusFieldKey(fkStr) || textWidgetTitleSuggestsButtonOrStatus(cfg);
   if (!probe) return undefined;
   const keys = [
+    ...MILESIGHT_SWITCH_ON_OFF_PROBE_KEYS,
     'button_event_status',
     'button_event',
     'press',
@@ -889,11 +975,12 @@ export function resolveTextWidgetRawScalar(telemetryLiveProps, fkStr, cfg) {
     'gpio_input_2',
     'gpio_input_3',
     'gpio_input_4',
+    ...HVAC_STATUS_PROBE_KEYS,
   ];
   for (const k of keys) {
     const alt = getTelemetryPropertyValue(telemetryLiveProps, k);
-    if (alt !== undefined && alt !== null && !(typeof alt === 'string' && !String(alt).trim())) return alt;
-    if (alt && typeof alt === 'object' && !Array.isArray(alt) && alt.status != null) return alt.status;
+    const s = scalarFromTelemetryValue(alt);
+    if (s !== undefined) return s;
   }
   return undefined;
 }

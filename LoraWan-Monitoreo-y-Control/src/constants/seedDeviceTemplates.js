@@ -5,10 +5,13 @@
  */
 import { WS101_DECODER_SCRIPT } from './ws101DecoderScript.js';
 import { WS558_DECODER_SCRIPT } from './ws558DecoderScript.js';
+import { WS501_DECODER_SCRIPT } from './ws501DecoderScript.js';
 import { UC300_DECODER_SCRIPT } from './uc300DecoderScript.js';
 import { SHENGDA_V16_DECODER_SCRIPT } from './shengdaV16DecoderScript.js';
 import { TIMEWAVE_DECODER_SCRIPT } from './timewaveDecoderScript.js';
 import { VS133_DECODER_SCRIPT } from './vs133DecoderScript.js';
+import { WT201_DOWNLINK_PRESETS } from './wt201DownlinkPresets.js';
+import { WT201_DECODER_SCRIPT } from './wt201DecoderScript.js';
 
 const EASTRON_DECODER_SCRIPT = `
 function decodeUplink(input) {
@@ -76,6 +79,7 @@ export const SEED_DEVICE_TEMPLATES = [
     modelo: 'SDM230-LoRaWAN',
     marca: 'Eastron',
     channel: '1',
+    lorawanClass: 'A',
     decoderScript: EASTRON_DECODER_SCRIPT,
     downlinks: [
       { name: 'FC04 — Leer tensión L-N (30001), esclavo 1', hex: '01040000000271cb' },
@@ -109,9 +113,22 @@ export const SEED_DEVICE_TEMPLATES = [
     ],
   },
   {
+    modelo: 'WT201',
+    marca: 'Milesight',
+    channel: '85',
+    /**
+     * Termostato enchufado: clase C para downlink inmediato (RX continuo).
+     * Aplique plantilla y «Propagar a vinculados»; pegue decoder Milesight en Plantillas si está vacío.
+     */
+    lorawanClass: 'C',
+    decoderScript: WT201_DECODER_SCRIPT,
+    downlinks: WT201_DOWNLINK_PRESETS,
+  },
+  {
     modelo: 'WS101',
     marca: 'Milesight',
     channel: '85',
+    lorawanClass: 'A',
     decoderScript: WS101_DECODER_SCRIPT,
     downlinks: [
       { name: 'Intervalo de reporte (20 min)', hex: 'ff03b004' },
@@ -149,6 +166,7 @@ export const SEED_DEVICE_TEMPLATES = [
     modelo: 'WS558',
     marca: 'Milesight',
     channel: '85',
+    lorawanClass: 'A',
     decoderScript: WS558_DECODER_SCRIPT,
     downlinks: [
       { name: 'Abrir L1 (encender)', hex: '080101' },
@@ -173,6 +191,7 @@ export const SEED_DEVICE_TEMPLATES = [
     modelo: 'WS523',
     marca: 'Milesight',
     channel: '85',
+    lorawanClass: 'A',
     decoderScript: '',
     downlinks: [
       { name: 'Abrir socket (encender)', hex: '080100ff' },
@@ -201,16 +220,18 @@ export const SEED_DEVICE_TEMPLATES = [
     modelo: 'WS501',
     marca: 'Milesight',
     channel: '85',
-    decoderScript: '',
+    /** Interruptor mural Milesight WS501: clase C (downlink programado / imme en LNS). */
+    lorawanClass: 'C',
+    decoderScript: WS501_DECODER_SCRIPT,
     downlinks: [
-      { name: 'Apagar L1', hex: '0810ff' },
-      { name: 'Encender L1', hex: '0811ff' },
+      { name: 'Encender', hex: '0811ff' },
+      { name: 'Apagar', hex: '0810ff' },
       { name: 'Reiniciar dispositivo', hex: 'ff10ff' },
       { name: 'Intervalo de reporte (20 min)', hex: 'ff03b004' },
       { name: 'Intervalo de reporte (5 min)', hex: 'ff032c01' },
-      { name: 'Habilitar LED indicador (apagado)', hex: 'ff2f01' },
-      { name: 'Habilitar LED indicador (encendido)', hex: 'ff2f02' },
-      { name: 'Deshabilitar LED indicador', hex: 'ff2f00' },
+      { name: 'LED indicador apagado', hex: 'ff2f00' },
+      { name: 'LED indicador invertido', hex: 'ff2f01' },
+      { name: 'LED indicador sincronizado', hex: 'ff2f02' },
       { name: 'Habilitar consumo energético', hex: 'ff2601' },
       { name: 'Deshabilitar consumo energético', hex: 'ff2600' },
       { name: 'Reset consumo energético', hex: 'ff27ff' },
@@ -219,8 +240,8 @@ export const SEED_DEVICE_TEMPLATES = [
       { name: 'Desbloquear botones físicos', hex: 'ff250000' },
       { name: 'Bloquear reset por botón', hex: 'ff5e01' },
       { name: 'Desbloquear reset por botón', hex: 'ff5e00' },
-      { name: 'Encender L1 después de 1 minuto', hex: 'ff22003c0011' },
-      { name: 'Apagar L1 después de 1 minuto', hex: 'ff22003c0010' },
+      { name: 'Encender L1 después de 1 minuto', hex: 'ff22013c0011' },
+      { name: 'Apagar L1 después de 1 minuto', hex: 'ff22013c0010' },
       { name: 'Eliminar tarea pendiente', hex: 'ff2300ff' },
     ],
   },
@@ -228,6 +249,7 @@ export const SEED_DEVICE_TEMPLATES = [
     modelo: 'UC512',
     marca: 'Milesight',
     channel: '85',
+    lorawanClass: 'A',
     decoderScript: '',
     downlinks: [
       { name: 'Reiniciar dispositivo', hex: 'ff10ff' },

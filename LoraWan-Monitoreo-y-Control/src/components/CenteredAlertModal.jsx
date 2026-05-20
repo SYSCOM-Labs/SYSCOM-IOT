@@ -1,6 +1,19 @@
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import './CenteredAlertModal.css';
+
+/** Contenedor fuera de `#root` para que `position:fixed` no lo rompan reglas del layout (p. ej. Dispositivos premium). */
+function getCenteredAlertPortalRoot() {
+  if (typeof document === 'undefined') return null;
+  let el = document.getElementById('syscom-centered-alert-portal');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'syscom-centered-alert-portal';
+    document.body.appendChild(el);
+  }
+  return el;
+}
 
 /** Escapa HTML y convierte `**negrita**` en <strong> (solo mensajes controlados por la app). */
 export function formatCenteredAlertHtml(text) {
@@ -70,7 +83,7 @@ export default function CenteredAlertModal({
     .filter(Boolean)
     .join(' ');
 
-  return (
+  const overlay = (
     <div
       className="centered-alert-overlay"
       role="alertdialog"
@@ -125,4 +138,7 @@ export default function CenteredAlertModal({
       </div>
     </div>
   );
+
+  const portalRoot = getCenteredAlertPortalRoot();
+  return portalRoot ? createPortal(overlay, portalRoot) : overlay;
 }

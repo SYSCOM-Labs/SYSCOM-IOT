@@ -12,6 +12,7 @@ const eastronSdm230 = require('./eastron-sdm230');
 const shengdaAppLayer = require('./shengda-app-layer');
 const { DECODER_SCRIPT: VS133_DECODER_SCRIPT } = require('./milesight-vs133-decoder.cjs');
 const { applyVs133TelemetryAliases } = require('./lib/vs133-telemetry-aliases');
+const { prepareDecoderScriptForRuntime } = require('./lib/decoder-script-adapt.cjs');
 
 const DECODER_TIMEOUT_MS = Math.min(
   Math.max(Number(process.env.SYSCOM_DECODER_TIMEOUT_MS || 4000), 200),
@@ -75,6 +76,25 @@ function reapplyMeta(properties, meta) {
   }
 }
 
+/** WS101 / Milesight: aplanar `button_event.status` → `button_event_status` y `press` para BD y SSE. */
+function applyMilesightButtonAliases(properties) {
+  if (!properties || typeof properties !== 'object') return;
+  const be = properties.button_event;
+  if (be && typeof be === 'object' && !Array.isArray(be) && be.status != null) {
+    properties.button_event_status = String(be.status);
+  } else if (properties.press != null && properties.button_event_status == null) {
+    const p = String(properties.press).toLowerCase();
+    const m = { short: 'short press', long: 'long press', double: 'double press' };
+    properties.button_event_status = m[p] || String(properties.press);
+  }
+  if (properties.button_event_status != null) {
+    const s = String(properties.button_event_status).toLowerCase().replace(/\s+/g, ' ').trim();
+    if (s.includes('short')) properties.press = 'short';
+    else if (s.includes('long')) properties.press = 'long';
+    else if (s.includes('double')) properties.press = 'double';
+  }
+}
+
 /**
  * @param {Record<string, unknown>} properties
  * @returns {Buffer|null}
@@ -101,6 +121,17 @@ function extractPayloadBytes(properties) {
   return null;
 }
 
+function resolveFPortFromProperties(properties, configChannel) {
+  const ch = configChannel != null && String(configChannel).trim() !== '' ? String(configChannel).trim() : '';
+  if (ch) {
+    const n = Number(ch);
+    if (Number.isFinite(n)) return n;
+  }
+  const fp = properties.fPort ?? properties.fport;
+  const n = Number(fp);
+  return Number.isFinite(n) ? n : 1;
+}
+
 /**
  * @param {string} script
  * @param {number} fPortNum
@@ -108,6 +139,7 @@ function extractPayloadBytes(properties) {
  * @returns {Record<string, unknown>|null}
  */
 function runDecoderScript(script, fPortNum, byteBuffer) {
+  const prepared = prepareDecoderScriptForRuntime(script);
   const bytes = Array.from(byteBuffer);
 
   const sandbox = {
@@ -197,7 +229,7 @@ function runDecoderScript(script, fPortNum, byteBuffer) {
 
   const context = vm.createContext(sandbox);
 
-  vm.runInContext(String(script), context, { timeout: DECODER_TIMEOUT_MS });
+  vm.runInContext(String(prepared), context, { timeout: DECODER_TIMEOUT_MS });
 
   let decoded = null;
   if (typeof context.decodeUplink === 'function') {
@@ -242,6 +274,7 @@ function tryApplyStoredDecoder(store, canonicalDeviceId, rawDeviceId, properties
   const seen = new Set();
   let script = '';
   let productModel = '';
+  let configChannel = '';
   for (const id of idCandidates) {
     if (seen.has(id)) continue;
     seen.add(id);
@@ -249,6 +282,9 @@ function tryApplyStoredDecoder(store, canonicalDeviceId, rawDeviceId, properties
     const s = cfg && cfg.decoderScript != null ? String(cfg.decoderScript).trim() : '';
     if (cfg && cfg.productModel != null && String(cfg.productModel).trim()) {
       productModel = String(cfg.productModel).trim();
+    }
+    if (cfg && cfg.channel != null && String(cfg.channel).trim()) {
+      configChannel = String(cfg.channel).trim();
     }
     if (s) {
       script = cfg.decoderScript;
@@ -267,27 +303,60 @@ function tryApplyStoredDecoder(store, canonicalDeviceId, rawDeviceId, properties
   const buf = extractPayloadBytes(properties);
   if (!buf || buf.length === 0) return;
 
-  const fp = properties.fPort ?? properties.fport ?? 1;
-  const fPortNum = Number(fp);
-  const port = Number.isFinite(fPortNum) ? fPortNum : 1;
-
+  const port = resolveFPortFromProperties(properties, configChannel);
   const meta = snapshotMeta(properties);
 
   try {
     const decoded = runDecoderScript(script, port, buf);
     if (!decoded || Object.keys(decoded).length === 0) return;
     Object.assign(properties, decoded);
+    applyMilesightButtonAliases(properties);
     applyVs133TelemetryAliases(properties, { productModel });
     reapplyMeta(properties, meta);
   } catch (e) {
-    console.warn('[Ingest decoder]', e.message || e);
+    console.warn(
+      '[Ingest decoder]',
+      canonicalDeviceId,
+      e.message || e,
+      `(fPort=${port}, payload=${buf.length} B)`
+    );
   }
+}
+
+/**
+ * Re-decodifica propiedades guardadas que tienen payload_hex pero aún no campos de aplicación.
+ */
+function enrichStoredTelemetryProperties(store, deviceId, properties) {
+  if (!properties || typeof properties !== 'object') return properties;
+  const hex = properties.payload_hex != null ? String(properties.payload_hex).trim() : '';
+  if (hex.length < 4) return properties;
+  const hasApp =
+    properties.temperature != null ||
+    properties.line_1_total_in != null ||
+    properties.people_count != null ||
+    properties.button_event != null ||
+    properties.button_event_status != null ||
+    properties.press != null ||
+    properties.humidity != null ||
+    properties.target_temperature != null;
+  if (hasApp) {
+    applyMilesightButtonAliases(properties);
+    return properties;
+  }
+  const copy = { ...properties };
+  tryApplyStoredDecoder(store, String(deviceId), String(deviceId), copy);
+  applyMilesightButtonAliases(copy);
+  return copy;
 }
 
 module.exports = {
   tryApplyStoredDecoder,
+  enrichStoredTelemetryProperties,
   extractPayloadBytes,
   snapshotMeta,
   INGEST_META_KEYS,
   applyVs133TelemetryAliases,
+  applyMilesightButtonAliases,
+  runDecoderScript,
+  prepareDecoderScriptForRuntime,
 };

@@ -14,6 +14,7 @@
 'use strict';
 
 const dgram = require('dgram');
+const { ensureGatewaysAutoRegistered } = require('./lib/auto-fleet-sync.cjs');
 
 const PROTOCOL_VERSION = 0x02;
 const GW_PUSH_DATA = 0x00;
@@ -48,10 +49,11 @@ function sendUdp(socket, buf, rinfo) {
  *   store: object,
  *   processPushDataJson: (mac: Buffer, json: object, userIds: string[]) => void,
  *   onHeartbeat?: (mac: Buffer) => void,
+ *   refreshPullRespJson?: (row: object) => string,
  * }} opts
  */
 function startSemtechUdpLns(opts) {
-  const { port, store, processPushDataJson, onHeartbeat } = opts;
+  const { port, store, processPushDataJson, onHeartbeat, refreshPullRespJson } = opts;
   const socket = dgram.createSocket('udp4');
 
   socket.on('error', (err) => {
@@ -74,6 +76,7 @@ function startSemtechUdpLns(opts) {
       sendUdp(socket, gwAck(version, token, GW_PULL_ACK), rinfo);
       const mac = msg.subarray(4, 12);
       if (typeof onHeartbeat === 'function') onHeartbeat(mac);
+      ensureGatewaysAutoRegistered(store, mac);
       const gwNorm = store.lnsResolveGatewayEuiNorm(mac);
       if (gwNorm && typeof store.lnsDequeuePullResp === 'function') {
         const burst = pullBurstLimit();
@@ -81,7 +84,9 @@ function startSemtechUdpLns(opts) {
           const row = store.lnsDequeuePullResp(gwNorm);
           if (!row) break;
           try {
-            const inner = Buffer.from(row.json, 'utf8');
+            const jsonOut =
+              typeof refreshPullRespJson === 'function' ? refreshPullRespJson(row) : row.json;
+            const inner = Buffer.from(jsonOut, 'utf8');
             const pkt = Buffer.alloc(4 + inner.length);
             pkt[0] = version;
             pkt[1] = token[0];
@@ -185,15 +190,7 @@ function startSemtechUdpLns(opts) {
 
       sendUdp(socket, gwAck(version, token, GW_PUSH_ACK), rinfo);
 
-      let userIds =
-        typeof store.findUserIdsForSemtechPush === 'function'
-          ? store.findUserIdsForSemtechPush(mac)
-          : store.findUserIdsBySemtechGatewayMac8(mac);
-      const defUid = process.env.SYSCOM_LNS_DEFAULT_USER_ID;
-      if (userIds.length === 0 && defUid) {
-        console.warn('[LNS-UDP] Gateway sin registro en app; SYSCOM_LNS_DEFAULT_USER_ID →', defUid);
-        userIds = [String(defUid).trim()];
-      }
+      let userIds = ensureGatewaysAutoRegistered(store, mac);
       if (userIds.length === 0) {
         const h = mac.toString('hex');
         console.warn(

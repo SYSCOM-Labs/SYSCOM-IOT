@@ -5,7 +5,7 @@ import { parseTelemetryScalar } from '../../utils/gatewayPayload';
 import { transformWidgetNumeric } from '../../utils/widgetFormula';
 import { tryTelemetryDisplayLabel } from '../../utils/telemetryDisplayFormat';
 import {
-  resolveTelemetryDisplaySource,
+  resolveTextWidgetRawScalar,
   gaugeFillProgressT,
   invertDisplayedValueOnScale,
 } from './widgetConfigUtils';
@@ -76,7 +76,7 @@ export function computeMetricCircularUi(cfg, telemetryLiveProps, liveDeviceModel
   const readFk = telemetryFieldKeyForFormula(cfg, fkStr);
   const rawLiveScalar =
     telemetryLiveProps && typeof telemetryLiveProps === 'object' && !Array.isArray(telemetryLiveProps)
-      ? resolveTelemetryDisplaySource(telemetryLiveProps, readFk)
+      ? resolveTextWidgetRawScalar(telemetryLiveProps, readFk, cfg)
       : undefined;
   const useLive =
     Boolean(readFk) &&
@@ -195,7 +195,7 @@ export function computeSatisfactionRingUi(cfg, telemetryLiveProps, liveDeviceMod
   const readFk = telemetryFieldKeyForFormula(cfg, fkStr);
   const rawScalar =
     telemetryLiveProps && typeof telemetryLiveProps === 'object' && !Array.isArray(telemetryLiveProps)
-      ? resolveTelemetryDisplaySource(telemetryLiveProps, readFk)
+      ? resolveTextWidgetRawScalar(telemetryLiveProps, readFk, cfg)
       : undefined;
   const useLive = Boolean(readFk) && !readFk.startsWith('__bsd_') && rawScalar !== undefined;
   const nParsed = useLive ? parseTelemetryScalar(rawScalar) : null;

@@ -6,7 +6,19 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { normalizeLorawanUplink, expandLorawanPacketBodies } = require('./lorawan-normalize');
-const { tryApplyStoredDecoder } = require('./payload-decoder');
+const { tryApplyStoredDecoder, enrichStoredTelemetryProperties, prepareDecoderScriptForRuntime } = require('./payload-decoder');
+const { shouldSkipTelemetryInsert, isJoinOnlyProperties } = require('./lib/telemetry-persist');
+const { resolveWt201DownlinkHex } = require('./lib/wt201-downlink-encode.cjs');
+const { remapWs501LegacyDownlinkHex } = require('./lib/ws501-downlink-legacy.cjs');
+const { sanitizeTemplatesCatalog } = require('./lib/template-catalog-normalize.cjs');
+const { resolveDownlinkDeviceClassForLns } = require('./lib/resolve-downlink-class.cjs');
+const {
+  normalizeDownlinks,
+  syncDeviceTemplateFromCatalog,
+  ensureBuiltinCatalogSeeded,
+  reconcileFleetTemplatesOnStartup,
+} = require('./lib/auto-fleet-sync.cjs');
+const { resolveAutomationDownlinkHex } = require('./automation-downlink-resolve');
 const { DECODER_SCRIPT: VS133_BUILTIN_DECODER } = require('./milesight-vs133-decoder.cjs');
 const {
   normalizeBaseUrl: ugNormalizeBaseUrl,
@@ -36,7 +48,6 @@ const metrics = require('./syscom-metrics');
 const { createRealtimeHub } = require('./realtime-hub');
 const { createRateLimiter } = require('./rate-limit-memory');
 const { validateWebhookRelayUrl, relayWebhookPost } = require('./automation-webhook-relay');
-const { resolveAutomationDownlinkHex } = require('./automation-downlink-resolve');
 const { mountGoogleAuthRoutes } = require('./google-auth-routes');
 const { mountMicrosoftAuthRoutes } = require('./microsoft-auth-routes');
 const { mountYahooAuthRoutes } = require('./yahoo-auth-routes');
@@ -301,8 +312,9 @@ function lorawanClassFromLatestTelemetry(userId, deviceId) {
 
 /**
  * Clase usada para temporizar downlinks (RX1/RX2 vs inmediato).
- * Orden: cuerpo `lorawanClass`/`deviceClass` → **`device_decode_config.lorawan_class`** (plantilla aplicada en servidor) →
- * **`user_devices.lorawan_class`** (alta OTAA) → sesión LNS → última telemetría (último recurso).
+ * Orden: cuerpo `lorawanClass`/`deviceClass` → **plantilla en catálogo** (`catalogTemplateId` / modelo) →
+ * **`device_decode_config.lorawan_class`** → **`user_devices.lorawan_class`** → sesión LNS → telemetría (si no está
+ * `SYSCOM_LNS_DOWNLINK_IGNORE_TELEMETRY_CLASS=1`).
  * El tipo **0x09** Shengda puede exponer «Class B» en telemetría sin que el downlink deba temporizarse como B; use
  * `SYSCOM_LNS_DOWNLINK_IGNORE_TELEMETRY_CLASS=1` o fije clase en decode-config / cuerpo del POST.
  * La plantilla en solo-localStorage no aplica hasta `PUT …/decode-config` o «Propagar a vinculados».
@@ -312,6 +324,18 @@ function resolveDownlinkDeviceClass(reqBody, deviceId, ud, sessionFallbackClass,
   if (ex != null && String(ex).trim() !== '') {
     return normalizeLnsDeviceClassLetter(ex);
   }
+  const deui = String(ud?.devEUI || ud?.devEui || '')
+    .replace(/[^0-9a-fA-F]/g, '')
+    .toLowerCase();
+  if (deui.length === 16) {
+    return normalizeLnsDeviceClassLetter(
+      resolveDownlinkDeviceClassForLns(store, userId, deui, {
+        sessionClass: sessionFallbackClass,
+        deviceId: String(deviceId),
+        productModel: ud?.productModel || ud?.model,
+      })
+    );
+  }
   const fromDecRaw = decodeConfigLorawanClassRawForUserDevice(deviceId, ud);
   if (fromDecRaw != null && String(fromDecRaw).trim() !== '') {
     return normalizeLnsDeviceClassLetter(fromDecRaw);
@@ -319,10 +343,11 @@ function resolveDownlinkDeviceClass(reqBody, deviceId, ud, sessionFallbackClass,
   if (ud?.lorawanClass != null && String(ud.lorawanClass).trim() !== '') {
     return normalizeLnsDeviceClassLetter(ud.lorawanClass);
   }
-  if (sessionFallbackClass != null && String(sessionFallbackClass).trim() !== '') {
-    return normalizeLnsDeviceClassLetter(sessionFallbackClass);
-  }
-  const skipTel = String(process.env.SYSCOM_LNS_DOWNLINK_IGNORE_TELEMETRY_CLASS || '').trim() === '1';
+  const skipTelRaw = process.env.SYSCOM_LNS_DOWNLINK_IGNORE_TELEMETRY_CLASS;
+  const skipTel =
+    skipTelRaw == null || String(skipTelRaw).trim() === ''
+      ? true
+      : String(skipTelRaw).trim() === '1';
   const fromTel = skipTel ? null : lorawanClassFromLatestTelemetry(userId, deviceId);
   if (fromTel != null) {
     return normalizeLnsDeviceClassLetter(fromTel);
@@ -330,8 +355,10 @@ function resolveDownlinkDeviceClass(reqBody, deviceId, ud, sessionFallbackClass,
   return normalizeLnsDeviceClassLetter('A');
 }
 
-function normalizeDeviceSharedPresetsBody(body) {
-  const downlinks = Array.isArray(body?.downlinks)
+function normalizeDeviceSharedPresetsBody(body, deviceId) {
+  const cfg = deviceId ? store.getDeviceDecodeConfig(String(deviceId)) : null;
+  const pm = cfg?.productModel || '';
+  const rawDown = Array.isArray(body?.downlinks)
     ? body.downlinks
         .map((d) => ({
           name: String(d?.name || '').trim(),
@@ -343,6 +370,7 @@ function normalizeDeviceSharedPresetsBody(body) {
         }))
         .filter((d) => d.name && d.hex)
     : [];
+  const downlinks = normalizeDownlinks(rawDown, pm);
   const catalogTemplateId =
     body?.catalogTemplateId != null && String(body.catalogTemplateId).trim()
       ? String(body.catalogTemplateId).trim()
@@ -515,7 +543,7 @@ function joinOnlyTelemetryHint(properties) {
   if (!ev || !/join/i.test(ev)) return null;
   const hex = properties.payload_hex != null ? String(properties.payload_hex).trim() : '';
   if (hex.length > 0) return null;
-  return 'Solo join LoRaWAN (sin uplink de aplicación). El VS133 aún no envió reporte de conteo (puerto 85).';
+  return 'Solo join LoRaWAN (sin uplink de aplicación reciente). Espere el próximo reporte del sensor o revise intervalo de envío en el equipo.';
 }
 
 /** Fila del listado de dispositivos con telemetría fusionada y `ingestStatus` coherente. */
@@ -668,7 +696,7 @@ function buildDevicesContentAssignedOnly(userId) {
   const regIds = registered.map((r) => r.deviceId).filter(Boolean);
   const decodeMap = store.getDeviceDecodeConfigMap(regIds);
   const licenseMap = store.getDeviceLicenseMetaMap(regIds);
-  const mergedMap = store.getDeviceListTelemetryMap(userId, regIds, decodeMap, { historyRowLimit: 6 });
+  const mergedMap = store.getDeviceListTelemetryMap(userId, regIds, decodeMap, { historyRowLimit: 16 });
 
   const content = [];
   for (const reg of registered) {
@@ -775,7 +803,7 @@ function buildDevicesContentSuperadmin() {
   for (const [tuid, dids] of byTelemetryUser) {
     Object.assign(
       mergedByDevice,
-      store.getDeviceListTelemetryMap(tuid, dids, decodeMap, { historyRowLimit: 6 })
+      store.getDeviceListTelemetryMap(tuid, dids, decodeMap, { historyRowLimit: 16 })
     );
   }
 
@@ -1190,10 +1218,33 @@ function saveIngestEntry(userId, data) {
 
   tryApplyStoredDecoder(store, canonicalDeviceId, rawDeviceId, properties);
 
-  if (store.lastPropertiesJsonEqual(userId, canonicalDeviceId, properties)) {
+  const persistCheck = shouldSkipTelemetryInsert(store, userId, canonicalDeviceId, properties);
+  if (persistCheck.skip) {
     metrics.inc('telemetry_duplicate_skipped');
-    return { ok: true, saved: false, reason: 'no_change', deviceId: canonicalDeviceId };
+    const sseOnDedup = String(process.env.SYSCOM_TELEMETRY_SSE_ON_DEDUP || '1').trim() !== '0';
+    if (sseOnDedup && !isJoinOnlyProperties(persistCheck.prepared)) {
+      const tsDedup = Date.now();
+      Object.assign(properties, persistCheck.prepared);
+      properties.deviceId = canonicalDeviceId;
+      properties.deviceName = normalizedDeviceName;
+      store.broadcastTelemetryRealtime(
+        userId,
+        canonicalDeviceId,
+        normalizedDeviceName,
+        properties,
+        tsDedup
+      );
+    }
+    return {
+      ok: true,
+      saved: false,
+      reason: persistCheck.reason || 'no_change',
+      deviceId: canonicalDeviceId,
+    };
   }
+  Object.assign(properties, persistCheck.prepared);
+  properties.deviceId = canonicalDeviceId;
+  properties.deviceName = normalizedDeviceName;
 
   pushDebugWebhook({
     timestamp: Date.now(),
@@ -1221,10 +1272,37 @@ function runUplinkPipeline(userId, body) {
   return results;
 }
 
+/** Evita tormenta de SSE/log por el mismo TOO_EARLY/TOO_LATE en ráfaga. */
+const uiEventRateLimitAt = new Map();
+
+function shouldRateLimitLnsUiEvent(eventType, devEui, meta) {
+  if (eventType !== 'gateway_tx_rejected') return false;
+  const gw = String(meta?.gatewayEui || '')
+    .replace(/[^0-9a-fA-F]/g, '')
+    .toLowerCase();
+  const err = String(meta?.txpkError || '').toUpperCase();
+  const deui = String(meta?.devEui || devEui || '')
+    .replace(/[^0-9a-fA-F]/g, '')
+    .toLowerCase();
+  const key = `${gw}:${err}:${deui.slice(0, 16)}`;
+  const gap = /TOO_EARLY|TOO_LATE/.test(err)
+    ? Math.max(15_000, parseInt(String(process.env.SYSCOM_LNS_UI_TX_REJECT_LOG_MS || '30000').trim(), 10) || 30_000)
+    : 12_000;
+  const now = Date.now();
+  const prev = uiEventRateLimitAt.get(key) || 0;
+  if (now - prev < gap) return true;
+  uiEventRateLimitAt.set(key, now);
+  if (uiEventRateLimitAt.size > 500) {
+    for (const [k, t] of uiEventRateLimitAt) {
+      if (now - t > gap * 4) uiEventRateLimitAt.delete(k);
+      if (uiEventRateLimitAt.size <= 250) break;
+    }
+  }
+  return false;
+}
+
 /** LNS UI event en BD + broadcast SSE (mismo contrato que store.lnsInsertUiEvent). */
 function insertUiEventWithStream(userId, devEui, eventType, metaJson) {
-  const id = store.lnsInsertUiEvent(userId, devEui, eventType, metaJson);
-  metrics.inc('lns_ui_events');
   let meta = null;
   if (metaJson) {
     try {
@@ -1233,6 +1311,11 @@ function insertUiEventWithStream(userId, devEui, eventType, metaJson) {
       meta = null;
     }
   }
+  if (shouldRateLimitLnsUiEvent(eventType, devEui, meta)) {
+    return null;
+  }
+  const id = store.lnsInsertUiEvent(userId, devEui, eventType, metaJson);
+  metrics.inc('lns_ui_events');
   realtimeHub.broadcast(String(userId), realtimeSseContract.sseLns, {
     id,
     eventType,
@@ -1261,10 +1344,23 @@ store.setLnsTxAckOutcomeHook((p) => {
   insertUiEventWithStream(String(p.userId), deui, 'downlink_gateway_ack', meta);
 });
 
-/** GW_TX_ACK con error: visibilidad en UI/SSE (downlinks app suelen ir sin `track_tx_ack` → antes no había fila inflight). */
+/** GW_TX_ACK con error: visibilidad en UI/SSE. */
 store.setLnsGatewayTxFailHook((detail) => {
   const errStr = detail.error != null ? String(detail.error) : '';
   const errU = errStr.toUpperCase();
+  /** ACK huérfano TOO_LATE/TOO_EARLY: colisión en el concentrador; no alarmar en UI (el DL suele reintentarse en cola). */
+  if (detail.orphan && (errU.includes('TOO_LATE') || errU.includes('TOO_EARLY'))) {
+    if (String(process.env.SYSCOM_LNS_LOG_ORPHAN_TX_ACK || '1').trim() !== '0') {
+      console.warn(
+        '[LNS] GW_TX_ACK huérfano',
+        errStr || 'TX rechazada',
+        'en',
+        detail.gatewayEui,
+        '— colisión de TX en el concentrador (p. ej. clase C + join/LinkCheck). Reintento automático en cola si SYSCOM_LNS_ORPHAN_TX_ACK_RETRY=1.'
+      );
+    }
+    return;
+  }
   const timing =
     errU.includes('TOO_EARLY') || errU.includes('TOO_LATE')
       ? 'TOO_EARLY/TOO_LATE: el concentrador rechazó el instante de TX (cola/ocupación tras RX/TX). Suele verse con downlinks clase C `imme` seguidos → suba SYSCOM_LNS_CLASS_C_TX_GAP_MS (p. ej. 1500–2200) o SYSCOM_LNS_CLASS_C_USE_GATEWAY_TMST=1. Si el nodo es clase A, revise GET /api/devices/:id/lora-profile (clase efectiva por telemetría/decode-config) y SYSCOM_LNS_DOWNLINK_IGNORE_TELEMETRY_CLASS=1 si la telemetría marca mal la clase; evite saturar el mismo GW con TX inmediatas.'
@@ -1339,9 +1435,15 @@ function resolveLnsDownlinkAppPayloadBuffer(body) {
     }
     return { ok: true, buf, hex: buf.toString('hex').toLowerCase() };
   }
-  const rawPayload = b.payloadHex ?? b.payload_hex ?? b.data ?? b.payload ?? '';
-  const hex = String(rawPayload).replace(/\s/g, '').replace(/^0x/i, '');
-  if (!/^[0-9a-fA-F]*$/.test(hex) || hex.length % 2 !== 0) {
+  const rawPayload = b.payloadHex ?? b.payload_hex ?? b.data ?? b.payload ?? b.commandKey ?? '';
+  let hex = String(rawPayload).replace(/\s/g, '').replace(/^0x/i, '');
+  if (!hex || hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) {
+    const resolved =
+      resolveWt201DownlinkHex(rawPayload) ||
+      resolveAutomationDownlinkHex({ commandKey: rawPayload, command_key: rawPayload });
+    if (resolved) hex = resolved;
+  }
+  if (!/^[0-9a-fA-F]*$/.test(hex) || hex.length % 2 !== 0 || !hex.length) {
     return { ok: false, status: 400, json: { error: 'payloadHex inválido (hex par de bytes)', code: 'PAYLOAD_HEX' } };
   }
   return { ok: true, buf: Buffer.from(hex, 'hex'), hex: hex.toLowerCase() };
@@ -1434,10 +1536,21 @@ function tryLnsAppDownlinkEnqueue(userId, idStr, ud, body, lnsEnqueueExtras = {}
       },
     };
   }
+  const udRow = ud || store.getUserDevice(userId, idStr) || store.getAnyUserDeviceForDeviceId(idStr);
+  try {
+    syncDeviceTemplateFromCatalog(store, idStr, udRow, userId);
+  } catch (e) {
+    console.warn('[LNS] syncDeviceTemplateFromCatalog:', e.message);
+  }
   const pay = resolveLnsDownlinkAppPayloadBuffer(body);
   if (!pay.ok) return pay;
-  const payloadBuf = pay.buf;
-  const hex = pay.hex;
+  const cfgPm = String(store.getDeviceDecodeConfig(String(idStr))?.productModel || '').trim();
+  const udPm = String(ud?.productModel || ud?.model || '').trim();
+  const productModel = udPm || cfgPm;
+  let hex = remapWs501LegacyDownlinkHex(pay.hex, productModel);
+  const wtResolved = resolveWt201DownlinkHex(hex);
+  if (wtResolved) hex = wtResolved;
+  let payloadBuf = hex !== pay.hex ? Buffer.from(hex, 'hex') : pay.buf;
   const confirmedDl = Boolean(body?.confirmed);
 
   const sess = store.lnsGetSessionByDevEui(sessionUserId, deui);
@@ -1626,6 +1739,7 @@ function sendHttpResponseAfterLnsAppDownlinkEnqueue(res, userId, r, meta) {
       confirmed: r.confirmedDl,
       deviceClass: r.out.deviceClass,
       imme: r.out.imme,
+      txScheduledTmst: r.out.txScheduledTmst,
       classARxWindow: r.out.classARxWindow,
       gatewayEui: r.out.gatewayEui,
       txAckPending: apiBody.txAckPending,
@@ -2971,7 +3085,8 @@ app.put('/api/device-templates', authMiddleware, realSuperAdminMiddleware, (req,
       body.defaultTemplateId != null && String(body.defaultTemplateId).trim()
         ? String(body.defaultTemplateId).trim()
         : null;
-    store.setDeviceTemplatesCatalog({ templates: body.templates, defaultTemplateId });
+    const templatesNorm = sanitizeTemplatesCatalog(body.templates);
+    store.setDeviceTemplatesCatalog({ templates: templatesNorm, defaultTemplateId });
     const cat = store.getDeviceTemplatesCatalog();
     res.json({
       templates: cat.templates,
@@ -3010,8 +3125,17 @@ app.get(
   deviceAssignmentMiddleware,
   (req, res) => {
     const did = decodeURIComponent(String(req.params.deviceId || '').trim());
+    const ud = store.getUserDevice(req.user.id, did) || store.getAnyUserDeviceForDeviceId(did);
+    try {
+      syncDeviceTemplateFromCatalog(store, did, ud, req.user.id);
+    } catch (e) {
+      console.warn('[Syscom] syncDeviceTemplateFromCatalog (presets GET):', e.message);
+    }
     const raw = store.getDeviceSharedPresetsParsed(did);
-    const presets = raw && typeof raw === 'object' ? normalizeDeviceSharedPresetsBody(raw) : normalizeDeviceSharedPresetsBody({});
+    const presets =
+      raw && typeof raw === 'object'
+        ? normalizeDeviceSharedPresetsBody(raw, did)
+        : normalizeDeviceSharedPresetsBody({}, did);
     res.json({ deviceId: did, presets });
   }
 );
@@ -3022,9 +3146,15 @@ app.put(
   deviceAssignmentMiddleware,
   (req, res) => {
     const did = decodeURIComponent(String(req.params.deviceId || '').trim());
-    const norm = normalizeDeviceSharedPresetsBody(req.body || {});
-    store.setDeviceSharedPresetsParsed(did, norm);
-    res.json({ deviceId: did, presets: norm });
+    const ud = store.getUserDevice(req.user.id, did) || store.getAnyUserDeviceForDeviceId(did);
+    store.setDeviceSharedPresetsParsed(did, normalizeDeviceSharedPresetsBody(req.body || {}, did));
+    try {
+      syncDeviceTemplateFromCatalog(store, did, ud, req.user.id);
+    } catch (e) {
+      console.warn('[Syscom] syncDeviceTemplateFromCatalog (presets PUT):', e.message);
+    }
+    const presets = normalizeDeviceSharedPresetsBody(store.getDeviceSharedPresetsParsed(did) || {}, did);
+    res.json({ deviceId: did, presets });
   }
 );
 
@@ -3278,6 +3408,15 @@ app.post('/api/user-devices', authMiddleware, superAdminOnlyMiddleware, (req, re
   };
   store.upsertUserDevice(row);
   store.syncUserDeviceToSuperadminPool(row);
+  try {
+    const syncTpl = syncDeviceTemplateFromCatalog(store, id, row, req.user.id);
+    if (syncTpl.applied) {
+      const refreshed = store.getUserDevice(req.user.id, id);
+      if (refreshed) Object.assign(row, refreshed);
+    }
+  } catch (e) {
+    console.warn('[Syscom] syncDeviceTemplateFromCatalog (alta):', e.message);
+  }
   if (/vs\s*133|vs133/i.test(productModelStr)) {
     const existingDec = store.getDeviceDecodeConfig(id);
     const hasScript =
@@ -3329,6 +3468,11 @@ app.patch('/api/user-devices/:deviceId', authMiddleware, superAdminOnlyMiddlewar
   };
   store.upsertUserDevice(row);
   store.syncUserDeviceToSuperadminPool(row);
+  try {
+    syncDeviceTemplateFromCatalog(store, did, row, req.user.id);
+  } catch (e) {
+    console.warn('[Syscom] syncDeviceTemplateFromCatalog (patch):', e.message);
+  }
   const deui = String(row.devEUI || '').replace(/[^0-9a-fA-F]/g, '').toLowerCase();
   if (deui.length === 16) {
     for (const sid of store.listSuperadminUserIds()) {
@@ -3427,6 +3571,9 @@ app.put(
     let script = decoderScript != null ? String(decoderScript) : '';
     if (script.length > 512 * 1024) {
       return res.status(400).json({ error: 'Decoder demasiado largo (máx. 512 KB)' });
+    }
+    if (script.trim()) {
+      script = prepareDecoderScriptForRuntime(script);
     }
     let ch = channel != null ? String(channel).trim().slice(0, 64) : '';
     let productModelPass = undefined;
@@ -3654,15 +3801,11 @@ app.get('/api/devices/:deviceId/properties', authMiddleware, deviceAssignmentMid
   const did = String(req.params.deviceId);
   const decodeCfg = store.getDeviceDecodeConfig(did);
   const pm = decodeCfg && decodeCfg.productModel != null ? String(decodeCfg.productModel).trim() : '';
-  let latest = store.getLatestForDevice(tuid, did);
-  if (latest && latest.properties) {
-    const props = { ...latest.properties };
-    if (needsMergedTelemetryForList(props, pm)) {
-      latest = store.getMergedLatestTelemetryForDevice(tuid, did, { historyRowLimit: 8 });
-    } else {
-      applyVs133TelemetryAliases(props, { productModel: pm });
-      latest = { ...latest, properties: props };
-    }
+  let latest = store.getMergedLatestTelemetryForDevice(tuid, did, { historyRowLimit: 16 });
+  if (latest?.properties) {
+    let props = enrichStoredTelemetryProperties(store, did, { ...latest.properties });
+    applyVs133TelemetryAliases(props, { productModel: pm });
+    latest = { ...latest, properties: props };
   }
   res.json({
     status: 'Success',
@@ -3797,10 +3940,11 @@ app.get('/api/devices/:deviceId/properties/history', authMiddleware, deviceAssig
     endMs,
     limit,
   });
+  const did = String(req.params.deviceId);
   res.json(
     entries.map((t) => ({
       timestamp: t.timestamp,
-      properties: t.properties && typeof t.properties === 'object' ? t.properties : {},
+      properties: enrichStoredTelemetryProperties(store, did, t.properties && typeof t.properties === 'object' ? t.properties : {}),
     }))
   );
 });
@@ -4520,14 +4664,21 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   console.log(`📊 Widgets dispositivo: GET | PUT | POST /api/devices/:deviceId/dashboard-widgets`);
   console.log(`📁 Base de datos (SQLite): ${store.dbPath()}`);
   try {
+    ensureBuiltinCatalogSeeded(store);
+    const fleet = reconcileFleetTemplatesOnStartup(store);
+    if (fleet.synced > 0) {
+      console.log(
+        `[Syscom] Flota auto-alineada con plantillas: ${fleet.synced} dispositivo(s) en ${fleet.users} cuenta(s).`
+      );
+    }
     const poolSync = store.reconcileSuperadminPool();
     if (poolSync.devicesMirrored > 0 || poolSync.gatewaysMirrored > 0) {
       console.log(
-        `[Syscom] Pool superadmin: ${poolSync.devicesMirrored} asignación(es) de dispositivo y ${poolSync.gatewaysMirrored} gateway(s) replicados entre cuentas.`
+        `[Syscom] Pool superadmin (SYSCOM_SUPERADMIN_POOL_MIRROR=1): ${poolSync.devicesMirrored} dispositivo(s) y ${poolSync.gatewaysMirrored} gateway(s) replicados entre cuentas.`
       );
     }
   } catch (e) {
-    console.warn('[Syscom] reconcileSuperadminPool:', e.message);
+    console.warn('[Syscom] Arranque flota/plantillas:', e.message);
   }
   try {
     const { scheduleDailyDatabaseBackup } = require('./db-backup-scheduler');
@@ -4582,6 +4733,11 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   startMqttIngest();
 
   try {
+    ensureBuiltinCatalogSeeded(store);
+  } catch (e) {
+    console.warn('[Syscom] ensureBuiltinCatalogSeeded:', e.message);
+  }
+  try {
     const eng = getLnsEngine();
     if (eng) {
       console.log('[LNS] Motor MAC LoRaWAN activo (Join OTAA, uplinks cifrados, downlinks).');
@@ -4603,7 +4759,7 @@ const server = app.listen(PORT, '0.0.0.0', () => {
       }
       if (!appTxAckExplicitOff && !appTxAckExplicitOn) {
         console.log(
-          '[LNS] Downlinks de aplicación en **clase C**: sin esperar GW_TX_ACK por defecto (fiabilidad). Forzar espera: SYSCOM_LNS_APP_DOWNLINK_TX_ACK=1.'
+          '[LNS] Downlinks de aplicación: sin esperar GW_TX_ACK por defecto (FCnt al encolar). Forzar espera: SYSCOM_LNS_APP_DOWNLINK_TX_ACK=1.'
         );
       }
       if (String(process.env.SYSCOM_LNS_CLASS_C_USE_GATEWAY_TMST || '').trim() === '1') {
@@ -4623,6 +4779,13 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     startSemtechUdpLns({
       port: LNS_UDP_PORT,
       store,
+      refreshPullRespJson: (row) => {
+        const eng = getLnsEngine();
+        if (eng && typeof eng.refreshPullRespJsonBeforeSend === 'function') {
+          return eng.refreshPullRespJsonBeforeSend(row);
+        }
+        return row.json;
+      },
       processPushDataJson: (mac, json, userIds) => {
         const eng = getLnsEngine();
         const ids = Array.isArray(userIds) ? userIds.filter(Boolean) : [];
@@ -4656,12 +4819,8 @@ const server = app.listen(PORT, '0.0.0.0', () => {
       },
       onHeartbeat: (mac) => {
         const eui = mac.toString('hex').toUpperCase();
-        let uids =
-          typeof store.findUserIdsForSemtechPush === 'function'
-            ? store.findUserIdsForSemtechPush(mac)
-            : store.findUserIdsBySemtechGatewayMac8(mac);
-        const defUid = process.env.SYSCOM_LNS_DEFAULT_USER_ID;
-        if (uids.length === 0 && defUid) uids = [String(defUid).trim()];
+        const { ensureGatewaysAutoRegistered: ensureGw } = require('./lib/auto-fleet-sync.cjs');
+        let uids = ensureGw(store, mac);
         const gwProps = { deviceType: 'GATEWAY', status: 'online', gateway_id: eui };
         const ts = Date.now();
         for (const uid of uids) {

@@ -121,6 +121,49 @@ export const LORAWAN_NETWORK_UI_SUPPRESS_SET = new Set(
   LORAWAN_NETWORK_UI_SUPPRESS_KEYS.map((k) => String(k).toLowerCase())
 );
 
+const TELEMETRY_STATUS_META_KEYS = new Set([
+  'connectstatus',
+  'ingeststatus',
+  'lastupdatetime',
+  'last_update',
+  'status',
+  'lorawan_class',
+  'lorawan_event',
+  'gateway_id',
+  'join_dl_settings',
+  'join_rx_delay',
+  'join_cflist_hex',
+]);
+
+/** Última fila solo join LNS (sin payload de aplicación). */
+export function isJoinOnlyTelemetryProperties(props) {
+  if (!props || typeof props !== 'object') return false;
+  const ev = props.lorawan_event != null ? String(props.lorawan_event).trim() : '';
+  if (!ev || !/join/i.test(ev)) return false;
+  const hex = props.payload_hex != null ? String(props.payload_hex).trim() : '';
+  return hex.length === 0;
+}
+
+/**
+ * Hay al menos un campo de sensor / proceso (no solo RSSI, join, DevAddr, etc.).
+ * Usado para decidir si hace falta GET /properties o fusionar historial.
+ */
+export function hasMeaningfulAppTelemetry(props) {
+  if (!props || typeof props !== 'object' || Array.isArray(props)) return false;
+  const flat = mergeDeviceTelemetryForWidgets(props);
+  for (const [k, v] of Object.entries(flat)) {
+    const kl = String(k).toLowerCase();
+    if (PROPERTY_INFER_IGNORE_SET.has(k)) continue;
+    if (LORAWAN_NETWORK_UI_SUPPRESS_SET.has(kl)) continue;
+    if (TELEMETRY_STATUS_META_KEYS.has(kl)) continue;
+    if (v === undefined || v === null) continue;
+    if (typeof v === 'object' && !Array.isArray(v)) continue;
+    if (typeof v === 'string' && !String(v).trim()) continue;
+    return true;
+  }
+  return false;
+}
+
 /**
  * Metadato de red LoRaWAN / MAC en lugar de dato de aplicación (sensor, GPIO, Modbus, etc.).
  */
@@ -203,6 +246,13 @@ export function expandNestedGatewayTelemetry(src) {
     else if (s.includes('long')) out.press = 'long';
     else if (s.includes('double')) out.press = 'double';
   }
+  for (const key of ['temperature_control_status', 'fan_status', 'system_status', 'device_status']) {
+    const nested = out[key];
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      if (nested.status != null) out[key] = nested.status;
+      else if (nested.value != null) out[key] = nested.value;
+    }
+  }
   return out;
 }
 
@@ -278,9 +328,11 @@ function assignScalarTelemetryFields(acc, src) {
  */
 export function mergeDeviceTelemetryForWidgets(deviceRow, ...extraLayers) {
   const acc = {};
-  assignScalarTelemetryFields(acc, deviceRow);
-  for (const layer of extraLayers) {
-    assignScalarTelemetryFields(acc, layer);
+  const layers = [deviceRow, ...extraLayers].filter(
+    (l) => l && typeof l === 'object' && !Array.isArray(l)
+  );
+  for (const layer of layers) {
+    assignScalarTelemetryFields(acc, expandNestedGatewayTelemetry(layer));
   }
   const tsCandidates = [
     deviceRow?.lastUpdateTime,
