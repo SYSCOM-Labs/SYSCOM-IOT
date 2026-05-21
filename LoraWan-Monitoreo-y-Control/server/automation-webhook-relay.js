@@ -109,7 +109,7 @@ function pushMorePlainBodyFromPayload(payload) {
  * @param {string} url
  * @param {object} payload
  * @param {{ forcePushMorePlain?: boolean }} [opts]
- * @returns {Promise<{ status: number, ok: boolean, textSnippet: string, telegramError?: string|null }>}
+ * @returns {Promise<{ status: number, ok: boolean, textSnippet: string }>}
  */
 async function relayWebhookPost(url, payload, opts = {}) {
   const timeoutMs = Math.min(30000, Math.max(3000, parseInt(process.env.SYSCOM_WEBHOOK_RELAY_TIMEOUT_MS, 10) || 15000));
@@ -136,21 +136,7 @@ async function relayWebhookPost(url, payload, opts = {}) {
     });
     const text = await r.text();
     const snippet = text.length > 500 ? `${text.slice(0, 500)}…` : text;
-    /** Telegram Bot API: HTTP 200 con cuerpo `{ "ok": false, "description": "..." }` cuando falla chat_id/token/etc. */
-    let logicalOk = r.ok;
-    let telegramError = null;
-    if (logicalOk && /api\.telegram\.org/i.test(String(url))) {
-      try {
-        const j = JSON.parse(text);
-        if (j && typeof j === 'object' && j.ok === false) {
-          logicalOk = false;
-          telegramError = j.description || j.error_code || JSON.stringify(j);
-        }
-      } catch {
-        /* cuerpo no JSON */
-      }
-    }
-    return { status: r.status, ok: logicalOk, textSnippet: snippet, telegramError };
+    return { status: r.status, ok: r.ok, textSnippet: snippet };
   } finally {
     clearTimeout(tid);
   }

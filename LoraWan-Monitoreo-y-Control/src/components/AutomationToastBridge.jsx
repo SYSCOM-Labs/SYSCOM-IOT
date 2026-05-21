@@ -7,7 +7,7 @@ function ToastCard({ id, appLabel, title, subtitle, variant, onClose }) {
   return (
     <div className="automation-desktop-toast" data-variant={variant || 'indigo'} role="status">
       <div className="automation-desktop-toast__icon" aria-hidden>
-        <Bell size={24} strokeWidth={2.25} />
+        <Bell size={72} strokeWidth={2.25} />
       </div>
       <div className="automation-desktop-toast__body">
         <div className="automation-desktop-toast__app">{appLabel || 'SYSCOM IoT'}</div>
@@ -15,14 +15,14 @@ function ToastCard({ id, appLabel, title, subtitle, variant, onClose }) {
         {subtitle ? <p className="automation-desktop-toast__subtitle">{subtitle}</p> : null}
       </div>
       <button type="button" className="automation-desktop-toast__close" onClick={() => onClose(id)} aria-label="Cerrar">
-        <X size={22} />
+        <X size={66} />
       </button>
     </div>
   );
 }
 
 /**
- * Notificaciones estilo toast (Windows 11 / bandeja) disparadas por reglas con acción "toast".
+ * Alertas de automatización (acción «toast»): centradas en pantalla, solo se cierran con X.
  */
 export default function AutomationToastBridge() {
   const [items, setItems] = useState([]);
@@ -35,9 +35,7 @@ export default function AutomationToastBridge() {
     const onToast = (ev) => {
       const d = ev.detail && typeof ev.detail === 'object' ? ev.detail : {};
       const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const duration = Math.min(60000, Math.max(4000, Number(d.durationMs) || 9000));
       setItems((prev) => [...prev, { id, ...d }]);
-      window.setTimeout(() => remove(id), duration);
     };
     window.addEventListener(SYSCOM_AUTOMATION_TOAST, onToast);
     return () => window.removeEventListener(SYSCOM_AUTOMATION_TOAST, onToast);

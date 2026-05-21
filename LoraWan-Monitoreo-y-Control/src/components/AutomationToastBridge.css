@@ -1,12 +1,13 @@
 .automation-toast-host {
   position: fixed;
-  bottom: 1.25rem;
-  right: 1.25rem;
+  inset: 0;
   z-index: 10060;
   display: flex;
-  flex-direction: column-reverse;
-  gap: 14px;
-  max-width: min(520px, calc(100vw - 2rem));
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 42px;
+  padding: 2rem;
   pointer-events: none;
 }
 
@@ -14,42 +15,43 @@
   pointer-events: auto;
 }
 
-/* ——— Modo claro (White): fondos blancos, texto oscuro ——— */
+/* ——— Modo claro: ~3× tamaño anterior, centrado en pantalla ——— */
 .automation-desktop-toast {
   --toast-accent: #4f46e5;
   position: relative;
   display: flex;
-  gap: 16px;
+  gap: 48px;
   align-items: flex-start;
-  min-width: min(100%, 380px);
-  padding: 20px 22px 20px 24px;
-  border-radius: 16px;
+  min-width: min(100%, 1140px);
+  max-width: min(1140px, calc(100vw - 4rem));
+  padding: 60px 66px 60px 72px;
+  border-radius: 48px;
   border: 1px solid #e5e7eb;
   background: #ffffff;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   box-shadow:
-    0 1px 3px rgba(15, 23, 42, 0.06),
-    0 12px 32px -8px rgba(15, 23, 42, 0.12);
-  animation: automation-toast-in 0.28s cubic-bezier(0.22, 1, 0.36, 1) both;
+    0 3px 9px rgba(15, 23, 42, 0.06),
+    0 36px 96px -24px rgba(15, 23, 42, 0.18);
+  animation: automation-toast-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 .automation-desktop-toast::before {
   content: '';
   position: absolute;
   left: 0;
-  top: 14px;
-  bottom: 14px;
-  width: 4px;
-  border-radius: 4px;
+  top: 42px;
+  bottom: 42px;
+  width: 12px;
+  border-radius: 12px;
   background: var(--toast-accent);
 }
 
 .automation-desktop-toast__icon {
   flex-shrink: 0;
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
+  width: 144px;
+  height: 144px;
+  border-radius: 36px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -85,24 +87,24 @@
 }
 
 .automation-desktop-toast__app {
-  font-size: 0.78rem;
+  font-size: 2.34rem;
   font-weight: 600;
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: #64748b;
-  margin-bottom: 6px;
+  margin-bottom: 18px;
 }
 
 .automation-desktop-toast__title {
-  font-size: 1.12rem;
+  font-size: 3.36rem;
   font-weight: 700;
   line-height: 1.35;
   color: #0f172a;
-  margin: 0 0 8px;
+  margin: 0 0 24px;
 }
 
 .automation-desktop-toast__subtitle {
-  font-size: 0.95rem;
+  font-size: 2.85rem;
   line-height: 1.5;
   color: #475569;
   margin: 0;
@@ -110,17 +112,17 @@
 
 .automation-desktop-toast__close {
   flex-shrink: 0;
-  width: 36px;
-  height: 36px;
+  width: 108px;
+  height: 108px;
   border: none;
-  border-radius: 10px;
+  border-radius: 30px;
   background: #ffffff;
   color: #64748b;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  margin: -6px -8px 0 0;
+  margin: -18px -24px 0 0;
   transition: background 0.15s, color 0.15s;
 }
 
@@ -145,15 +147,15 @@
   --toast-accent: #e11d48;
 }
 
-/* ——— Modo oscuro (Dark): panel tipo dashboard ——— */
+/* ——— Modo oscuro ——— */
 body.theme-dark .automation-desktop-toast {
   border: 1px solid rgba(148, 163, 184, 0.14);
   background: #121a26;
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   box-shadow:
-    0 4px 6px rgba(0, 0, 0, 0.35),
-    0 20px 50px -12px rgba(0, 0, 0, 0.55);
+    0 12px 18px rgba(0, 0, 0, 0.35),
+    0 60px 150px -36px rgba(0, 0, 0, 0.55);
 }
 
 body.theme-dark .automation-desktop-toast__app {
@@ -209,13 +211,58 @@ body.theme-dark .automation-desktop-toast__close:hover {
   color: #f8fafc;
 }
 
+@media (max-width: 900px) {
+  .automation-desktop-toast {
+    min-width: min(100%, calc(100vw - 2rem));
+    max-width: calc(100vw - 2rem);
+    padding: 36px 40px 36px 44px;
+    gap: 28px;
+  }
+
+  .automation-desktop-toast__icon {
+    width: 96px;
+    height: 96px;
+    border-radius: 24px;
+  }
+
+  .automation-desktop-toast__icon svg {
+    width: 48px;
+    height: 48px;
+  }
+
+  .automation-desktop-toast__close svg {
+    width: 40px;
+    height: 40px;
+  }
+
+  .automation-desktop-toast__app {
+    font-size: 1.1rem;
+    margin-bottom: 10px;
+  }
+
+  .automation-desktop-toast__title {
+    font-size: 1.65rem;
+    margin-bottom: 14px;
+  }
+
+  .automation-desktop-toast__subtitle {
+    font-size: 1.35rem;
+  }
+
+  .automation-desktop-toast__close {
+    width: 72px;
+    height: 72px;
+    border-radius: 20px;
+  }
+}
+
 @keyframes automation-toast-in {
   from {
     opacity: 0;
-    transform: translateY(12px) scale(0.98);
+    transform: scale(0.94);
   }
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: scale(1);
   }
 }

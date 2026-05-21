@@ -8,7 +8,7 @@ import sseContract from '../../shared/realtime-sse-contract.json';
 
 /**
  * Mantiene EventSource (SSE) con el backend: telemetría y eventos LNS sin polling exclusivo.
- * Downlinks de reglas: servidor (`server/automation-runner.js`). Email/webhook: cliente tras SSE (EmailJS).
+ * Downlinks y email de reglas: servidor (`server/automation-runner.js`). Webhook/toast: cliente tras SSE.
  */
 export default function SyscomRealtimeBridge() {
   const { token, user, userProfile, credentials, hasNavPage, isSuperAdmin } = useAuth();

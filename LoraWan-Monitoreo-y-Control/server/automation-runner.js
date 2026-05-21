@@ -186,21 +186,59 @@ function scheduleRunPhase(action) {
   return 'start';
 }
 
-function runAutomationAction(userId, action) {
+/** @param {{ allowFull?: boolean, allowEmail?: boolean }} [perm] */
+function runAutomationAction(userId, action, rule, perm) {
   try {
+    const { automationPerm } = _ctx;
+    if (automationPerm && !automationPerm.isAutomationActionPermitted(action, perm)) return;
     if (action.type === 'downlink') {
       executeDownlinkAction(userId, action);
+    } else if (action.type === 'email') {
+      executeEmailAction(userId, action, rule);
     }
   } catch (e) {
     console.warn('[automation] action:', e && e.message);
   }
 }
 
-function enqueueAutomationAction(userId, action) {
+/** @param {{ allowFull?: boolean, allowEmail?: boolean }} [perm] */
+function enqueueAutomationAction(userId, action, rule, perm) {
+  const { automationPerm } = _ctx;
+  if (automationPerm && !automationPerm.isAutomationActionPermitted(action, perm)) return;
   const delaySeconds = Math.max(0, parseInt(String(action.delay || 0), 10));
-  const fire = () => runAutomationAction(userId, action);
+  const fire = () => runAutomationAction(userId, action, rule, perm);
   if (delaySeconds > 0) setTimeout(fire, delaySeconds * 1000);
   else fire();
+}
+
+function executeEmailAction(userId, action, rule) {
+  const { store, smtpMail } = _ctx;
+  if (!smtpMail || !store) return;
+  const to = String(action.target || '').trim();
+  if (!to) {
+    console.warn('[automation] Email: falta destinatario en la acción.');
+    return;
+  }
+  const ruleObj =
+    rule && typeof rule === 'object'
+      ? rule
+      : { name: 'Automatización', conditions: [], id: null };
+  const { subject, text } = smtpMail.buildAutomationEmailBody(ruleObj, action);
+  void smtpMail
+    .sendNotificationEmail(store, {
+      to,
+      subject,
+      text,
+      meta: { userId, ruleId: ruleObj.id, source: 'automation' },
+    })
+    .then((r) => {
+      if (r && r.queued) {
+        console.info('[automation] Email encolado (%s) para %s', r.reason || 'retry', to);
+      }
+    })
+    .catch((e) => {
+      console.warn('[automation] Email:', e && e.message);
+    });
 }
 
 /**
@@ -327,9 +365,11 @@ function executeDownlinkAction(userId, action) {
  */
 function runRulesForUser(userId, deviceProperties, opts = {}) {
   const scheduleTickOnly = opts.scheduleTickOnly === true;
-  const { store, canRunAutomationsForUser } = _ctx;
+  const { store, automationPerm } = _ctx;
   const user = store.getUserById(userId);
-  if (!user || !canRunAutomationsForUser(user)) return;
+  if (!user || !automationPerm) return;
+  const perm = automationPerm.automationPermitsForUser(user);
+  if (!perm.allowFull && !perm.allowEmail) return;
 
   let rules;
   try {
@@ -386,7 +426,7 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
             if (tid && scheduleOnlyDownlinkTargets.has(tid)) continue;
             if (tid) scheduleOnlyDownlinkTargets.add(tid);
           }
-          enqueueAutomationAction(userId, action);
+          enqueueAutomationAction(userId, action, rule, perm);
         }
       }
       continue;
@@ -441,7 +481,7 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
         continue;
       }
 
-      enqueueAutomationAction(userId, action);
+      enqueueAutomationAction(userId, action, rule, perm);
       cooldownStorage[ck] = Date.now();
     }
   }
@@ -469,7 +509,7 @@ function startAutomationScheduleTicker() {
   const tick = () => {
     if (String(process.env.SYSCOM_SERVER_AUTOMATIONS || '1').trim() === '0') return;
     if (!_ctx) return;
-    const { store, canRunAutomationsForUser } = _ctx;
+    const { store, automationPerm } = _ctx;
     let users;
     try {
       users = store.allUsersSanitized();
@@ -478,7 +518,9 @@ function startAutomationScheduleTicker() {
       return;
     }
     for (const u of users) {
-      if (!u || !canRunAutomationsForUser(u)) continue;
+      if (!u || !automationPerm) continue;
+      const perm = automationPerm.automationPermitsForUser(u);
+      if (!perm.allowFull && !perm.allowEmail) continue;
       const uid = String(u.id);
       try {
         const map = buildDevicePropertiesMapForUser(store, uid, '', {});

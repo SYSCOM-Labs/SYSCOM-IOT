@@ -102,7 +102,9 @@ export const translations = {
       logo_choose: "Choose image",
       logo_remove: "Remove logo",
       notifications_section: "Alerts when another tab or window is in front",
-      email_section: "Email notifications (EmailJS)",
+      email_section: "Email notifications (SMTP)",
+      smtp_hint:
+        "Free SMTP (Gmail, Outlook, Yahoo, GMX). Superadmin configures once; all sub-accounts use it for automation emails. Use an app password, not your normal login password.",
       bar_profile_section: "Top bar profile",
       bar_profile_hint:
         "Name is saved on the server for your account. Photo is stored in this browser only (useful on AWS if you want a logo without Gravatar).",
@@ -259,7 +261,9 @@ export const translations = {
       logo_choose: "Elegir imagen",
       logo_remove: "Quitar logotipo",
       notifications_section: "Avisos con otra pestaña o ventana al frente",
-      email_section: "Notificaciones de Email (EmailJS)",
+      email_section: "Notificaciones por correo (SMTP)",
+      smtp_hint:
+        "SMTP gratuito (Gmail, Outlook, Yahoo, GMX). El superadmin configura una vez; todas las subcuentas usan ese correo en automatizaciones. Use contraseña de aplicación, no la contraseña normal.",
       bar_profile_section: "Perfil en barra superior",
       bar_profile_hint:
         "El nombre se guarda en el servidor con su cuenta. La imagen se guarda solo en este navegador (útil en AWS si quiere un logotipo sin depender de Gravatar).",

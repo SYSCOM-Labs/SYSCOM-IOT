@@ -13,13 +13,20 @@ import {
   notifyBarPrefsChanged,
   readBarAvatarOverride,
 } from '../utils/barAppearancePrefs';
-import { readEmailJsConfigFromStorage } from '../services/automationService';
 import {
   browserNotificationsSupported,
   getBrowserNotificationPermission,
   requestBrowserNotificationPermission,
 } from '../utils/browserNotifications';
-import { exportDatabaseBackupBlob, importDatabaseBackupFile, fetchBackupConfig, saveBackupConfig } from '../services/api';
+import {
+  exportDatabaseBackupBlob,
+  importDatabaseBackupFile,
+  fetchBackupConfig,
+  saveBackupConfig,
+  fetchSmtpSettings,
+  saveSmtpSettings,
+  testSmtpSettings,
+} from '../services/api';
 import AppActivityLogDock from '../components/AppActivityLogDock';
 
 const LOGO_STORAGE_KEY = 'syscom_iot_logo';
@@ -47,6 +54,7 @@ const SettingsPage = () => {
   const [barProfileSaving, setBarProfileSaving] = useState(false);
   const [activityLogOpen, setActivityLogOpen] = useState(false);
   const activityLogWrapRef = useRef(null);
+  const isSuperAdmin = user?.role === 'superadmin';
 
   useEffect(() => {
     const n =
@@ -73,6 +81,29 @@ const SettingsPage = () => {
   }, [hasNavPage]);
 
   useEffect(() => {
+    if (!hasNavPage('Settings')) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await fetchSmtpSettings();
+        if (cancelled) return;
+        setSmtpStatus(data);
+        setSmtpForm((prev) => ({
+          ...prev,
+          provider: data?.provider || 'gmail',
+          host: data?.host || '',
+          port: data?.port || 587,
+        }));
+      } catch {
+        /* sin permiso */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasNavPage]);
+
+  useEffect(() => {
     if (!activityLogOpen) return;
     const id = requestAnimationFrame(() => {
       activityLogWrapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -80,10 +111,17 @@ const SettingsPage = () => {
     return () => cancelAnimationFrame(id);
   }, [activityLogOpen]);
 
-  const [emailConfig, setEmailConfig] = useState(() => {
-    const normalized = readEmailJsConfigFromStorage();
-    return normalized || { serviceId: '', templateId: '', publicKey: '' };
+  const [smtpForm, setSmtpForm] = useState({
+    provider: 'gmail',
+    user: '',
+    password: '',
+    host: '',
+    port: 587,
   });
+  const [smtpStatus, setSmtpStatus] = useState(null);
+  const [smtpSaveBusy, setSmtpSaveBusy] = useState(false);
+  const [smtpTestTo, setSmtpTestTo] = useState('');
+  const [smtpTestBusy, setSmtpTestBusy] = useState(false);
 
   const [browserNotifyPerm, setBrowserNotifyPerm] = useState(() =>
     browserNotificationsSupported() ? getBrowserNotificationPermission() : 'unsupported'
@@ -103,18 +141,89 @@ const SettingsPage = () => {
     }
   };
 
-  const handleSaveEmailConfig = () => {
-    const sid = String(emailConfig.serviceId || '').trim();
-    const tid = String(emailConfig.templateId || '').trim();
-    const pk = String(emailConfig.publicKey || '').trim();
-    if (!sid || !tid || !pk) {
-      alert('Complete los tres campos (Service ID, Template ID, Public Key) antes de guardar.');
+  const handleSaveSmtpConfig = async () => {
+    if (!isSuperAdmin) {
+      alert('Solo el super administrador puede guardar la configuración SMTP.');
       return;
     }
-    const next = { serviceId: sid, templateId: tid, publicKey: pk };
-    setEmailConfig(next);
-    localStorage.setItem('iot_email_config', JSON.stringify(next));
-    alert('Configuración de Email guardada. Las automatizaciones con “Enviar email” usarán estos datos en este navegador.');
+    const userEmail = String(smtpForm.user || '').trim();
+    if (!userEmail) {
+      alert('Indique el correo saliente (cuenta SMTP).');
+      return;
+    }
+    const pass = String(smtpForm.password || '').trim();
+    if (!smtpStatus?.hasPassword && !smtpStatus?.credentialsFromEnv && !pass) {
+      alert('Indique la contraseña de aplicación SMTP, o defina SYSCOM_SMTP_PASS en el archivo .env del servidor.');
+      return;
+    }
+    setSmtpSaveBusy(true);
+    try {
+      const data = await saveSmtpSettings({
+        provider: smtpForm.provider,
+        user: userEmail,
+        password: pass || undefined,
+        host: smtpForm.provider === 'custom' ? smtpForm.host : undefined,
+        port: smtpForm.port,
+      });
+      setSmtpStatus(data);
+      setSmtpForm((f) => ({ ...f, password: '' }));
+      alert(
+        'SMTP guardado. Las automatizaciones «Enviar email» se envían desde el servidor (no hace falta tener el navegador abierto).'
+      );
+    } catch (e) {
+      alert(e?.response?.data?.error || e?.message || 'No se pudo guardar SMTP.');
+    } finally {
+      setSmtpSaveBusy(false);
+    }
+  };
+
+  const handleTestSmtp = async () => {
+    if (!isSuperAdmin) {
+      alert('Solo el super administrador puede enviar correos de prueba.');
+      return;
+    }
+    const to = String(smtpTestTo || user?.email || '').trim();
+    if (!to) {
+      alert('Indique un correo de prueba.');
+      return;
+    }
+    const fromUser = String(smtpForm.user || '').trim();
+    const fromPass = String(smtpForm.password || '').trim();
+    if (!smtpStatus?.configured && !smtpStatus?.credentialsFromEnv && (!fromUser || !fromPass)) {
+      alert(
+        'Complete el correo saliente y la contraseña de aplicación en el formulario, o defina SYSCOM_SMTP_USER y SYSCOM_SMTP_PASS en el .env del servidor.'
+      );
+      return;
+    }
+    setSmtpTestBusy(true);
+    try {
+      const data = await testSmtpSettings({
+        to,
+        user: fromUser || undefined,
+        password: fromPass || undefined,
+        provider: smtpForm.provider,
+        host: smtpForm.provider === 'custom' ? smtpForm.host : undefined,
+        port: smtpForm.port,
+      });
+      if (data?.queued) {
+        alert('Correo encolado (límite diario o reintento). Se enviará automáticamente más tarde.');
+      } else {
+        alert(`Correo de prueba enviado a ${to}. Revise bandeja de entrada y spam.`);
+      }
+      const st = await fetchSmtpSettings();
+      setSmtpStatus(st);
+    } catch (e) {
+      const st = e?.response?.status;
+      const code = e?.response?.data?.code;
+      let msg = e?.response?.data?.error || e?.message || 'Envío fallido';
+      if (st === 404) {
+        msg =
+          'No se encontró la ruta de prueba SMTP (404). Reinicie el backend (npm start) y compruebe que VITE_API_BASE termina en /api (p. ej. http://localhost:3001/api) o déjelo vacío para usar el proxy /api de Vite.';
+      }
+      alert(code ? `${msg} (${code})` : msg);
+    } finally {
+      setSmtpTestBusy(false);
+    }
   };
 
   const handleLogoFile = (e) => {
@@ -414,44 +523,120 @@ const SettingsPage = () => {
 
         <section className="settings-section settings-section-premium">
           <h3>{t('settings.email_section')}</h3>
-          <p className="settings-emailjs-link-only">
-            <a href="https://www.emailjs.com/" target="_blank" rel="noreferrer">
-              https://www.emailjs.com/
-            </a>
+          <p className="description settings-logo-hint">{t('settings.smtp_hint')}</p>
+          {!isSuperAdmin && (
+            <p className="description settings-logo-hint">
+              Solo el superadmin puede cambiar la cuenta SMTP. Las subcuentas envían alertas por email usando esta
+              configuración global en sus reglas de automatización.
+            </p>
+          )}
+          {smtpStatus?.credentialsFromEnv && (
+            <p className="description settings-logo-hint">
+              Las credenciales activas vienen de variables de entorno del servidor (SYSCOM_SMTP_USER / SYSCOM_SMTP_PASS).
+              El formulario solo actualiza la cuenta si no están definidas en .env.
+            </p>
+          )}
+          {smtpStatus && (
+            <p className="description settings-logo-hint">
+              Hoy: {smtpStatus.dailySent ?? 0} / {smtpStatus.dailyLimit ?? '—'} envíos · Cola pendiente:{' '}
+              {smtpStatus.outboxPending ?? 0}
+              {smtpStatus.configured ? ' · SMTP listo' : ' · SMTP sin configurar'}
+            </p>
+          )}
+          <div className="form-group">
+            <label>Proveedor</label>
+            <select
+              className="glass"
+              value={smtpForm.provider}
+              disabled={!isSuperAdmin}
+              onChange={(e) => setSmtpForm({ ...smtpForm, provider: e.target.value })}
+            >
+              {(smtpStatus?.providers || [
+                { id: 'gmail', label: 'Gmail' },
+                { id: 'outlook', label: 'Outlook' },
+                { id: 'yahoo', label: 'Yahoo' },
+                { id: 'gmx', label: 'GMX' },
+                { id: 'custom', label: 'Otro' },
+              ]).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          {smtpForm.provider === 'custom' && (
+            <div className="form-group">
+              <label>Host SMTP</label>
+              <input
+                type="text"
+                className="glass"
+                disabled={!isSuperAdmin}
+                value={smtpForm.host}
+                onChange={(e) => setSmtpForm({ ...smtpForm, host: e.target.value })}
+                placeholder="smtp.ejemplo.com"
+              />
+            </div>
+          )}
+          <div className="form-group">
+            <label>Correo saliente</label>
+            <input
+              type="email"
+              className="glass"
+              disabled={!isSuperAdmin}
+              value={smtpForm.user}
+              onChange={(e) => setSmtpForm({ ...smtpForm, user: e.target.value })}
+              placeholder={
+                smtpStatus?.fromEmail
+                  ? `Configurado: ${smtpStatus.fromEmail}`
+                  : 'notificaciones@su-dominio.com'
+              }
+              autoComplete="username"
+            />
+          </div>
+          <div className="form-group">
+            <label>Contraseña de aplicación</label>
+            <input
+              type="password"
+              className="glass"
+              disabled={!isSuperAdmin}
+              value={smtpForm.password}
+              onChange={(e) => setSmtpForm({ ...smtpForm, password: e.target.value })}
+              placeholder={smtpStatus?.hasPassword ? 'Dejar vacío para no cambiar' : 'Contraseña de aplicación (no la normal)'}
+              autoComplete="new-password"
+            />
+          </div>
+          <p className="description settings-logo-hint">
+            Guía detallada: <code>docs/SMTP_NOTIFICACIONES.md</code> en el proyecto. En producción use{' '}
+            <code>SYSCOM_SMTP_USER</code> y <code>SYSCOM_SMTP_PASS</code> en el .env del servidor.
           </p>
           <div className="form-group">
-            <label>Service ID</label>
+            <label>Correo de prueba</label>
             <input
-              type="text"
+              type="email"
               className="glass"
-              value={emailConfig.serviceId}
-              onChange={(e) => setEmailConfig({ ...emailConfig, serviceId: e.target.value })}
-              placeholder="e.g. service_xxxx"
+              value={smtpTestTo}
+              onChange={(e) => setSmtpTestTo(e.target.value)}
+              placeholder={user?.email || 'destino@ejemplo.com'}
             />
           </div>
-          <div className="form-group">
-            <label>Template ID</label>
-            <input
-              type="text"
-              className="glass"
-              value={emailConfig.templateId}
-              onChange={(e) => setEmailConfig({ ...emailConfig, templateId: e.target.value })}
-              placeholder="e.g. template_xxxx"
-            />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleSaveSmtpConfig}
+              disabled={!isSuperAdmin || smtpSaveBusy}
+            >
+              {smtpSaveBusy ? 'Guardando…' : 'Guardar SMTP'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={handleTestSmtp}
+              disabled={!isSuperAdmin || smtpTestBusy}
+            >
+              {smtpTestBusy ? 'Enviando…' : 'Enviar prueba'}
+            </button>
           </div>
-          <div className="form-group">
-            <label>Public Key (User ID)</label>
-            <input
-              type="text"
-              className="glass"
-              value={emailConfig.publicKey}
-              onChange={(e) => setEmailConfig({ ...emailConfig, publicKey: e.target.value })}
-              placeholder="e.g. user_xxxx"
-            />
-          </div>
-          <button type="button" className="btn btn-primary" onClick={handleSaveEmailConfig}>
-            Guardar Configuración de Email
-          </button>
         </section>
 
         {hasNavPage('Settings') && (

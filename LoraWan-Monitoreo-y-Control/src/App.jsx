@@ -22,6 +22,7 @@ import LnsDownlinkToastBridge from './components/LnsDownlinkToastBridge';
 import AutomationToastBridge from './components/AutomationToastBridge';
 import SyscomRealtimeBridge from './components/SyscomRealtimeBridge';
 import { AppActivityLogProvider } from './context/AppActivityLogContext';
+import { installAutomationToastAudioUnlock } from './utils/automationToastSound.js';
 
 const PAGE_HEADINGS = {
   Dashboard: {
@@ -197,6 +198,10 @@ function ImpersonationSupportBanner({ isImpersonating, targetEmail, targetDispla
 }
 
 function App() {
+  useEffect(() => {
+    installAutomationToastAudioUnlock();
+  }, []);
+
   const {
     user,
     userProfile,

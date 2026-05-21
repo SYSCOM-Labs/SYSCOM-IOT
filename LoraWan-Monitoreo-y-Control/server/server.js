@@ -859,11 +859,9 @@ function buildDevicesContentSuperadmin() {
   return content;
 }
 
-function canRunAutomationsForUser(user) {
-  if (!user) return false;
-  if (user.role === 'superadmin') return true;
-  return navPerm.userHasNav(user, 'Automations');
-}
+const automationPerm = require('./lib/automation-permissions.cjs');
+const canRunAutomationsForUser = automationPerm.canRunAutomationsForUser;
+const canUseGlobalNotificationEmailForUser = automationPerm.canUseGlobalNotificationEmailForUser;
 
 /**
  * Superadmin puede no tener fila en `user_devices` pero operar el equipo; la sesión LNS suele estar bajo el
@@ -1751,6 +1749,7 @@ function sendHttpResponseAfterLnsAppDownlinkEnqueue(res, userId, r, meta) {
   return res.json(apiWithDeui);
 }
 
+const smtpMail = require('./lib/smtp-mail.cjs');
 const automationRunner = require('./automation-runner');
 automationRunner.configure({
   store,
@@ -1759,7 +1758,11 @@ automationRunner.configure({
   insertUiEventWithStream,
   buildLnsDownlinkApiSuccessBody,
   canRunAutomationsForUser,
+  canUseGlobalNotificationEmailForUser,
+  automationPerm,
+  smtpMail,
 });
+smtpMail.startSmtpQueueWorker(store);
 store.setAutomationTelemetryHook((payload) => {
   try {
     automationRunner.onTelemetry(payload);
@@ -3697,6 +3700,71 @@ app.put('/api/admin/backup-config', authMiddleware, navSettingsMiddleware, (req,
   res.json({ ok: true, nasDestination: store.getServerSetting(BACKUP_NAS_SETTING_KEY) });
 });
 
+/** SMTP gratuito (Gmail, Outlook, Yahoo, GMX): estado y configuración. La contraseña en producción debe ir en variables de entorno. */
+/** Estado SMTP global (sin contraseña): cualquier usuario autenticado puede ver si el correo del sistema está listo. */
+app.get('/api/settings/smtp', authMiddleware, (req, res) => {
+  try {
+    res.json(smtpMail.getPublicSmtpStatus(store));
+  } catch (e) {
+    res.status(500).json({ error: e && e.message ? e.message : 'Error SMTP' });
+  }
+});
+
+app.put('/api/settings/smtp', authMiddleware, navSettingsMiddleware, superAdminOnlyMiddleware, (req, res) => {
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const status = smtpMail.saveSmtpConfig(store, body);
+    res.json({ ok: true, ...status });
+  } catch (e) {
+    const code = e && e.code === 'VALIDATION' ? 400 : 500;
+    res.status(code).json({ error: e && e.message ? e.message : 'No se pudo guardar SMTP' });
+  }
+});
+
+app.post('/api/settings/smtp/test', authMiddleware, navSettingsMiddleware, superAdminOnlyMiddleware, async (req, res) => {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const to = String(body.to || '').trim();
+  if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
+    return res.status(400).json({ error: 'Indique un correo de prueba válido.' });
+  }
+  const inlineUser = String(body.user ?? body.from ?? '').trim();
+  const inlinePass = String(body.password ?? body.pass ?? '').trim();
+  const configOverride =
+    inlineUser || inlinePass || body.provider != null || body.host != null
+      ? {
+          user: inlineUser,
+          password: inlinePass,
+          provider: body.provider,
+          host: body.host,
+          port: body.port,
+        }
+      : undefined;
+  try {
+    const result = await smtpMail.sendNotificationEmail(store, {
+      to,
+      subject: 'Prueba SYSCOM IoT — SMTP',
+      text: `Este es un correo de prueba enviado desde SYSCOM IoT el ${new Date().toLocaleString()}.\nSi lo recibió, la configuración SMTP es correcta.`,
+      meta: { source: 'smtp_test' },
+      configOverride,
+      allowQueue: false,
+    });
+    res.json({
+      ok: true,
+      queued: Boolean(result && result.queued),
+      messageId: result && result.messageId,
+      reason: result && result.reason,
+    });
+  } catch (e) {
+    const classified = smtpMail.classifySmtpError(e.cause || e);
+    const status =
+      classified.code === 'NOT_CONFIGURED' || classified.code === 'VALIDATION' ? 400 : 502;
+    res.status(status).json({
+      error: classified.userMessage || (e && e.message) || 'Envío fallido',
+      code: classified.code,
+    });
+  }
+});
+
 /** Volcado completo SQLite (solo superadmin): usuarios, dispositivos, gateways, historial, reglas, dashboards, LNS, etc. */
 app.get('/api/admin/database/export', authMiddleware, navSettingsMiddleware, (req, res) => {
   const os = require('os');
@@ -3776,12 +3844,9 @@ app.post('/api/automation/webhook-relay', authMiddleware, navAutomationsMiddlewa
     });
     if (!out.ok) {
       return res.status(502).json({
-        error: out.telegramError
-          ? `Telegram: ${out.telegramError}`
-          : `El destino respondió HTTP ${out.status}`,
+        error: `El destino respondió HTTP ${out.status}`,
         upstreamStatus: out.status,
         upstreamBodyPreview: out.textSnippet,
-        telegramError: out.telegramError || undefined,
       });
     }
     return res.json({ ok: true, upstreamStatus: out.status, upstreamBodyPreview: out.textSnippet });

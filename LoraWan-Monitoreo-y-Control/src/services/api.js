@@ -206,6 +206,32 @@ export const saveBackupConfig = async (payload) => {
   return response.data;
 };
 
+/** Estado SMTP (sin contraseña). */
+export const fetchSmtpSettings = async () => {
+  const response = await axios.get(`${SERVER_API}/settings/smtp`, { headers: authHeaders() });
+  return response.data;
+};
+
+/** Guardar cuenta saliente SMTP (superadmin). Contraseña opcional si ya está en .env. */
+export const saveSmtpSettings = async (payload) => {
+  const response = await axios.put(`${SERVER_API}/settings/smtp`, payload, { headers: authHeaders() });
+  return response.data;
+};
+
+/** Correo de prueba SMTP (superadmin). Acepta `to` o payload con credenciales del formulario. */
+export const testSmtpSettings = async (payload) => {
+  const body =
+    typeof payload === 'string'
+      ? { to: payload }
+      : payload && typeof payload === 'object'
+        ? payload
+        : {};
+  const response = await axios.post(`${SERVER_API}/settings/smtp/test`, body, {
+    headers: authHeaders(),
+  });
+  return response.data;
+};
+
 /** Alta de dispositivo en el sistema (solo super administrador). */
 export const registerUserDevice = async (payload) => {
   const response = await axios.post(`${SERVER_API}/user-devices`, payload, { headers: authHeaders() });

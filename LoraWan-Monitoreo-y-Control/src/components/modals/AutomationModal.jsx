@@ -106,7 +106,7 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
     setConditions(buildConditionsFromRule(rule));
     setActions(
       Array.isArray(rule?.actions) && rule.actions.length
-        ? rule.actions.map((a) => ({ ...a }))
+        ? rule.actions.filter((a) => a && String(a.type) !== 'telegram').map((a) => ({ ...a }))
         : [
             {
               type: 'email',
@@ -539,9 +539,7 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
                           value={action.webhookBody || ''}
                           onChange={(e) => updateAction(index, 'webhookBody', e.target.value)}
                           placeholder={
-                            'PushMore.io: texto que verá en Telegram (message/text). Telegram API: JSON con chat_id y text. Ej.: ' +
-                            '{"chat_id":123,"text":"Hola"}' +
-                            '. Vacío: resumen automático (nombre de regla, condiciones, fecha).'
+                            'PushMore.io: texto del aviso (message/text). Vacío: resumen automático (nombre de regla, condiciones, fecha).'
                           }
                         />
                       </div>

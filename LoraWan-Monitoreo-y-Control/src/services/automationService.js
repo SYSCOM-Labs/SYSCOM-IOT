@@ -1,4 +1,3 @@
-import emailjs from 'emailjs-com';
 import axios from 'axios';
 import { sendDownlink, fetchAutomationRules } from './api.js';
 import { getApiBase } from '../config/apiBase.js';
@@ -6,6 +5,7 @@ import { getLatestDeviceData } from './localAuth.js';
 import { expandNestedGatewayTelemetry } from '../utils/gatewayPayload.js';
 import { SYSCOM_AUTOMATION_TOAST } from '../constants/automationEvents.js';
 import { tryShowAutomationBrowserNotification } from '../utils/browserNotifications.js';
+import { playAutomationToastBell } from '../utils/automationToastSound.js';
 import { loadAllWidgetConfigs } from '../components/dashboard/widgetConfigUtils.js';
 import { resolveAutomationConditionCompareValue } from '../utils/automationWidgetValue.js';
 
@@ -20,6 +20,7 @@ export function showAutomationToast(detail) {
   if (typeof window === 'undefined' || !window.dispatchEvent) return;
   const d = detail && typeof detail === 'object' ? detail : {};
   window.dispatchEvent(new CustomEvent(SYSCOM_AUTOMATION_TOAST, { detail: d }));
+  void playAutomationToastBell();
   void tryShowAutomationBrowserNotification({
     title: d.title,
     body: d.subtitle,
@@ -178,43 +179,9 @@ export const runAutomations = async (devices, deviceProperties, credentials, tok
   }
 };
 
-/** Lee y normaliza EmailJS desde localStorage (trim + alias de claves habituales). */
+/** @deprecated EmailJS sustituido por SMTP en servidor. */
 export function readEmailJsConfigFromStorage() {
-  if (typeof window === 'undefined' || !window.localStorage) return null;
-  try {
-    const raw = localStorage.getItem('iot_email_config');
-    if (!raw || !String(raw).trim()) return null;
-    const j = JSON.parse(raw);
-    if (!j || typeof j !== 'object') return null;
-    const serviceId = String(j.serviceId ?? j.service_id ?? '').trim();
-    const templateId = String(j.templateId ?? j.template_id ?? '').trim();
-    const publicKey = String(
-      j.publicKey ?? j.public_key ?? j.userId ?? j.user_id ?? j.userID ?? ''
-    ).trim();
-    if (!serviceId || !templateId || !publicKey) return null;
-    return { serviceId, templateId, publicKey };
-  } catch {
-    return null;
-  }
-}
-
-function logEmailJsApiError(err) {
-  const status = err?.status;
-  let detail = err?.text || '';
-  if (detail) {
-    try {
-      const parsed = JSON.parse(detail);
-      if (parsed && typeof parsed === 'object') {
-        detail = parsed.text || parsed.message || JSON.stringify(parsed);
-      }
-    } catch {
-      /* usar texto plano */
-    }
-  }
-  console.warn('[Automation] EmailJS rechazó el envío.', status || '', detail || err?.message || err);
-  console.warn(
-    'Revise en EmailJS: (1) En Email Templates → su plantilla → pestaña Settings: copie el Template ID (p. ej. template_xxxx), no el nombre “Contact Us”. (2) Service ID / Public Key sin intercambiar campos. (3) Variables en la plantilla: {{to_email}}/{{email}}, {{subject}}, {{message}}; plantillas tipo Contact Us suelen usar {{name}}, {{time}}, {{message}} (la app envía esos campos también). (4) Account → Security → dominios autorizados (p. ej. http://localhost:5173).'
-  );
+  return null;
 }
 
 /**
@@ -257,7 +224,7 @@ function isPushMoreWebhookTargetUrl(u) {
 const sendWebhookAction = async (action, rule, token) => {
   let url = String(action.target || '').trim();
   if (!url) {
-    console.warn('[Automation] Webhook: falta la URL (p. ej. https://api.telegram.org/…).');
+    console.warn('[Automation] Webhook: falta la URL (p. ej. https://pushmore.io/webhook/…).');
     return;
   }
   if (!/^https?:\/\//i.test(url)) {
@@ -345,7 +312,7 @@ const executeAction = async (action, rule, devices, credentials, token, auth, ru
     try {
         switch (action.type) {
             case 'email':
-                await sendEmailAction(action, rule, auth);
+                /* Los emails los envía el servidor (automation-runner + SMTP). */
                 break;
             case 'webhook':
                 await sendWebhookAction(action, rule, token);
@@ -376,55 +343,6 @@ const executeAction = async (action, rule, devices, credentials, token, auth, ru
         }
     } catch (err) {
         console.error(`Action execution failed (${action.type}):`, err);
-    }
-};
-
-const sendEmailAction = async (action, rule, auth) => {
-    const config = readEmailJsConfigFromStorage();
-    if (!config) {
-      console.warn(
-        '[Automation] Email: no hay configuración válida. Ajustes → Notificaciones de Email (EmailJS): Service ID, Template ID, Public Key y pulse Guardar. Si ya guardó, recargue la página (F5).'
-      );
-      return;
-    }
-
-    const to = String(action.target || '').trim();
-    if (!to) {
-      console.warn('[Automation] Email: falta el correo del destinatario en la acción.');
-      return;
-    }
-
-    const defaultMessage = `La regla "${rule.name}" se ha activado.\nCondiciones: ${rule.conditions.map((c) => `${c.propName || c.propKey || '—'} ${c.operator} ${c.value}`).join(' AND ')}\nFecha: ${new Date().toLocaleString()}`;
-    const subjectTrim = String(action.emailSubject ?? action.email_subject ?? '').trim();
-    const bodyTrim = String(action.emailBody ?? action.email_body ?? '').trim();
-    const subject = subjectTrim || `Alerta: ${rule.name}`;
-    const message = bodyTrim || defaultMessage;
-    const userLabel = auth?.user?.email || auth?.user?.profileName || 'Usuario';
-
-    /** Varias plantillas de EmailJS usan distintos nombres de variable; enviamos alias comunes. */
-    const whenStr = new Date().toLocaleString();
-    const templateParams = {
-      to_email: to,
-      email: to,
-      user_email: to,
-      subject,
-      message,
-      rule_name: rule.name,
-      user_name: userLabel,
-      /** Plantillas predeterminadas tipo “Contact Us” ({{name}}, {{time}}, {{message}}). */
-      name: `${rule.name} · ${userLabel}`,
-      time: whenStr,
-      reply_to: auth?.user?.email || '',
-    };
-
-    try {
-      const res = await emailjs.send(config.serviceId, config.templateId, templateParams, config.publicKey);
-      if (res && typeof res.status === 'number' && res.status !== 200) {
-        console.warn('[Automation] EmailJS respuesta no OK:', res.status, res.text || '');
-      }
-    } catch (err) {
-      logEmailJsApiError(err);
-      throw err;
     }
 };
 
@@ -601,8 +519,8 @@ let _clientAuxAutomationsTimer = null;
 let _pendingTelemetryDetail = null;
 
 /**
- * Tras telemetría (SSE): ejecutar solo acciones email/webhook en el navegador.
- * Los downlinks los encola el servidor (`automation-runner.js`) para no duplicar.
+ * Tras telemetría (SSE): ejecutar solo acciones webhook/toast en el navegador.
+ * Email y downlinks los procesa el servidor (`automation-runner.js`).
  * @param {object | null} telemetryDetail Mismo objeto que el SSE (incl. `properties`); necesario para condiciones efímeras (p. ej. pulsador).
  */
 export function scheduleClientEmailWebhookAutomations(ctx, telemetryDetail) {
@@ -617,7 +535,7 @@ export function scheduleClientEmailWebhookAutomations(ctx, telemetryDetail) {
     _pendingTelemetryDetail = null;
     const { credentials, token, auth } = ctx;
     runAutomationsFromLatest(credentials, token, auth, { skipDownlink: true }, tel).catch((e) => {
-      console.warn('[Automation] email/webhook:', e?.message || e);
+      console.warn('[Automation] webhook/toast:', e?.message || e);
     });
   }, CLIENT_AUTOMATION_DEBOUNCE_MS);
 }

@@ -1,13 +1,39 @@
 /**
+ * Asegura que la base absoluta termine en `/api` (Express monta rutas bajo `/api/...`).
+ * @param {string} base
+ */
+export function normalizeApiBase(base) {
+  const b = String(base || '').trim().replace(/\/$/, '');
+  if (!b) return '/api';
+  if (!/^https?:\/\//i.test(b)) {
+    if (b === '/api' || b.endsWith('/api')) return b.startsWith('/') ? b : `/${b}`;
+    return b.startsWith('/') ? `${b.replace(/\/$/, '')}/api`.replace(/^\/+/, '/') : `/${b}/api`;
+  }
+  try {
+    const u = new URL(b);
+    let p = u.pathname || '';
+    if (p.endsWith('/')) p = p.slice(0, -1);
+    if (!p || p === '/') {
+      u.pathname = '/api';
+    } else if (!p.endsWith('/api')) {
+      u.pathname = `${p}/api`;
+    }
+    return u.toString().replace(/\/$/, '');
+  } catch {
+    return /\/api$/i.test(b) ? b : `${b}/api`;
+  }
+}
+
+/**
  * Base de la API HTTP.
  * - Desarrollo: `/api` → Vite proxy → backend (vite.config.js).
  * - Producción (mismo dominio que el front): `/api` → Express.
- * - Opcional: VITE_API_BASE=https://tu-api.com/api si front y API están separados (debe terminar en /api).
+ * - Opcional: VITE_API_BASE=https://tu-api.com/api (si solo pone el host, se añade `/api` automáticamente).
  */
 export function getApiBase() {
   const raw = import.meta.env.VITE_API_BASE;
   if (raw != null && String(raw).trim() !== '') {
-    return String(raw).trim().replace(/\/$/, '');
+    return normalizeApiBase(String(raw).trim());
   }
   return '/api';
 }
