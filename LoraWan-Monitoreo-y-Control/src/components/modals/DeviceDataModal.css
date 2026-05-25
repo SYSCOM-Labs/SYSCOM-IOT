@@ -586,6 +586,42 @@
   color: rgba(255, 255, 255, 0.72);
 }
 
+.device-data-premium-history-item--downlink {
+  border-color: rgba(251, 191, 36, 0.28);
+  background: rgba(251, 191, 36, 0.06);
+}
+
+.device-data-premium-history-item--downlink:hover {
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.1);
+}
+
+.device-data-premium-history-item--downlink.is-active {
+  border-color: rgba(251, 191, 36, 0.55);
+  background: rgba(251, 191, 36, 0.14);
+}
+
+.device-data-premium-history-time__row {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.device-data-premium-history-dl-ico {
+  color: #fbbf24;
+  flex-shrink: 0;
+}
+
+.device-data-premium-history-hint--downlink {
+  color: rgba(253, 230, 138, 0.88);
+}
+
+.device-data-premium-history-hex {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+}
+
 .device-data-premium-json {
   margin: 0;
   padding: 1rem;
@@ -682,6 +718,15 @@ body:not(.theme-dark) .device-data-premium-snapshot-link:hover {
 
 body:not(.theme-dark) .device-data-premium-snapshot-clear:hover {
   background: var(--bg-hover);
+}
+
+body:not(.theme-dark) .device-data-premium-history-item--downlink {
+  border-color: rgba(217, 119, 6, 0.35);
+  background: rgba(251, 191, 36, 0.12);
+}
+
+body:not(.theme-dark) .device-data-premium-history-hint--downlink {
+  color: #92400e;
 }
 
 body:not(.theme-dark) .device-data-premium-history-hint-strong {

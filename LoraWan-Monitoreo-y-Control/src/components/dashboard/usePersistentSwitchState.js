@@ -7,7 +7,7 @@ function storageKey(scopeKey) {
   return `${STORAGE_PREFIX}:${scopeKey}`;
 }
 
-function readStoredManualState(scopeKey) {
+function readStoredSwitchState(scopeKey) {
   try {
     const raw = sessionStorage.getItem(storageKey(scopeKey));
     if (!raw) return null;
@@ -19,7 +19,7 @@ function readStoredManualState(scopeKey) {
   }
 }
 
-function writeStoredManualState(scopeKey, on) {
+function writeStoredSwitchState(scopeKey, on) {
   try {
     sessionStorage.setItem(storageKey(scopeKey), JSON.stringify({ locked: true, on: Boolean(on) }));
   } catch {
@@ -28,8 +28,8 @@ function writeStoredManualState(scopeKey, on) {
 }
 
 /**
- * Estado del switch: solo cambia con clic del usuario (persistido en sesión por dispositivo/campo).
- * La telemetría se muestra en el panel de detalle pero no mueve el interruptor tras el primer uso manual.
+ * Estado del switch: solo cambia con clic del usuario o con downlink de automatización
+ * (véase `useSwitchAutomationSync`). La telemetría no mueve el interruptor.
  */
 export function usePersistentSwitchState({
   telemetry,
@@ -37,7 +37,6 @@ export function usePersistentSwitchState({
   deviceId = null,
 }) {
   const stickyKeyRef = useRef(null);
-  const initializedRef = useRef(false);
   const userLockedRef = useRef(false);
   const [isOn, setIsOn] = useState(false);
 
@@ -45,13 +44,11 @@ export function usePersistentSwitchState({
 
   useEffect(() => {
     stickyKeyRef.current = null;
-    initializedRef.current = false;
     userLockedRef.current = false;
 
-    const stored = readStoredManualState(scopeKey);
+    const stored = readStoredSwitchState(scopeKey);
     if (stored !== null) {
       userLockedRef.current = true;
-      initializedRef.current = true;
       setIsOn(stored);
       return;
     }
@@ -73,25 +70,18 @@ export function usePersistentSwitchState({
     return picked;
   }, [telemetry, preferredFieldKey]);
 
-  /** Lectura inicial única (solo si el usuario aún no ha fijado el estado manualmente). */
-  useEffect(() => {
-    if (!toggleKey || userLockedRef.current || initializedRef.current) return;
-    if (!telemetry || typeof telemetry !== 'object') return;
-    if (telemetry[toggleKey] === undefined || telemetry[toggleKey] === null) return;
-    initializedRef.current = true;
-    setIsOn(readSwitchOnFromTelemetry(telemetry, toggleKey));
-  }, [telemetry, toggleKey, scopeKey]);
-
-  const setManualSwitchState = useCallback(
+  const persistSwitchState = useCallback(
     (target) => {
       const next = Boolean(target);
       userLockedRef.current = true;
-      initializedRef.current = true;
-      writeStoredManualState(scopeKey, next);
+      writeStoredSwitchState(scopeKey, next);
       setIsOn(next);
     },
     [scopeKey]
   );
+
+  const setManualSwitchState = persistSwitchState;
+  const setAutomationSwitchState = persistSwitchState;
 
   const telemetryOn = useMemo(
     () => readSwitchOnFromTelemetry(telemetry, toggleKey),
@@ -104,6 +94,7 @@ export function usePersistentSwitchState({
     telemetryOn,
     userLocked: userLockedRef.current,
     setManualSwitchState,
+    setAutomationSwitchState,
     setOptimisticTarget: setManualSwitchState,
   };
 }

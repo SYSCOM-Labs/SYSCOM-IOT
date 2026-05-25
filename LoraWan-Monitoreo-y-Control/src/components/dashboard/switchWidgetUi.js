@@ -183,7 +183,7 @@ export function formatSwitchTelemetryValue(toggleKey, raw, deviceModel, hintMap)
 
 /**
  * @param {Record<string, unknown> | null | undefined} telemetry
- * @param {boolean} isOn estado del interruptor (solo cambia con clic del usuario)
+ * @param {boolean} isOn estado del interruptor (clic manual o regla de automatización)
  * @param {boolean} busy
  * @param {boolean} [telemetryOn] lectura en vivo (solo panel de detalle)
  * @param {string | null} toggleKey

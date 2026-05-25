@@ -1111,6 +1111,11 @@ class Store {
       dlList: this.db.prepare(
         'SELECT id, user_id, created_at, body_json FROM downlink_log WHERE user_id = ? ORDER BY created_at DESC LIMIT ?'
       ),
+      dlListForDevice: this.db.prepare(
+        `SELECT id, user_id, created_at, body_json FROM downlink_log
+         WHERE user_id = ? AND json_extract(body_json, '$.deviceId') = ?
+         ORDER BY created_at DESC LIMIT ?`
+      ),
       dlDeleteAllForUser: this.db.prepare('DELETE FROM downlink_log WHERE user_id = ?'),
       ddGet: this.db.prepare(
         'SELECT widgets_json FROM device_dashboard WHERE user_id = ? AND device_id = ?'
@@ -4106,6 +4111,18 @@ class Store {
   listDownlinks(userId, limit) {
     const lim = Math.min(limit || 100, 500);
     const rows = this.st.dlList.all(userId, lim);
+    return this._mapDownlinkLogRows(rows);
+  }
+
+  listDownlinksForDevice(userId, deviceId, limit) {
+    const lim = Math.min(limit || 100, 500);
+    const did = String(deviceId || '').trim();
+    if (!did) return [];
+    const rows = this.st.dlListForDevice.all(userId, did, lim);
+    return this._mapDownlinkLogRows(rows);
+  }
+
+  _mapDownlinkLogRows(rows) {
     return rows.map((r) => {
       let body = {};
       try {

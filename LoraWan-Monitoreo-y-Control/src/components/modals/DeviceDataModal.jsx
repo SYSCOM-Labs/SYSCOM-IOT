@@ -10,6 +10,7 @@ import {
   Cpu,
   ClipboardList,
   Clock,
+  Zap,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { fetchDeviceHistory, fetchDeviceProperties } from '../../services/api';
@@ -20,6 +21,10 @@ import {
 } from '../../utils/gatewayPayload';
 import { formatTelemetryForSummaryRow } from '../../utils/telemetryDisplayFormat';
 import { getTelemetryLabelHintsForDevice } from '../../services/deviceTemplates';
+import {
+  formatDownlinkHistoryLabel,
+  mergeDeviceHistoryTimeline,
+} from '../../utils/deviceHistoryTimeline';
 import './DeviceDataModal.css';
 
 const INTERNAL_FIELDS = new Set([
@@ -139,6 +144,7 @@ const DeviceDataModal = ({ device, onClose }) => {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState(null);
   const [selectedSnapshot, setSelectedSnapshot] = useState(null);
+  const [selectedDownlink, setSelectedDownlink] = useState(null);
   const [mergedLive, setMergedLive] = useState(null);
   const historyAutoFetchRef = useRef(false);
 
@@ -149,6 +155,7 @@ const DeviceDataModal = ({ device, onClose }) => {
     setHistoryRows([]);
     setHistoryError(null);
     setSelectedSnapshot(null);
+    setSelectedDownlink(null);
     setMergedLive(null);
   }, [deviceId]);
 
@@ -207,13 +214,13 @@ const DeviceDataModal = ({ device, onClose }) => {
     try {
       const resp = await fetchDeviceHistory(deviceId, { pageSize: 100 }, credentials, token);
       const list = resp.list || resp.data?.list || [];
-      const normalized = (Array.isArray(list) ? list : []).map((row, fetchOrder) => ({
-        /** Clave estable al reordenar por fecha (el API no devuelve `id` por fila). */
+      const downlinks = resp.downlinks || resp.data?.downlinks || [];
+      const telemetryNorm = (Array.isArray(list) ? list : []).map((row, fetchOrder) => ({
         histId: `${row.timestamp != null ? Number(row.timestamp) : row.ts != null ? Number(row.ts) : 0}-${fetchOrder}`,
         timestamp: row.timestamp != null ? Number(row.timestamp) : row.ts != null ? Number(row.ts) : 0,
         properties: row.properties && typeof row.properties === 'object' ? row.properties : {},
       }));
-      normalized.sort((a, b) => b.timestamp - a.timestamp);
+      const normalized = mergeDeviceHistoryTimeline(telemetryNorm, downlinks);
       setHistoryRows(normalized);
       setSelectedSnapshot((prev) => {
         if (!prev?.timestamp) return prev;
@@ -244,6 +251,19 @@ const DeviceDataModal = ({ device, onClose }) => {
   }, [tab, loadHistory]);
 
   const jsonRaw = useMemo(() => {
+    if (selectedDownlink) {
+      return JSON.stringify(
+        {
+          deviceId: device?.deviceId,
+          name: device?.name,
+          kind: 'downlink',
+          viewedAt: selectedDownlink.timestamp,
+          downlink: selectedDownlink.downlink,
+        },
+        null,
+        2
+      );
+    }
     const ts =
       selectedSnapshot?.timestamp != null
         ? selectedSnapshot.timestamp
@@ -260,7 +280,7 @@ const DeviceDataModal = ({ device, onClose }) => {
       null,
       2
     );
-  }, [device, selectedSnapshot, viewTelemetry]);
+  }, [device, selectedSnapshot, selectedDownlink, viewTelemetry]);
 
   if (!device) return null;
 
@@ -314,8 +334,38 @@ const DeviceDataModal = ({ device, onClose }) => {
                 JSON raw
               </button>
             </div>
-            <button type="button" className="device-data-premium-snapshot-clear" onClick={() => setSelectedSnapshot(null)}>
+            <button
+              type="button"
+              className="device-data-premium-snapshot-clear"
+              onClick={() => {
+                setSelectedSnapshot(null);
+                setSelectedDownlink(null);
+              }}
+            >
               Volver a tiempo real
+            </button>
+          </div>
+        )}
+
+        {selectedDownlink && !selectedSnapshot && (
+          <div className="device-data-premium-snapshot-bar device-data-premium-snapshot-bar--downlink">
+            <Zap size={16} />
+            <span>
+              <strong>{formatDownlinkHistoryLabel(selectedDownlink.downlink)}</strong>
+              {' · '}
+              {new Date(selectedDownlink.timestamp).toLocaleString('es-MX', {
+                dateStyle: 'medium',
+                timeStyle: 'medium',
+              })}
+            </span>
+            <button
+              type="button"
+              className="device-data-premium-snapshot-clear"
+              onClick={() => {
+                setSelectedDownlink(null);
+              }}
+            >
+              Cerrar detalle
             </button>
           </div>
         )}
@@ -389,17 +439,35 @@ const DeviceDataModal = ({ device, onClose }) => {
               ) : (
                 <ul className="device-data-premium-history-list">
                   {historyRows.map((row, idx) => {
-                    const active = selectedSnapshot && selectedSnapshot.histId === row.histId;
+                    const isDownlink = row.kind === 'downlink';
+                    const activeTel = !isDownlink && selectedSnapshot && selectedSnapshot.histId === row.histId;
+                    const activeDl = isDownlink && selectedDownlink && selectedDownlink.histId === row.histId;
                     const label = new Date(row.timestamp).toLocaleString('es-MX', {
                       dateStyle: 'medium',
                       timeStyle: 'medium',
                     });
+                    const dlLabel = isDownlink ? formatDownlinkHistoryLabel(row.downlink) : '';
+                    const hex =
+                      isDownlink && row.downlink?.payloadHex
+                        ? String(row.downlink.payloadHex).replace(/\s/g, '').toUpperCase()
+                        : '';
                     return (
                       <li key={row.histId || `${row.timestamp}-${idx}`}>
                         <button
                           type="button"
-                          className={`device-data-premium-history-item ${active ? 'is-active' : ''}`}
+                          className={`device-data-premium-history-item${isDownlink ? ' device-data-premium-history-item--downlink' : ''}${activeTel || activeDl ? ' is-active' : ''}`}
                           onClick={() => {
+                            if (isDownlink) {
+                              setSelectedSnapshot(null);
+                              setSelectedDownlink({
+                                histId: row.histId,
+                                timestamp: row.timestamp,
+                                downlink: row.downlink,
+                              });
+                              setTab('json');
+                              return;
+                            }
+                            setSelectedDownlink(null);
                             setSelectedSnapshot({
                               histId: row.histId,
                               timestamp: row.timestamp,
@@ -408,11 +476,39 @@ const DeviceDataModal = ({ device, onClose }) => {
                             setTab('summary');
                           }}
                         >
-                          <span className="device-data-premium-history-time">{label}</span>
-                          <span className="device-data-premium-history-hint">
-                            Clic para abrir el Resumen de este envío · {Object.keys(row.properties || {}).length} campo(s)
-                            {' · '}
-                            <span className="device-data-premium-history-hint-strong">JSON raw</span> en la barra superior
+                          <span className="device-data-premium-history-time">
+                            {isDownlink ? (
+                              <span className="device-data-premium-history-time__row">
+                                <Zap size={14} className="device-data-premium-history-dl-ico" aria-hidden />
+                                {label}
+                              </span>
+                            ) : (
+                              label
+                            )}
+                          </span>
+                          <span
+                            className={`device-data-premium-history-hint${isDownlink ? ' device-data-premium-history-hint--downlink' : ''}`}
+                          >
+                            {isDownlink ? (
+                              <>
+                                <span className="device-data-premium-history-hint-strong">{dlLabel}</span>
+                                {hex ? (
+                                  <>
+                                    {' · '}
+                                    <span className="device-data-premium-history-hex">{hex}</span>
+                                    {row.downlink?.deferred ? ' · encolado' : ''}
+                                  </>
+                                ) : null}
+                              </>
+                            ) : (
+                              <>
+                                Clic para abrir el Resumen de este envío · {Object.keys(row.properties || {}).length}{' '}
+                                campo(s)
+                                {' · '}
+                                <span className="device-data-premium-history-hint-strong">JSON raw</span> en la barra
+                                superior
+                              </>
+                            )}
                           </span>
                         </button>
                       </li>

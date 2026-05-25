@@ -234,7 +234,7 @@ function runAutomationAction(userId, action, rule, perm) {
     const { automationPerm } = _ctx;
     if (automationPerm && !automationPerm.isAutomationActionPermitted(action, perm)) return;
     if (action.type === 'downlink') {
-      executeDownlinkAction(userId, action);
+      executeDownlinkAction(userId, action, rule);
     } else if (action.type === 'email') {
       executeEmailAction(userId, action, rule);
     }
@@ -304,12 +304,16 @@ function automationLnsEnqueueExtras() {
   return { skipTxAckTrack: skip, priority, delayMs, deferUntilUplink: true };
 }
 
-function executeDownlinkAction(userId, action) {
+function executeDownlinkAction(userId, action, rule) {
   const { store, tryLnsAppDownlinkEnqueue, appendDownlinkLog, insertUiEventWithStream, buildLnsDownlinkApiSuccessBody } =
     _ctx;
   const targetId = action.targetDeviceId != null ? String(action.targetDeviceId) : '';
   const rawKey = (action.commandKey || '').toString().trim();
   if (!targetId || !rawKey) return;
+
+  const ruleId = rule && rule.id != null ? String(rule.id) : '';
+  const ruleName =
+    rule && rule.name != null && String(rule.name).trim() ? String(rule.name).trim() : ruleId || 'Regla';
 
   const cleanHex = resolveAutomationDownlinkHex(action);
   if (!cleanHex) {
@@ -342,6 +346,8 @@ function executeDownlinkAction(userId, action) {
       payloadHex: r.hex,
       lns: true,
       source: 'automation',
+      ruleId: ruleId || null,
+      ruleName,
       deferred: true,
       pendingId: r.pendingId,
       pendingQueueLength: r.pendingQueueLength,
@@ -360,6 +366,8 @@ function executeDownlinkAction(userId, action) {
         pendingQueueLength: r.pendingQueueLength,
         deferredReason: r.deferredReason,
         source: 'automation',
+        ruleId: ruleId || null,
+        ruleName,
       })
     );
     return;
@@ -372,6 +380,8 @@ function executeDownlinkAction(userId, action) {
     payloadHex: r.hex,
     lns: true,
     source: 'automation',
+    ruleId: ruleId || null,
+    ruleName,
     ...r.out,
   });
   const apiBody = buildLnsDownlinkApiSuccessBody(r.out);
@@ -393,6 +403,8 @@ function executeDownlinkAction(userId, action) {
       txAckPending: apiBody.txAckPending,
       txAckMaxWaitMs: apiBody.txAckMaxWaitMs,
       source: 'automation',
+      ruleId: ruleId || null,
+      ruleName,
     })
   );
 }

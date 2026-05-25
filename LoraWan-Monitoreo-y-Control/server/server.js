@@ -503,6 +503,33 @@ function appendDownlinkLog(userId, fields) {
   store.appendDownlinkLog(userId, fields);
 }
 
+/** Campos de atribución para `downlink_log` (usuario vs regla de automatización). */
+function downlinkLogAttributionFields(userId, meta) {
+  const m = meta && typeof meta === 'object' ? meta : {};
+  const src = String(m.logSource || m.source || 'user')
+    .trim()
+    .toLowerCase();
+  if (src === 'automation') {
+    const ruleName =
+      m.ruleName != null && String(m.ruleName).trim()
+        ? String(m.ruleName).trim()
+        : m.ruleId != null
+          ? String(m.ruleId)
+          : 'Regla';
+    return {
+      source: 'automation',
+      ruleId: m.ruleId != null ? String(m.ruleId) : null,
+      ruleName,
+    };
+  }
+  let actorUserName = m.actorUserName != null ? String(m.actorUserName).trim() : '';
+  if (!actorUserName) {
+    const u = store.getUserById(userId);
+    actorUserName = String(u?.profileName || u?.email || 'Usuario').trim() || 'Usuario';
+  }
+  return { source: 'user', actorUserName };
+}
+
 /** Modelo en listado: muchos uplinks envían `deviceType` (o HW) cuando `model` viene vacío. */
 function deviceModelFromTelemetryProps(p) {
   const o = p && typeof p === 'object' ? p : {};
@@ -1724,8 +1751,8 @@ function tryLnsAppDownlinkEnqueue(userId, idStr, ud, body, lnsEnqueueExtras = {}
  */
 function sendHttpResponseAfterLnsAppDownlinkEnqueue(res, userId, r, meta) {
   const deviceIdStr = meta.deviceIdStr;
-  const logSource = meta.logSource || '';
   const integ = Boolean(meta.viaLnsIntegrationToken);
+  const attribution = downlinkLogAttributionFields(userId, meta);
   if (!r.ok) return res.status(r.status).json(r.json);
   if (r.deferred) {
     appendDownlinkLog(userId, {
@@ -1739,7 +1766,7 @@ function sendHttpResponseAfterLnsAppDownlinkEnqueue(res, userId, r, meta) {
       pendingQueueLength: r.pendingQueueLength,
       deferredReason: r.deferredReason,
       ...(integ ? { viaLnsIntegrationToken: true } : {}),
-      ...(logSource ? { source: logSource } : {}),
+      ...attribution,
     });
     insertUiEventWithStream(
       userId,
@@ -1754,7 +1781,7 @@ function sendHttpResponseAfterLnsAppDownlinkEnqueue(res, userId, r, meta) {
         pendingQueueLength: r.pendingQueueLength,
         deferredReason: r.deferredReason,
         ...(integ ? { via: 'lns_integration_token' } : {}),
-        ...(logSource ? { source: logSource } : {}),
+        ...attribution,
       })
     );
     return res.status(202).json({
@@ -1779,7 +1806,7 @@ function sendHttpResponseAfterLnsAppDownlinkEnqueue(res, userId, r, meta) {
     payloadHex: r.hex,
     lns: true,
     ...(integ ? { viaLnsIntegrationToken: true } : {}),
-    ...(logSource ? { source: logSource } : {}),
+    ...attribution,
     ...r.out,
   });
   const apiBody = buildLnsDownlinkApiSuccessBody(r.out);
@@ -1803,7 +1830,7 @@ function sendHttpResponseAfterLnsAppDownlinkEnqueue(res, userId, r, meta) {
       txAckPending: apiBody.txAckPending,
       txAckMaxWaitMs: apiBody.txAckMaxWaitMs,
       ...(integ ? { via: 'lns_integration_token' } : {}),
-      ...(logSource ? { source: logSource } : {}),
+      ...attribution,
     })
   );
   return res.json(apiWithDeui);
@@ -4066,12 +4093,29 @@ app.get('/api/devices/:deviceId/properties/history', authMiddleware, deviceAssig
     limit,
   });
   const did = String(req.params.deviceId);
-  res.json(
-    entries.map((t) => ({
+  const dlLimit = Math.min(parseInt(String(req.query.downlinkLimit || pageSize || limit), 10) || limit, 200);
+  const downlinks = store.listDownlinksForDevice(tuid, did, dlLimit).map((dl) => {
+    const ts = dl.createdAt ? Date.parse(dl.createdAt) : NaN;
+    return {
+      id: dl.id,
+      timestamp: Number.isFinite(ts) ? ts : Date.now(),
+      kind: 'downlink',
+      payloadHex: dl.payloadHex != null ? String(dl.payloadHex) : '',
+      source: dl.source != null ? String(dl.source) : 'user',
+      ruleId: dl.ruleId != null ? String(dl.ruleId) : null,
+      ruleName: dl.ruleName != null ? String(dl.ruleName) : null,
+      actorUserName: dl.actorUserName != null ? String(dl.actorUserName) : null,
+      deferred: Boolean(dl.deferred),
+    };
+  });
+  res.json({
+    list: entries.map((t) => ({
+      kind: 'telemetry',
       timestamp: t.timestamp,
       properties: enrichStoredTelemetryProperties(store, did, t.properties && typeof t.properties === 'object' ? t.properties : {}),
-    }))
-  );
+    })),
+    downlinks,
+  });
 });
 
 app.put('/api/devices', authMiddleware, staffOnlyMiddleware, (req, res) => {
@@ -4102,7 +4146,13 @@ app.post('/api/devices/:deviceId/downlink', authMiddleware, deviceAssignmentMidd
   const { ud, lnsOpts } = downlinkRequestContext(req, idStr);
   if (!ud) return res.status(404).json({ error: 'Dispositivo no encontrado' });
   const r = tryLnsAppDownlinkEnqueue(req.user.id, idStr, ud, req.body, lnsOpts);
-  return sendHttpResponseAfterLnsAppDownlinkEnqueue(res, req.user.id, r, { deviceIdStr: idStr });
+  const actor = store.getUserById(req.user.id);
+  const actorUserName = String(actor?.profileName || actor?.email || 'Usuario').trim() || 'Usuario';
+  return sendHttpResponseAfterLnsAppDownlinkEnqueue(res, req.user.id, r, {
+    deviceIdStr: idStr,
+    logSource: 'user',
+    actorUserName,
+  });
 });
 
 /**

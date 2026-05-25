@@ -87,9 +87,13 @@ export const fetchDeviceHistory = async (deviceId, params, _credentials, _token)
     { headers: authHeaders() }
   );
   const d = response.data;
-  if (Array.isArray(d)) return { list: d };
-  if (d && d.status === 'Success' && Array.isArray(d.list)) return d;
-  if (d && Array.isArray(d.list)) return d;
+  if (Array.isArray(d)) return { list: d, downlinks: [] };
+  if (d && d.status === 'Success' && Array.isArray(d.list)) {
+    return { list: d.list, downlinks: Array.isArray(d.downlinks) ? d.downlinks : [] };
+  }
+  if (d && Array.isArray(d.list)) {
+    return { list: d.list, downlinks: Array.isArray(d.downlinks) ? d.downlinks : [] };
+  }
   throw new Error(d?.errMsg || d?.message || 'History fetch failed');
 };
 

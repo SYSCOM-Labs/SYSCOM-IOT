@@ -81,6 +81,8 @@ import WidgetEditModal from './WidgetEditModal';
 import BsdWindVaneWidget from './BsdWindVaneWidget';
 import BsdRealisticSwitch from './BsdRealisticSwitch';
 import { usePersistentSwitchState } from './usePersistentSwitchState';
+import { useSwitchAutomationSync } from './useSwitchAutomationSync';
+import { pickSwitchDownlinkHexForToggle } from './switchDownlinkBinding';
 import { computeVeletaWidgetUiForSlot, resolveWindDirectionScalar } from './windVaneUi';
 import CenteredAlertModal from '../CenteredAlertModal';
 import ValueIndicator from './ValueIndicator';
@@ -5715,10 +5717,19 @@ export default function BudgetSensorsDashboard({
   const switchTelemetryField =
     typeof switchTelemetryFieldCfg === 'string' ? switchTelemetryFieldCfg.trim() : '';
 
-  const { isOn: switchOn, setManualSwitchState } = usePersistentSwitchState({
+  const switchWidgetData = widgetConfigs[dk(DASH_WIDGET.SWITCH)]?.data;
+
+  const { isOn: switchOn, setManualSwitchState, setAutomationSwitchState } = usePersistentSwitchState({
     telemetry: switchTelemetryForToggle,
     preferredFieldKey: switchTelemetryField,
     deviceId: switchTargetDeviceId,
+  });
+
+  useSwitchAutomationSync({
+    switchTargetDeviceId,
+    switchWidgetData,
+    switchWidgetDownlinkList,
+    setAutomationSwitchState,
   });
 
   const imageUrl = useMemo(
@@ -5935,25 +5946,10 @@ export default function BudgetSensorsDashboard({
       window.alert('No hay downlinks guardados. Configúralos en Dispositivos → acciones → Downlink.');
       return;
     }
-    const swData = widgetConfigs[dk(DASH_WIDGET.SWITCH)]?.data;
-    const onStored = swData?.switchHexOn;
-    const offStored = swData?.switchHexOff;
-    const hasOnHex = Boolean(normalizeDownlinkHex(onStored));
-    const hasOffHex = Boolean(normalizeDownlinkHex(offStored));
-    const pickHex = (stored) => {
-      const n = normalizeDownlinkHex(stored);
-      if (!n) return null;
-      const hit = dls.find((d) => normalizeDownlinkHex(d.hex) === n);
-      return hit ? hit.hex : stored;
-    };
-    let hex =
-      hasOnHex && hasOffHex
-        ? switchOn
-          ? pickHex(offStored)
-          : pickHex(onStored)
-        : null;
-    if (hex == null || String(hex).trim() === '') {
-      hex = dls.length >= 2 ? (switchOn ? dls[1].hex : dls[0].hex) : dls[0].hex;
+    const hex = pickSwitchDownlinkHexForToggle(switchOn, switchWidgetData, dls);
+    if (!hex) {
+      window.alert('Configura los downlinks ON y OFF del widget Switch.');
+      return;
     }
     const switchRow =
       variant === 'device' && device
@@ -5990,6 +5986,7 @@ export default function BudgetSensorsDashboard({
     credentials,
     token,
     widgetConfigs,
+    switchWidgetData,
     variant,
   ]);
 
