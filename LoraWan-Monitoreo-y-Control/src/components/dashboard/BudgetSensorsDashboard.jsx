@@ -27,6 +27,7 @@ import {
   Battery,
   Type,
   Route,
+  Compass,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
@@ -48,7 +49,6 @@ import {
   hasMeaningfulAppTelemetry,
   mergeDeviceTelemetryForWidgets,
   PROPERTY_INFER_IGNORE_SET,
-  GATEWAY_TOGGLE_KEY_HINTS,
 } from '../../utils/gatewayPayload';
 import {
   formatTelemetryChartTooltipValue,
@@ -78,6 +78,10 @@ import {
 } from '../../constants/liveRefreshMs';
 import { pushAppActivityLog } from '../../utils/appActivityLog';
 import WidgetEditModal from './WidgetEditModal';
+import BsdWindVaneWidget from './BsdWindVaneWidget';
+import BsdRealisticSwitch from './BsdRealisticSwitch';
+import { usePersistentSwitchState } from './usePersistentSwitchState';
+import { computeVeletaWidgetUiForSlot, resolveWindDirectionScalar } from './windVaneUi';
 import CenteredAlertModal from '../CenteredAlertModal';
 import ValueIndicator from './ValueIndicator';
 import { normalizeIndicatorType } from './valueIndicatorUtils';
@@ -126,6 +130,7 @@ import {
 } from './widgetConfigUtils';
 import {
   BSD_CIRCULAR_GAUGE_R,
+  BSD_CIRCULAR_GAUGE_STROKE,
   BSD_CIRCULAR_GAUGE_LEN,
   MC_CX,
   MC_CY,
@@ -202,6 +207,8 @@ function widgetGalleryLucideIcon(widgetId) {
       return Gauge;
     case DASH_WIDGET.TEXT:
       return Type;
+    case DASH_WIDGET.VEleta:
+      return Compass;
     case DASH_WIDGET.STREAM:
       return LineChart;
     case DASH_WIDGET.BAR_CHART:
@@ -873,92 +880,7 @@ function buildPanelSensors(devices, latestData) {
   return list.length > 0 ? list : DEFAULT_SENSORS.map((s, i) => ({ ...s, id: i + 1 }));
 }
 
-const TOGGLE_KEY_HINTS = [
-  'switch_1',
-  'switch_2',
-  ...GATEWAY_TOGGLE_KEY_HINTS,
-  'relay',
-  'output',
-  'switch',
-  'valve',
-  'pump',
-  'power',
-  'led',
-  'socket',
-  'digitalOutput',
-  'relay1',
-  'relay_1',
-  'do1',
-];
-
 const IMAGE_PROP_KEYS = ['imageUrl', 'image', 'photo', 'picture', 'snapshot', 'cam', 'thumbnail', 'urlImagen'];
-
-/** Evita tomar RSSI/FCNT/LASTRX… como “relay” solo por ser 0/1. */
-function isTelemetryMetadataFalsePositiveKey(k) {
-  const s = String(k || '');
-  if (!s) return true;
-  const u = s.toUpperCase();
-  if (/^(_|LAST|PREV)/.test(u)) return true;
-  if (/^(DEV|EUI|ADDR|GW|GATEWAY|TIME|DATE|TS|FCNT|FPORT|MARGIN|DR|DATARATE)/i.test(s)) return true;
-  if (/(RSSI|SNR|FCNT|FPORT|FREQ|RFCH|CHANNEL|COUNTER|SEEN|DRIFT)$/i.test(u)) return true;
-  return false;
-}
-
-function scoreToggleKeyCandidate(k) {
-  const s = String(k).toLowerCase();
-  let score = 0;
-  for (const w of ['switch_1', 'switch_2', 'switch', 'relay', 'output', 'digital', 'socket', 'valve', 'pump', 'motor', 'lock', 'door', 'rly']) {
-    if (s.includes(w)) score += 25;
-  }
-  if (/^ch\d|^out\d|^dio|^r\d|^do\d/.test(s)) score += 18;
-  return score;
-}
-
-/**
- * @param {Record<string, unknown> | null | undefined} props
- * @param {string | undefined} [preferredKey] desde `data.switchTelemetryField` del widget
- */
-function pickToggleKey(props, preferredKey) {
-  if (!props || typeof props !== 'object') return null;
-  const pref = typeof preferredKey === 'string' ? preferredKey.trim() : '';
-  if (pref && !IGNORE.has(pref) && props[pref] != null && props[pref] !== '') {
-    return pref;
-  }
-  const lowerToActual = new Map();
-  for (const key of Object.keys(props)) {
-    if (IGNORE.has(key)) continue;
-    lowerToActual.set(key.toLowerCase(), key);
-  }
-  for (const k of TOGGLE_KEY_HINTS) {
-    const actual = lowerToActual.get(String(k).toLowerCase());
-    if (!actual) continue;
-    const val = props[actual];
-    if (val != null && val !== '') return actual;
-  }
-  const candidates = [];
-  for (const k of Object.keys(props)) {
-    if (IGNORE.has(k)) continue;
-    const v = props[k];
-    const boolish =
-      typeof v === 'boolean' ||
-      v === 0 ||
-      v === 1 ||
-      v === '0' ||
-      v === '1' ||
-      (typeof v === 'string' && parseTelemetryBoolish(v) !== null);
-    if (!boolish) continue;
-    candidates.push(k);
-  }
-  const relayish = candidates.filter((c) => !isTelemetryMetadataFalsePositiveKey(c));
-  const pool = relayish.length ? relayish : candidates;
-  if (!pool.length) return null;
-  pool.sort((a, b) => {
-    const d = scoreToggleKeyCandidate(b) - scoreToggleKeyCandidate(a);
-    if (d !== 0) return d;
-    return String(a).localeCompare(String(b));
-  });
-  return pool[0];
-}
 
 function pickImageUrl(props) {
   if (!props) return null;
@@ -3955,6 +3877,13 @@ export default function BudgetSensorsDashboard({
       .filter((id) => dashboardWidgetBaseId(id) === DASH_WIDGET.TEXT);
   }, [gridLayout, visibilityMap]);
 
+  const veletaDashSlotIds = useMemo(() => {
+    if (visibilityMap[DASH_WIDGET.VEleta] === false) return [];
+    return (gridLayout || [])
+      .map((it) => String(it.i))
+      .filter((id) => dashboardWidgetBaseId(id) === DASH_WIDGET.VEleta);
+  }, [gridLayout, visibilityMap]);
+
   const metricCircularDashSlotIds = useMemo(() => {
     if (visibilityMap[DASH_WIDGET.METRIC_CIRCULAR] === false) return [];
     return (gridLayout || [])
@@ -4138,6 +4067,25 @@ export default function BudgetSensorsDashboard({
     dbScalarByDeviceField,
     resolveLiveDeviceModelForPanelWidget,
     resolveTelemetryHintsForPanelWidget,
+  ]);
+
+  const veletaWidgetUiBySlot = useMemo(() => {
+    const out = {};
+    for (const slotId of veletaDashSlotIds) {
+      const tel = enrichTelemetryForValueWidget(telemetryLivePropsForPanelWidget(slotId), slotId);
+      out[slotId] = computeVeletaWidgetUiForSlot(dk, widgetConfigs, slotId, tel);
+    }
+    return out;
+  }, [
+    veletaDashSlotIds,
+    dk,
+    widgetConfigs,
+    telemetryLiveProps,
+    panelLiveTelemetryEpoch,
+    panelTelemetryByDeviceId,
+    telemetryLivePropsForPanelWidget,
+    enrichTelemetryForValueWidget,
+    dbScalarByDeviceField,
   ]);
 
   const barChartCfgSig = useMemo(() => {
@@ -5445,6 +5393,8 @@ export default function BudgetSensorsDashboard({
         let scalar;
         if (baseId === DASH_WIDGET.TEXT) {
           scalar = resolveTextWidgetRawScalar(telW, fk, cfg);
+        } else if (baseId === DASH_WIDGET.VEleta) {
+          scalar = resolveWindDirectionScalar(telW, fk, cfg);
         } else {
           scalar = resolveTelemetryDisplaySource(telW, fk);
         }
@@ -5765,34 +5715,11 @@ export default function BudgetSensorsDashboard({
   const switchTelemetryField =
     typeof switchTelemetryFieldCfg === 'string' ? switchTelemetryFieldCfg.trim() : '';
 
-  const toggleKey = useMemo(
-    () => pickToggleKey(switchTelemetryForToggle, switchTelemetryField || undefined),
-    [switchTelemetryForToggle, switchTelemetryField]
-  );
-
-  const switchFromTelemetry = useMemo(() => {
-    if (!toggleKey) return false;
-    const v = switchTelemetryForToggle[toggleKey];
-    const b = parseTelemetryBoolish(v);
-    if (b !== null) return b;
-    if (typeof v === 'number' && Number.isFinite(v)) return v !== 0;
-    if (typeof v === 'string') {
-      const n = parseTelemetryScalar(v);
-      if (Number.isFinite(n)) return n !== 0;
-    }
-    return false;
-  }, [switchTelemetryForToggle, toggleKey]);
-
-  const switchOn = switchFromTelemetry;
-
-  const switchLastTelemetryLabel = useMemo(() => {
-    if (variant !== 'panel' || !switchTargetDeviceId) return lastTelemetryAtLabel;
-    if (controlDeviceId && String(switchTargetDeviceId) === String(controlDeviceId)) {
-      return lastTelemetryAtLabel;
-    }
-    const raw = panelTelemetryByDeviceId[String(switchTargetDeviceId)];
-    return formatLastTelemetryUpdateLine(raw?.lastUpdateTime) || lastTelemetryAtLabel;
-  }, [variant, lastTelemetryAtLabel, switchTargetDeviceId, controlDeviceId, panelTelemetryByDeviceId]);
+  const { isOn: switchOn, setManualSwitchState } = usePersistentSwitchState({
+    telemetry: switchTelemetryForToggle,
+    preferredFieldKey: switchTelemetryField,
+    deviceId: switchTargetDeviceId,
+  });
 
   const imageUrl = useMemo(
     () =>
@@ -6033,10 +5960,14 @@ export default function BudgetSensorsDashboard({
         ? device
         : (panelDevicesRef.current || []).find((d) => String(d.deviceId) === String(switchTargetDeviceId));
     const dlOpts = getDownlinkSendOptionsForDevice(switchTargetDeviceId, switchRow);
+    const previousOn = switchOn;
+    const targetOn = !switchOn;
+    setManualSwitchState(targetOn);
     setSwitchProcessing(true);
     try {
       await sendDownlink(switchTargetDeviceId, hex, credentials, token, dlOpts);
     } catch (err) {
+      setManualSwitchState(previousOn);
       const code = err.response?.data?.code;
       const st = err.response?.status;
       pushAppActivityLog({
@@ -6055,6 +5986,7 @@ export default function BudgetSensorsDashboard({
     switchProcessing,
     switchWidgetDownlinkList,
     switchOn,
+    setManualSwitchState,
     credentials,
     token,
     widgetConfigs,
@@ -6244,6 +6176,19 @@ export default function BudgetSensorsDashboard({
             propertyKey: pk,
             sourceDeviceId: 'dashboard',
           };
+        case DASH_WIDGET.VEleta: {
+          const vu = veletaWidgetUiBySlot[wid];
+          return {
+            id: 0,
+            name: 'Veleta',
+            value: vu?.degrees != null ? vu.degrees : 0,
+            unit: '°',
+            icon: '🧭',
+            threshold: 360,
+            propertyKey: pk,
+            sourceDeviceId: 'dashboard',
+          };
+        }
         case DASH_WIDGET.STREAM:
           return {
             id: 0,
@@ -6278,6 +6223,7 @@ export default function BudgetSensorsDashboard({
       batteryLevelUi.rawValue,
       batteryLevelUi.ringPct,
       metricCircularUiBySlot,
+      veletaWidgetUiBySlot,
       widgetConfigs,
       variant,
       streamDisplay,
@@ -6637,7 +6583,10 @@ export default function BudgetSensorsDashboard({
         )}
 
           {isVis(DASH_WIDGET.SWITCH) && (
-          <div key={DASH_WIDGET.SWITCH} {...mergeShell(DASH_WIDGET.SWITCH, 'widget bsd-control-widget bsd-widget-editable')}>
+          <div
+            key={DASH_WIDGET.SWITCH}
+            {...mergeShell(DASH_WIDGET.SWITCH, 'widget bsd-control-widget bsd-switch-widget bsd-widget-editable')}
+          >
             {dashWidgetChrome(DASH_WIDGET.SWITCH, (e) => {
               e.stopPropagation();
               openDashWidgetEdit(DASH_WIDGET.SWITCH, () => ({
@@ -6657,35 +6606,23 @@ export default function BudgetSensorsDashboard({
               </div>
             </div>
             <div className="bsd-switch-body">
-              {toggleKey ? (
-                <div className="bsd-switch-meta">{toggleKey}</div>
-              ) : (
-                <div className="bsd-control-hint">Sin señal ON/OFF en telemetría (relay, output, etc.)</div>
-              )}
-              <button
-                type="button"
-                className={`bsd-switch-track ${switchOn ? 'on' : 'off'} ${switchProcessing ? 'busy' : ''}`}
+              <BsdRealisticSwitch
+                isOn={switchOn}
+                busy={switchProcessing}
+                disabled={
+                  !canSendLnsCommands || !switchTargetDeviceId || switchWidgetDownlinkList.length === 0
+                }
                 onClick={handleSwitchClick}
-                disabled={!canSendLnsCommands || !switchTargetDeviceId || switchWidgetDownlinkList.length === 0}
-                aria-pressed={switchOn}
-              >
-                <span className="bsd-switch-knob" />
-                <span className="bsd-switch-label">{switchProcessing ? '…' : switchOn ? 'ON' : 'OFF'}</span>
-              </button>
+              />
               {!canSendLnsCommands && (
                 <p className="bsd-control-hint">Inicie sesión para enviar comandos LoRaWAN desde el panel.</p>
               )}
             </div>
-            {switchLastTelemetryLabel ? (
-              <div className="bsd-widget-footnote" style={wTitleStyle(DASH_WIDGET.SWITCH)}>
-                {switchLastTelemetryLabel}
-              </div>
-            ) : null}
           </div>
           )}
 
           {isVis(DASH_WIDGET.DOWNLINK) && (
-          <div key={DASH_WIDGET.DOWNLINK} {...mergeShell(DASH_WIDGET.DOWNLINK, 'widget bsd-control-widget bsd-widget-editable')}>
+          <div key={DASH_WIDGET.DOWNLINK} {...mergeShell(DASH_WIDGET.DOWNLINK, 'widget bsd-control-widget bsd-widget-editable bsd-downlink-widget')}>
             {dashWidgetChrome(DASH_WIDGET.DOWNLINK, (e) => {
               e.stopPropagation();
               openDashWidgetEdit(DASH_WIDGET.DOWNLINK, () => ({
@@ -6904,7 +6841,7 @@ export default function BudgetSensorsDashboard({
           )}
 
           {isVis(DASH_WIDGET.SATISFACTION) && (
-          <div key={DASH_WIDGET.SATISFACTION} {...mergeShell(DASH_WIDGET.SATISFACTION, 'widget bsd-widget-editable')}>
+          <div key={DASH_WIDGET.SATISFACTION} {...mergeShell(DASH_WIDGET.SATISFACTION, 'widget bsd-widget-editable bsd-circular-widget')}>
             {dashWidgetChrome(DASH_WIDGET.SATISFACTION, (e) => {
               e.stopPropagation();
               openDashWidgetEdit(DASH_WIDGET.SATISFACTION, () => ({
@@ -6945,7 +6882,7 @@ export default function BudgetSensorsDashboard({
                   r={BSD_CIRCULAR_GAUGE_R}
                   fill="none"
                   stroke="#e4e4ec"
-                  strokeWidth="18"
+                  strokeWidth={BSD_CIRCULAR_GAUGE_STROKE}
                 />
                 <circle
                   className="bsd-circular-gauge__arc"
@@ -6954,7 +6891,7 @@ export default function BudgetSensorsDashboard({
                   r={BSD_CIRCULAR_GAUGE_R}
                   fill="none"
                   stroke={satisfactionArcStroke}
-                  strokeWidth="18"
+                  strokeWidth={BSD_CIRCULAR_GAUGE_STROKE}
                   strokeLinecap="round"
                   strokeDasharray={BSD_CIRCULAR_GAUGE_LEN}
                   strokeDashoffset={satisfactionArcDashOffset}
@@ -7085,6 +7022,7 @@ export default function BudgetSensorsDashboard({
                       viewBox="0 0 240 152"
                       preserveAspectRatio="xMidYMid meet"
                       width="100%"
+                      height="100%"
                       aria-hidden
                     >
                       {!mcUseRangeColors ? (
@@ -7246,6 +7184,46 @@ export default function BudgetSensorsDashboard({
                   {tw?.lastAtLine ? (
                     <div className="bsd-text-widget__footer" style={wTitleStyle(slotId)}>
                       {tw.lastAtLine}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+
+          {isVis(DASH_WIDGET.VEleta) &&
+            veletaDashSlotIds.map((slotId) => {
+              const vu = veletaWidgetUiBySlot[slotId];
+              return (
+                <div key={slotId} {...mergeShell(slotId, 'widget bsd-widget-editable bsd-veleta-widget')}>
+                  {dashWidgetChrome(slotId, (e) => {
+                    e.stopPropagation();
+                    openDashWidgetEdit(slotId, () => ({
+                      id: 0,
+                      name: 'Veleta',
+                      value: vu?.degrees != null ? vu.degrees : 0,
+                      unit: '°',
+                      icon: '🧭',
+                      threshold: 360,
+                      propertyKey: `__bsd_${slotId}`,
+                      sourceDeviceId: 'dashboard',
+                    }));
+                  })}
+                  <div className="widget-header bsd-veleta-widget__header">
+                    <div className="widget-title bsd-veleta-widget__title" style={wTitleStyle(slotId)}>
+                      <Compass size={18} className="bsd-lucide-glow" strokeWidth={2} aria-hidden />
+                      {wTitle(slotId, 'Veleta')}
+                    </div>
+                  </div>
+                  <div className="bsd-veleta-widget__body">
+                    <BsdWindVaneWidget degrees={vu?.degrees ?? null} />
+                    <div className="bsd-veleta-widget__readout">
+                      <span className="bsd-veleta-widget__deg">{vu?.displayDeg ?? '—'}</span>
+                      <span className="bsd-veleta-widget__cardinal">{vu?.cardinal ?? ''}</span>
+                    </div>
+                  </div>
+                  {vu?.lastAtLine ? (
+                    <div className="bsd-veleta-widget__footer" style={wTitleStyle(slotId)}>
+                      {vu.lastAtLine}
                     </div>
                   ) : null}
                 </div>
@@ -7591,7 +7569,7 @@ export default function BudgetSensorsDashboard({
               onResizeStop={handleGridResizeStop}
               isDraggable={!dashboardLayoutLocked}
               isResizable={!dashboardLayoutLocked}
-              draggableCancel=".bsd-widget-actions,.bsd-widget-edit-btn,.bsd-widget-remove-btn,.bsd-widget-menu-summary,.bsd-widget-menu-panel,.bsd-widget-gallery-overlay,.bsd-widget-gallery-modal,.bsd-widget-gallery-card,.bsd-widget-gallery-filters,.bsd-widget-gallery-search,input,textarea,select,option,button,.bsd-switch-track,.bsd-downlink-btn,.bsd-emergency-body,.sensor-card,.alert-item,.year-btn,.bsd-stream-preset,canvas,.bsd-map-iframe,.leaflet-container,.leaflet-pane,.bsd-map-leaflet,.bsd-tracking-map-leaflet,.bsd-map-layer-menu,.bsd-map-layer-menu__trigger,.bsd-map-layer-menu__list,.bsd-map-layer-menu__opt,.bsd-panel-device-bar-inner label,.bsd-file-label"
+              draggableCancel=".bsd-widget-actions,.bsd-widget-edit-btn,.bsd-widget-remove-btn,.bsd-widget-menu-summary,.bsd-widget-menu-panel,.bsd-widget-gallery-overlay,.bsd-widget-gallery-modal,.bsd-widget-gallery-card,.bsd-widget-gallery-filters,.bsd-widget-gallery-search,input,textarea,select,option,button,.bsd-switch-3d,.bsd-downlink-btn,.bsd-emergency-body,.sensor-card,.alert-item,.year-btn,.bsd-stream-preset,canvas,.bsd-map-iframe,.leaflet-container,.leaflet-pane,.bsd-map-leaflet,.bsd-tracking-map-leaflet,.bsd-map-layer-menu,.bsd-map-layer-menu__trigger,.bsd-map-layer-menu__list,.bsd-map-layer-menu__opt,.bsd-panel-device-bar-inner label,.bsd-file-label"
               compactType={null}
               preventCollision
               /** En modo lectura: sin empujes automáticos al redimensionar el contenedor (RGL + solapamiento prohibido movían celdas solas). */

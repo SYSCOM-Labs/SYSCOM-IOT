@@ -12,6 +12,7 @@ import {
 
 /** Anillo del widget Circular (porcentaje): radio en viewBox 200×200. */
 export const BSD_CIRCULAR_GAUGE_R = 76;
+export const BSD_CIRCULAR_GAUGE_STROKE = 24;
 export const BSD_CIRCULAR_GAUGE_LEN = 2 * Math.PI * BSD_CIRCULAR_GAUGE_R;
 
 /** Métrica circular: arco ~240° (mismo convenio que en `BudgetSensorsDashboard.jsx`). */

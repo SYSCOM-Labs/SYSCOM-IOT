@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import './Sidebar.css';
 import { useAuth } from '../context/AuthContext';
-import { useBarAvatarOverride } from '../hooks/useBarAvatarOverride';
 import { useLanguage } from '../context/LanguageContext';
 import {
   LayoutDashboard,
@@ -19,30 +18,7 @@ import {
 } from 'lucide-react';
 
 const Sidebar = ({ activePage, onNavigate, isOpen, onToggle }) => {
-  const { logout, hasNavPage, isSuperAdmin, user, userProfile } = useAuth();
-  const barAvatarOverride = useBarAvatarOverride();
-
-  const sidebarRoleLabel = () => {
-    const rr = user?.role;
-    if (rr === 'superadmin') return 'Super administrador';
-    if (rr === 'admin') return 'Usuario';
-    return 'Usuario';
-  };
-
-  const avatarUrl = barAvatarOverride || userProfile?.avatarUrl || user?.avatarUrl;
-  const displayName =
-    (userProfile?.profileName && String(userProfile.profileName).trim()) ||
-    (user?.profileName && String(user.profileName).trim()) ||
-    user?.email?.split('@')[0] ||
-    '';
-
-  const userInitials = () => {
-    const n = (displayName || user?.email || '?').trim();
-    if (!n) return '?';
-    const parts = n.split(/\s+/).filter(Boolean);
-    if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-    return n.slice(0, 2).toUpperCase();
-  };
+  const { logout, hasNavPage, isSuperAdmin } = useAuth();
   const { t, language, toggleLanguage } = useLanguage();
   const [logo, setLogo] = useState(() => localStorage.getItem('syscom_iot_logo') || null);
 
@@ -100,20 +76,6 @@ const Sidebar = ({ activePage, onNavigate, isOpen, onToggle }) => {
           </div>
         ))}
       </nav>
-
-      <div className="sidebar-user-card">
-        <div className={`sidebar-user-avatar${avatarUrl ? ' sidebar-user-avatar--photo' : ''}`} aria-hidden>
-          {avatarUrl ? (
-            <img src={avatarUrl} alt="" className="sidebar-user-photo" referrerPolicy="no-referrer" />
-          ) : (
-            userInitials()
-          )}
-        </div>
-        <div className="sidebar-user-meta">
-          {displayName ? <div className="sidebar-user-name">{displayName}</div> : null}
-          <div className="sidebar-user-role">{sidebarRoleLabel()}</div>
-        </div>
-      </div>
 
       <div className="sidebar-footer">
         <div className="nav-item lang-toggle" onClick={toggleLanguage}>

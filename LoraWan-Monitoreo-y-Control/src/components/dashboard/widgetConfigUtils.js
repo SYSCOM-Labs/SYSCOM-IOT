@@ -99,6 +99,8 @@ export const DASH_WIDGET = {
   METRIC_CIRCULAR: 'dw_metric_circular',
   /** Valor de telemetría solo como texto (sin gráficos). */
   TEXT: 'dw_text',
+  /** Dirección del viento (brújula / veleta; p. ej. WTS506 `wind_direction`). */
+  VEleta: 'dw_veleta',
   STREAM: 'dw_stream',
   /** Historial en barras + línea objetivo (presupuesto / umbral). */
   BAR_CHART: 'dw_bar_chart',
@@ -107,7 +109,11 @@ export const DASH_WIDGET = {
 };
 
 /** Tipos de widget que pueden repetirse en el mismo tablero (id de celda `base__…`). */
-export const MULTI_INSTANCE_DASH_WIDGETS = new Set([DASH_WIDGET.TEXT, DASH_WIDGET.METRIC_CIRCULAR]);
+export const MULTI_INSTANCE_DASH_WIDGETS = new Set([
+  DASH_WIDGET.TEXT,
+  DASH_WIDGET.METRIC_CIRCULAR,
+  DASH_WIDGET.VEleta,
+]);
 
 /**
  * Id base del tipo de widget (`dw_text`) a partir del id de celda (`dw_text` o `dw_text__abc`).
@@ -218,6 +224,12 @@ export function getDashboardWidgetMenuEntries() {
       category: 'data',
     },
     {
+      id: DASH_WIDGET.VEleta,
+      label: 'Veleta',
+      description: 'Dirección del viento en brújula (campo wind_direction en grados).',
+      category: 'data',
+    },
+    {
       id: DASH_WIDGET.STREAM,
       label: 'Grafico Lineal',
       description: 'Serie temporal en vivo y rangos Hora / Día / Semana / Mes (misma lógica que el gráfico de barras).',
@@ -259,6 +271,7 @@ export const DASHBOARD_BASICS_WIDGET_OPTIONS = [
   { id: DASH_WIDGET.BATTERY_LEVEL, label: 'Nivel Batería Widget' },
   { id: DASH_WIDGET.METRIC_CIRCULAR, label: 'Métrica circular Widget' },
   { id: DASH_WIDGET.TEXT, label: 'Texto Widget' },
+  { id: DASH_WIDGET.VEleta, label: 'Veleta Widget' },
   { id: DASH_WIDGET.SENSOR_GRID, label: 'Multi-Sensor Panel Widget' },
   { id: DASH_WIDGET.STREAM, label: 'Grafico Lineal Widget' },
   { id: DASH_WIDGET.BAR_CHART, label: 'Grafico Barras Widget' },
@@ -1451,7 +1464,10 @@ export function defaultWidgetConfig(sensor) {
   const isBatteryLevelWidget = pk === `__bsd_${DASH_WIDGET.BATTERY_LEVEL}`;
   const isStreamChart = pk === `__bsd_${DASH_WIDGET.STREAM}`;
   const isBarChart = pk === `__bsd_${DASH_WIDGET.BAR_CHART}`;
-  const isTextWidget = pk === `__bsd_${DASH_WIDGET.TEXT}`;
+  const isTextWidget =
+    pk === `__bsd_${DASH_WIDGET.TEXT}` || String(pk).startsWith(`__bsd_${DASH_WIDGET.TEXT}__`);
+  const isVeletaWidget =
+    pk === `__bsd_${DASH_WIDGET.VEleta}` || String(pk).startsWith(`__bsd_${DASH_WIDGET.VEleta}__`);
   const isImageWidget = pk === `__bsd_${DASH_WIDGET.IMAGE}`;
   const isMapWidget = pk === `__bsd_${DASH_WIDGET.MAP}`;
   const isTrackingMapWidget = pk === `__bsd_${DASH_WIDGET.TRACKING_MAP}`;
@@ -1470,16 +1486,17 @@ export function defaultWidgetConfig(sensor) {
       titleTranslations: [],
     },
     data: {
-      fieldKey:
-        isMetricCircular ||
-        isContainerWidget ||
-        isBatteryLevelWidget ||
-        isStreamChart ||
-        isBarChart ||
-        isTextWidget ||
-        isImageWidget ||
-        isMapWidget ||
-        isTrackingMapWidget
+      fieldKey: isVeletaWidget
+        ? 'wind_direction'
+        : isMetricCircular ||
+            isContainerWidget ||
+            isBatteryLevelWidget ||
+            isStreamChart ||
+            isBarChart ||
+            isTextWidget ||
+            isImageWidget ||
+            isMapWidget ||
+            isTrackingMapWidget
           ? ''
           : pk,
       unit: sensor.unit || '',
@@ -1488,7 +1505,7 @@ export function defaultWidgetConfig(sensor) {
       formulaExpression: '',
       /** Vacío = misma clave que `fieldKey`. */
       formulaSourceKey: '',
-      decimals: isMetricCircular ? 1 : isBarChart ? 1 : 2,
+      decimals: isMetricCircular || isVeletaWidget ? 1 : isBarChart ? 1 : 2,
       ...(isMetricCircular ? { metricSubtitle: '', metricGradient: 'traffic' } : {}),
       ...(isStreamChart ? { historyRangePreset: 'live' } : {}),
       ...(isBarChart
@@ -1511,7 +1528,7 @@ export function defaultWidgetConfig(sensor) {
           ? '#0e7490'
           : isBatteryLevelWidget
             ? '#ea580c'
-            : isBarChart || isTextWidget || isTrackingMapWidget
+            : isBarChart || isTextWidget || isVeletaWidget || isTrackingMapWidget
               ? '#ffffff'
               : '#f97316',
       /** Vacío = cristal BSD; `transparent` = sin tinte; o `#rrggbb` */

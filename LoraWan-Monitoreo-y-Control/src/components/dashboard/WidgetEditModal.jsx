@@ -45,8 +45,13 @@ import {
 import { fetchDeviceProperties } from '../../services/api';
 import './WidgetEditModal.css';
 import { applyWidgetFormula, transformWidgetNumeric } from '../../utils/widgetFormula';
+import BsdWindVaneWidget from './BsdWindVaneWidget';
+import BsdRealisticSwitch from './BsdRealisticSwitch';
+import { pickSwitchToggleKey, readSwitchOnFromTelemetry } from './switchWidgetUi';
+import { computeVeletaWidgetUiForSlot, resolveWindDirectionScalar } from './windVaneUi';
 import {
   BSD_CIRCULAR_GAUGE_R,
+  BSD_CIRCULAR_GAUGE_STROKE,
   BSD_CIRCULAR_GAUGE_LEN,
   MC_CX,
   MC_CY,
@@ -329,13 +334,27 @@ function SensorGridWidgetPreview({
   );
 }
 
-/** Vista previa del control Switch (downlinks ON/OFF), sin confundir con un sensor numérico. */
-function SwitchWidgetPreview({ downlinkSelectState }) {
+/** Vista previa del control Switch (downlinks ON/OFF + telemetría en vivo si hay). */
+function SwitchWidgetPreview({ downlinkSelectState, draft, liveProps, deviceModel, hintMap }) {
   const [demoOn, setDemoOn] = useState(false);
   const { dlList, swOnN, swOffN } = downlinkSelectState;
   const onLine = resolveSwitchHexLine(dlList, swOnN);
   const offLine = resolveSwitchHexLine(dlList, swOffN);
-
+  const prefField =
+    typeof draft?.data?.switchTelemetryField === 'string' ? draft.data.switchTelemetryField.trim() : '';
+  const toggleKey = useMemo(
+    () =>
+      liveProps && typeof liveProps === 'object'
+        ? pickSwitchToggleKey(liveProps, prefField || undefined)
+        : null,
+    [liveProps, prefField]
+  );
+  const liveOn = useMemo(
+    () => readSwitchOnFromTelemetry(liveProps, toggleKey),
+    [liveProps, toggleKey]
+  );
+  const hasLive = Boolean(toggleKey && liveProps && liveProps[toggleKey] !== undefined);
+  const isOn = hasLive ? liveOn : demoOn;
   return (
     <div className="widget-edit-switch-preview">
       <ul className="widget-edit-switch-preview__cmds">
@@ -346,15 +365,15 @@ function SwitchWidgetPreview({ downlinkSelectState }) {
           <span className="widget-edit-switch-preview__tag">OFF</span> {offLine}
         </li>
       </ul>
-      <button
-        type="button"
-        className={`widget-edit-switch-preview__track ${demoOn ? 'is-on' : 'is-off'}`}
-        onClick={() => setDemoOn((v) => !v)}
-        aria-pressed={demoOn}
-      >
-        <span className="widget-edit-switch-preview__knob" aria-hidden />
-        <span className="widget-edit-switch-preview__label">{demoOn ? 'ON' : 'OFF'}</span>
-      </button>
+      <BsdRealisticSwitch
+        isOn={isOn}
+        onClick={() => {
+          if (!hasLive) setDemoOn((v) => !v);
+        }}
+      />
+      {!hasLive ? (
+        <p className="widget-edit-switch-preview__note">Vista previa local (sin telemetría en vivo).</p>
+      ) : null}
     </div>
   );
 }
@@ -974,7 +993,7 @@ function ModalSatisfactionRingPreview({
             r={BSD_CIRCULAR_GAUGE_R}
             fill="none"
             stroke="#e4e4ec"
-            strokeWidth="18"
+            strokeWidth={BSD_CIRCULAR_GAUGE_STROKE}
           />
           <circle
             className="bsd-circular-gauge__arc"
@@ -983,7 +1002,7 @@ function ModalSatisfactionRingPreview({
             r={BSD_CIRCULAR_GAUGE_R}
             fill="none"
             stroke={satArcStroke}
-            strokeWidth="18"
+            strokeWidth={BSD_CIRCULAR_GAUGE_STROKE}
             strokeLinecap="round"
             strokeDasharray={BSD_CIRCULAR_GAUGE_LEN}
             strokeDashoffset={satArcDashOffset}
@@ -1107,6 +1126,7 @@ function ModalLivePreviewBlock({
   previewTelemetryDisplayLabel,
   previewSensorSubtitle,
   modalTextWidgetUi,
+  modalVeletaWidgetUi,
   effectiveAvailableDataFields,
   downlinkSelectState,
   previewLiveDeviceModel,
@@ -1146,7 +1166,14 @@ function ModalLivePreviewBlock({
   if (previewDashWidgetId === DASH_WIDGET.SWITCH) {
     return (
       <div className={shellClassName(previewShellClear)} style={mergedSurface}>
-        <SwitchWidgetPreview key={previewVisualKey} downlinkSelectState={downlinkSelectState} />
+        <SwitchWidgetPreview
+          key={previewVisualKey}
+          downlinkSelectState={downlinkSelectState}
+          draft={draft}
+          liveProps={previewMergedLiveProps}
+          deviceModel={previewLiveDeviceModel}
+          hintMap={previewTelemetryHints}
+        />
       </div>
     );
   }
@@ -1293,6 +1320,34 @@ function ModalLivePreviewBlock({
           theme="dark"
         />
         <div className="sensor-status status-normal">✓ NORMAL</div>
+      </div>
+    );
+  }
+
+  if (previewBaseDashId === DASH_WIDGET.VEleta) {
+    const vu = modalVeletaWidgetUi;
+    return (
+      <div
+        className={['widget', 'bsd-veleta-widget', previewShellClear ? 'bsd-widget-surface--clear' : ''].filter(Boolean).join(' ')}
+        style={{ width: '100%', ...mergedSurface }}
+      >
+        <div className="widget-header bsd-veleta-widget__header">
+          <div className="widget-title bsd-veleta-widget__title" style={{ color: titleColor }}>
+            <span aria-hidden>🧭</span> {title}
+          </div>
+        </div>
+        <div className="bsd-veleta-widget__body">
+          <BsdWindVaneWidget degrees={vu?.degrees ?? null} />
+          <div className="bsd-veleta-widget__readout">
+            <span className="bsd-veleta-widget__deg">{vu?.displayDeg ?? '—'}</span>
+            <span className="bsd-veleta-widget__cardinal">{vu?.cardinal ?? ''}</span>
+          </div>
+        </div>
+        {vu?.lastAtLine ? (
+          <div className="bsd-veleta-widget__footer" style={{ color: titleColor }}>
+            {vu.lastAtLine}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -1817,6 +1872,7 @@ export default function WidgetEditModal({
   const showBarChartSection = previewDashWidgetId === DASH_WIDGET.BAR_CHART;
 
   const showTextWidgetSection = previewDashWidgetId === DASH_WIDGET.TEXT;
+  const showVeletaWidgetSection = dashboardWidgetBaseId(previewDashWidgetId) === DASH_WIDGET.VEleta;
 
   const showImageDataSection = previewDashWidgetId === DASH_WIDGET.IMAGE;
 
@@ -1829,6 +1885,7 @@ export default function WidgetEditModal({
     showStreamDataSection ||
     showBarChartSection ||
     showTextWidgetSection ||
+    showVeletaWidgetSection ||
     showImageDataSection ||
     showMapDataSection ||
     showTrackingMapDataSection;
@@ -1843,6 +1900,7 @@ export default function WidgetEditModal({
       DASH_WIDGET.BATTERY_LEVEL,
       DASH_WIDGET.METRIC_CIRCULAR,
       DASH_WIDGET.TEXT,
+      DASH_WIDGET.VEleta,
       DASH_WIDGET.STREAM,
       DASH_WIDGET.BAR_CHART,
     ]);
@@ -1947,6 +2005,11 @@ export default function WidgetEditModal({
       }
       const r = resolveTelemetryDisplaySource(previewMergedLiveProps, key);
       if (r !== undefined) return { primary: r, alternate: undefined };
+    } else if (dashboardWidgetBaseId(previewDashWidgetId) === DASH_WIDGET.VEleta) {
+      const scalar = resolveWindDirectionScalar(previewMergedLiveProps, key, cfg);
+      if (scalar !== undefined && scalar !== null) {
+        return { primary: scalar, alternate: undefined };
+      }
     } else {
       const r = resolveTelemetryDisplaySource(previewMergedLiveProps, key);
       if (r !== undefined) return { primary: r, alternate: undefined };
@@ -2042,6 +2105,11 @@ export default function WidgetEditModal({
     () => computeModalTextWidgetUi(previewMergedLiveProps, draft, previewLiveDeviceModel, previewTelemetryHints),
     [previewMergedLiveProps, draft, previewLiveDeviceModel, previewTelemetryHints]
   );
+
+  const modalVeletaWidgetUi = useMemo(() => {
+    const slot = previewDashWidgetId || DASH_WIDGET.VEleta;
+    return computeVeletaWidgetUiForSlot((wid) => wid, { [slot]: draft }, slot, previewMergedLiveProps);
+  }, [previewMergedLiveProps, draft, previewDashWidgetId]);
 
   if (!open || !sensor) return null;
 
@@ -2165,6 +2233,7 @@ export default function WidgetEditModal({
               previewTelemetryDisplayLabel={previewTelemetryDisplayLabel}
               previewSensorSubtitle={previewSensorSubtitle}
               modalTextWidgetUi={modalTextWidgetUi}
+              modalVeletaWidgetUi={modalVeletaWidgetUi}
               effectiveAvailableDataFields={effectiveAvailableDataFields}
                 downlinkSelectState={downlinkSelectState}
               previewLiveDeviceModel={previewLiveDeviceModel}
@@ -2911,27 +2980,30 @@ export default function WidgetEditModal({
               )}
               {!showDownlinkDataSection && !showStreamDataSection && (
                 <>
-                  <label className="widget-edit-label">
-                    Unidad
-                    <input
-                      type="text"
-                      className="widget-edit-input"
-                      value={draft.data?.unit ?? ''}
-                      onChange={(e) => update('data.unit', e.target.value)}
-                      placeholder="A, °C, %…"
-                    />
-                  </label>
+                  {!showVeletaWidgetSection && (
+                    <label className="widget-edit-label">
+                      Unidad
+                      <input
+                        type="text"
+                        className="widget-edit-input"
+                        value={draft.data?.unit ?? ''}
+                        onChange={(e) => update('data.unit', e.target.value)}
+                        placeholder="A, °C, %…"
+                      />
+                    </label>
+                  )}
                   <label className="widget-edit-label">
                     Decimales
                     <input
                       type="number"
                       className="widget-edit-input widget-edit-input--narrow"
                       min={0}
-                      max={6}
-                      value={draft.data?.decimals ?? 2}
-                      onChange={(e) =>
-                        update('data.decimals', Math.min(6, Math.max(0, parseInt(e.target.value, 10) || 0)))
-                      }
+                      max={showVeletaWidgetSection ? 1 : 6}
+                      value={draft.data?.decimals ?? (showVeletaWidgetSection ? 1 : 2)}
+                      onChange={(e) => {
+                        const cap = showVeletaWidgetSection ? 1 : 6;
+                        update('data.decimals', Math.min(cap, Math.max(0, parseInt(e.target.value, 10) || 0)));
+                      }}
                     />
                   </label>
                   {previewDashWidgetId === DASH_WIDGET.METRIC_CIRCULAR && (

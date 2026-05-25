@@ -299,8 +299,83 @@ body.theme-dark .bsd-panel-widgets-canvas {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  overflow: auto;
-  gap: 10px;
+  overflow: hidden;
+  gap: clamp(6px, 1.5cqh, 12px);
+  container-type: size;
+  container-name: bsd-switch;
+  padding: clamp(4px, 1vmin, 10px) 0;
+}
+
+.bsd-dash-grid-layout .react-grid-item > .widget.bsd-switch-widget > .widget-header,
+.bsd-dash-static-cell > .widget.bsd-switch-widget > .widget-header {
+  flex: 0 0 auto;
+  margin-bottom: clamp(2px, 0.5cqh, 6px);
+  padding-bottom: clamp(2px, 0.4cqh, 6px);
+}
+
+.bsd-dash-grid-layout .react-grid-item > .widget.bsd-switch-widget > .bsd-switch-body,
+.bsd-dash-static-cell > .widget.bsd-switch-widget > .bsd-switch-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  padding: clamp(4px, 1cqh, 10px) clamp(8px, 2.5cqw, 16px);
+  display: grid;
+  place-items: center;
+  align-content: center;
+  justify-items: center;
+  gap: 0;
+}
+
+.bsd-dash-grid-layout .react-grid-item > .widget.bsd-switch-widget > .bsd-switch-body > .bsd-switch-panel,
+.bsd-dash-static-cell > .widget.bsd-switch-widget > .bsd-switch-body > .bsd-switch-panel {
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 100%;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: auto;
+}
+
+.bsd-dash-grid-layout .react-grid-item > .widget.bsd-switch-widget > .bsd-switch-body > .bsd-control-hint,
+.bsd-dash-static-cell > .widget.bsd-switch-widget > .bsd-switch-body > .bsd-control-hint {
+  flex: 0 0 auto;
+  max-width: 100%;
+  margin-top: 0;
+}
+
+.bsd-dash-grid-layout .react-grid-item > .widget.bsd-switch-widget,
+.bsd-dash-static-cell > .widget.bsd-switch-widget,
+.bsd-dash-grid-layout .react-grid-item > .widget.bsd-downlink-widget,
+.bsd-dash-static-cell > .widget.bsd-downlink-widget,
+.bsd-dash-grid-layout .react-grid-item > .widget.bsd-circular-widget,
+.bsd-dash-static-cell > .widget.bsd-circular-widget,
+.bsd-dash-grid-layout .react-grid-item > .widget.widget--metric-circular,
+.bsd-dash-static-cell > .widget.widget--metric-circular,
+.bsd-dash-grid-layout .react-grid-item > .widget.bsd-text-widget,
+.bsd-dash-static-cell > .widget.bsd-text-widget,
+.bsd-dash-grid-layout .react-grid-item > .widget.bsd-veleta-widget,
+.bsd-dash-static-cell > .widget.bsd-veleta-widget {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.bsd-dash-grid-layout .react-grid-item > .widget.bsd-downlink-widget > .bsd-widget-footnote,
+.bsd-dash-static-cell > .widget.bsd-downlink-widget > .bsd-widget-footnote,
+.bsd-dash-grid-layout .react-grid-item > .widget.bsd-circular-widget > .bsd-circular-gauge__foot-at,
+.bsd-dash-static-cell > .widget.bsd-circular-widget > .bsd-circular-gauge__foot-at,
+.bsd-dash-grid-layout .react-grid-item > .widget.widget--metric-circular > .bsd-metric-circular > .bsd-metric-circular__lastat,
+.bsd-dash-static-cell > .widget.widget--metric-circular > .bsd-metric-circular > .bsd-metric-circular__lastat,
+.bsd-dash-grid-layout .react-grid-item > .widget.bsd-text-widget > .bsd-text-widget__footer,
+.bsd-dash-static-cell > .widget.bsd-text-widget > .bsd-text-widget__footer,
+.bsd-dash-grid-layout .react-grid-item > .widget.bsd-veleta-widget > .bsd-veleta-widget__footer,
+.bsd-dash-static-cell > .widget.bsd-veleta-widget > .bsd-veleta-widget__footer {
+  flex: 0 0 auto;
+  margin-top: auto;
+  width: 100%;
 }
 
 .bsd-dash-grid-layout .react-grid-item > .widget > .bsd-downlink-widget-body,
@@ -311,7 +386,7 @@ body.theme-dark .bsd-panel-widgets-canvas {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  justify-content: flex-start;
+  justify-content: stretch;
   /* La pila interna hace scroll; evita doble barra y desalineado al cambiar RGL → tablero fijo */
   overflow: hidden;
 }
@@ -463,43 +538,41 @@ body.theme-dark .bsd-panel-widgets-canvas {
   flex: 1 1 auto;
   min-height: 0;
   min-width: 0;
-  width: min(100%, clamp(180px, 48vmin, 400px));
+  width: 100%;
   max-width: 100%;
-  margin: auto;
+  margin: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: flex-start;
+  align-items: stretch;
+  justify-content: stretch;
   overflow: hidden;
-}
-
-@supports (width: 1cqh) {
-  .bsd-dash-grid-layout .react-grid-item > .widget > .bsd-metric-circular,
-  .bsd-dash-static-cell > .widget > .bsd-metric-circular {
-    width: min(100%, min(100cqw, 88cqh));
-    max-width: min(100%, min(100cqw, 88cqh));
-  }
 }
 
 .bsd-dash-grid-layout .react-grid-item > .widget > .bsd-metric-circular .bsd-metric-circular__chart,
 .bsd-dash-static-cell > .widget > .bsd-metric-circular .bsd-metric-circular__chart {
   flex: 1 1 0;
   min-height: 0;
-  width: 100%;
+  min-width: 0;
+  width: min(100%, min(96cqw, calc(96cqh * 240 / 152)));
+  max-width: 100%;
+  max-height: min(100%, 96cqh);
+  margin: auto;
+  align-self: center;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 
 .bsd-dash-grid-layout .react-grid-item > .widget > .bsd-metric-circular .bsd-metric-circular__svg,
 .bsd-dash-static-cell > .widget > .bsd-metric-circular .bsd-metric-circular__svg {
   display: block;
   width: 100%;
+  height: 100%;
   max-width: 100%;
-  height: auto;
   max-height: 100%;
   aspect-ratio: 240 / 152;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-height: 0;
 }
 
@@ -507,6 +580,22 @@ body.theme-dark .bsd-panel-widgets-canvas {
 .bsd-dash-static-cell > .widget > .bsd-text-widget__body {
   flex: 1 1 auto;
   min-height: 0;
+  overflow: hidden;
+  justify-content: center;
+  padding: clamp(4px, 1.2cqh, 12px) clamp(6px, 2.5cqw, 14px);
+}
+
+.bsd-dash-grid-layout .react-grid-item > .widget > .bsd-veleta-widget__body,
+.bsd-dash-static-cell > .widget > .bsd-veleta-widget__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(4px, 1cqh, 10px);
+  padding: clamp(2px, 0.8cqh, 8px) clamp(4px, 1.5cqw, 10px);
 }
 
 .bsd-dash-grid-layout .react-grid-item > .widget.bsd-bar-chart-widget,
@@ -1195,10 +1284,18 @@ body.theme-dark .bsd-root .widget:hover {
 /* ── Widget Circular (porcentaje): anillo neumórfico, contraste con shell índigo ── */
 .bsd-root .bsd-circular-gauge {
   position: relative;
-  width: min(100%, clamp(160px, 42vmin, 360px));
-  max-width: 100%;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  width: min(100%, min(96cqw, 96cqh));
+  max-width: min(100%, min(96cqw, 96cqh));
+  max-height: min(100%, min(96cqw, 96cqh));
   aspect-ratio: 1;
-  margin: 12px auto 4px;
+  margin: auto;
+  align-self: center;
+  container-type: size;
+  container-name: bsd-circ-gauge;
+  overflow: hidden;
   filter: drop-shadow(0 12px 28px rgba(15, 23, 42, 0.14));
 }
 
@@ -1220,30 +1317,32 @@ body.theme-dark .bsd-root .widget:hover {
 
 .bsd-root .bsd-circular-gauge__hub {
   position: absolute;
-  inset: 24%;
-  border-radius: 50%;
+  inset: 0;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 4px;
   text-align: center;
-  padding: 8px;
+  padding: 0;
   box-sizing: border-box;
-  background: linear-gradient(165deg, #ffffff 0%, #f4f4f8 100%);
-  border: 1px solid rgba(99, 102, 241, 0.12);
-  box-shadow:
-    0 6px 18px rgba(15, 23, 42, 0.12),
-    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+  background: none;
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  pointer-events: none;
 }
 
 .bsd-root .bsd-circular-gauge__value {
-  font-size: clamp(1.25rem, 2.8vw + 0.4rem, 1.85rem);
-  font-weight: 300;
+  font-size: clamp(0.85rem, 28cqw, 2rem);
+  font-weight: 700;
   letter-spacing: -0.04em;
   line-height: 1.1;
-  color: #3f3f46;
+  color: #f8fafc;
   font-variant-numeric: tabular-nums;
+  max-width: 72%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 8px rgba(15, 23, 42, 0.45);
 }
 
 body.theme-dark .bsd-root .bsd-circular-gauge {
@@ -1259,18 +1358,14 @@ body.theme-dark .bsd-root .bsd-circular-gauge__arc {
   filter: drop-shadow(0 2px 10px rgba(255, 120, 110, 0.45));
 }
 
-body.theme-dark .bsd-root .bsd-circular-gauge__hub {
-  background: radial-gradient(circle at 32% 22%, rgba(58, 58, 88, 0.98), rgba(22, 22, 38, 0.98));
-  border-color: rgba(129, 140, 248, 0.28);
-  box-shadow:
-    0 8px 26px rgba(0, 0, 0, 0.5),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
-}
-
 body.theme-dark .bsd-root .bsd-circular-gauge__value {
   color: #ffffff;
   font-weight: 800;
-  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.55);
+}
+
+body:not(.theme-dark) .bsd-root .bsd-circular-gauge__value {
+  color: #f1f5f9;
 }
 
 /* Widget Contenedor (tanque): nivel + textura; ocupa todo el alto útil bajo la cabecera */
@@ -1532,31 +1627,43 @@ body.theme-dark .bsd-root .bsd-battery-level__foot-at {
 /* Métrica circular: mismo contenedor azul; contraste en el SVG */
 .bsd-root .bsd-metric-circular {
   position: relative;
-  width: min(100%, clamp(180px, 48vmin, 400px));
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
   max-width: 100%;
-  margin: 4px auto 0;
+  margin: 0;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  min-height: 0;
+  align-items: stretch;
+  justify-content: stretch;
+  overflow: hidden;
 }
 
 .bsd-root .bsd-metric-circular__chart {
   flex: 1 1 0;
   min-height: 0;
-  width: 100%;
+  min-width: 0;
+  width: min(100%, min(96cqw, calc(96cqh * 240 / 152)));
+  max-width: 100%;
+  max-height: min(100%, 96cqh);
+  margin: auto;
+  align-self: center;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
+  container-type: size;
+  container-name: bsd-mc-chart;
 }
 
 .bsd-root .bsd-metric-circular__svg {
   width: 100%;
+  height: 100%;
   max-width: 100%;
-  height: auto;
   max-height: 100%;
   aspect-ratio: 240 / 152;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-height: 0;
   display: block;
   filter: drop-shadow(0 10px 22px rgba(15, 23, 42, 0.12));
@@ -1577,7 +1684,7 @@ body.theme-dark .bsd-root .bsd-battery-level__foot-at {
 
 .bsd-root .bsd-metric-circular__tick-label {
   fill: rgba(255, 255, 255, 0.82);
-  font-size: 10px;
+  font-size: clamp(7px, 2.8cqw, 12px);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
@@ -1588,7 +1695,7 @@ body.theme-dark .bsd-root .bsd-battery-level__foot-at {
 
 .bsd-root .bsd-metric-circular__center-val {
   fill: #ffffff;
-  font-size: clamp(1.15rem, 2.2vw + 0.35rem, 1.65rem);
+  font-size: clamp(10px, 18cqw, 26px);
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.03em;
@@ -1596,7 +1703,7 @@ body.theme-dark .bsd-root .bsd-battery-level__foot-at {
 
 .bsd-root .bsd-metric-circular__center-sub {
   fill: rgba(255, 255, 255, 0.82);
-  font-size: 12px;
+  font-size: clamp(8px, 4cqw, 14px);
   font-weight: 500;
 }
 
@@ -1629,6 +1736,12 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
 }
 
 /* Widget Texto: telemetría solo como texto (sin gráfico) */
+.bsd-root .bsd-text-widget {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .bsd-root .bsd-text-widget__body {
   flex: 1 1 auto;
   min-height: 0;
@@ -1637,12 +1750,13 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 10px 14px 18px;
-  gap: 10px;
+  padding: clamp(4px, 1.2cqh, 12px) clamp(6px, 2.5cqw, 14px);
+  gap: clamp(4px, 1cqh, 10px);
+  overflow: hidden;
 }
 
 .bsd-root .bsd-text-widget__value {
-  font-size: clamp(1.75rem, 5.2vw + 0.95rem, 3.05rem);
+  font-size: clamp(0.7rem, min(11cqw, 16cqh), 3.05rem);
   font-weight: 800;
   color: #ffffff;
   line-height: 1.08;
@@ -1651,15 +1765,17 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.03em;
   text-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
 }
 
 .bsd-root .bsd-text-widget__hint {
-  font-size: clamp(0.74rem, 1vmin + 0.52rem, 0.88rem);
+  font-size: clamp(0.65rem, min(4cqw, 5cqh), 0.88rem);
   font-weight: 400;
   letter-spacing: 0.03em;
   color: rgba(255, 255, 255, 0.82);
   word-break: break-word;
   max-width: 100%;
+  overflow: hidden;
 }
 
 .bsd-root .bsd-text-widget__footer {
@@ -1673,6 +1789,104 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   color: rgba(248, 250, 252, 0.85);
   text-align: center;
   letter-spacing: 0.02em;
+}
+
+/* Widget Veleta (dirección del viento) */
+.bsd-root .bsd-veleta-widget {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.bsd-root .bsd-veleta-widget__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.bsd-root .bsd-wind-vane {
+  flex: 1 1 0;
+  min-height: 0;
+  width: min(100%, min(96cqw, 96cqh));
+  max-width: min(100%, min(96cqw, 96cqh));
+  max-height: min(100%, min(88cqh, 96cqw));
+  margin: 0 auto;
+  align-self: center;
+  container-type: size;
+  container-name: bsd-veleta;
+}
+
+.bsd-root .bsd-wind-vane__svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.bsd-root .bsd-wind-vane__rim {
+  stroke: #b8bcc6;
+}
+
+.bsd-root .bsd-wind-vane__face {
+  fill: #3d4452;
+}
+
+.bsd-root .bsd-wind-vane__label {
+  fill: #f8fafc;
+  font-size: clamp(9px, 5.5cqw, 15px);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.bsd-root .bsd-wind-vane__needle {
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.45));
+}
+
+.bsd-root .bsd-wind-vane__needle-head {
+  stroke: rgba(127, 29, 29, 0.35);
+  stroke-width: 0.5;
+}
+
+.bsd-root .bsd-wind-vane__hub-dot {
+  fill: #94a3b8;
+  stroke: #1e293b;
+  stroke-width: 1;
+}
+
+.bsd-root .bsd-veleta-widget__readout {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-align: center;
+  line-height: 1.2;
+}
+
+.bsd-root .bsd-veleta-widget__deg {
+  font-size: clamp(0.85rem, 5cqw, 1.15rem);
+  font-weight: 800;
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 1px 4px rgba(15, 23, 42, 0.45);
+}
+
+.bsd-root .bsd-veleta-widget__cardinal {
+  font-size: clamp(0.7rem, 3.5cqw, 0.9rem);
+  font-weight: 600;
+  color: rgba(248, 250, 252, 0.82);
+  letter-spacing: 0.12em;
+}
+
+.bsd-root .bsd-veleta-widget__footer {
+  flex: 0 0 auto;
+  margin-top: auto;
+  padding: 6px 8px 2px;
+  font-size: 0.65rem;
+  font-weight: 500;
+  line-height: 1.45;
+  max-width: 100%;
+  color: rgba(248, 250, 252, 0.85);
+  text-align: center;
 }
 
 .bsd-root .bsd-metric-circular__lastat {
@@ -3063,168 +3277,586 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
+  justify-content: center;
+  gap: clamp(6px, 1.5cqh, 14px);
   text-align: center;
+  width: 100%;
 }
 
-.bsd-root .bsd-switch-meta {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+.bsd-root .bsd-switch-widget > .bsd-switch-body {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 0;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Panel en vivo + interruptor 3D (escala con la celda del widget) */
+.bsd-root .bsd-switch-panel,
+.widget-edit-preview .bsd-switch-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: clamp(8px, 2cqh, 16px);
+  width: 100%;
+  max-width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.bsd-root .bsd-switch-widget .bsd-switch-panel {
+  flex: 0 0 auto;
+}
+
+.bsd-root .bsd-switch-panel--compact,
+.widget-edit-preview .bsd-switch-panel--compact {
+  gap: 0;
+  flex: 0 0 auto;
+  justify-content: center;
+  align-items: center;
+  width: 100%;
+  min-height: 0;
+  max-height: none;
+}
+
+.bsd-root .bsd-switch-widget .bsd-switch-panel--compact {
+  flex: 0 0 auto;
+  width: 100%;
+  height: auto;
+}
+
+.bsd-root .bsd-switch-panel__switch-wrap,
+.widget-edit-preview .bsd-switch-panel__switch-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  max-width: 100%;
+  min-width: 10.5rem;
+  min-height: 2.75rem;
+  flex: 0 0 auto;
+}
+
+.bsd-root .bsd-switch-widget .bsd-switch-panel__switch-wrap {
+  width: min(100%, 14rem);
+  min-height: 0;
+  margin: 0 auto;
+}
+
+.bsd-root .bsd-switch-sending-toast,
+.widget-edit-preview .bsd-switch-sending-toast {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 10;
+  padding: 8px 18px;
+  border-radius: 999px;
+  font-size: clamp(12px, 3.5cqw, 15px);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  color: #fef9c3;
+  background: rgba(15, 23, 42, 0.88);
+  border: 1px solid rgba(251, 191, 36, 0.55);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  animation: bsd-switch-toast-in 0.2s ease-out;
+}
+
+@keyframes bsd-switch-toast-in {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+.bsd-root .bsd-switch-live,
+.widget-edit-preview .bsd-switch-live {
+  width: min(100%, 260px);
+  padding: clamp(6px, 1.2cqh, 10px) clamp(10px, 2.5cqw, 14px);
+  border-radius: 12px;
+  background: rgba(15, 23, 42, 0.35);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  backdrop-filter: blur(6px);
+}
+
+.bsd-root .bsd-switch-live--on,
+.widget-edit-preview .bsd-switch-live--on {
+  border-color: rgba(16, 185, 129, 0.35);
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.12);
+}
+
+.bsd-root .bsd-switch-live--off,
+.widget-edit-preview .bsd-switch-live--off {
+  border-color: rgba(248, 113, 113, 0.28);
+}
+
+.bsd-root .bsd-switch-live--busy,
+.widget-edit-preview .bsd-switch-live--busy {
+  border-color: rgba(251, 191, 36, 0.45);
+  animation: bsd-switch-live-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes bsd-switch-live-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgba(251, 191, 36, 0);
+  }
+  50% {
+    box-shadow: 0 0 18px rgba(251, 191, 36, 0.35);
+  }
+}
+
+.bsd-root .bsd-switch-live__primary,
+.widget-edit-preview .bsd-switch-live__primary {
+  font-size: clamp(13px, 3.5cqw, 17px);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.bsd-root .bsd-switch-live--on .bsd-switch-live__primary,
+.widget-edit-preview .bsd-switch-live--on .bsd-switch-live__primary {
+  color: #6ee7b7;
+}
+
+.bsd-root .bsd-switch-live--off .bsd-switch-live__primary,
+.widget-edit-preview .bsd-switch-live--off .bsd-switch-live__primary {
+  color: #fda4af;
+}
+
+.bsd-root .bsd-switch-live--busy .bsd-switch-live__primary,
+.widget-edit-preview .bsd-switch-live--busy .bsd-switch-live__primary {
+  color: #fcd34d;
+}
+
+.bsd-root .bsd-switch-live__lines,
+.widget-edit-preview .bsd-switch-live__lines {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.bsd-root .bsd-switch-live__line,
+.widget-edit-preview .bsd-switch-live__line {
+  font-size: clamp(10px, 2.8cqw, 12px);
+  line-height: 1.35;
   color: var(--text-secondary);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  justify-content: center;
+}
+
+.bsd-root .bsd-switch-live__label,
+.widget-edit-preview .bsd-switch-live__label {
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.bsd-root .bsd-switch-live__line--network .bsd-switch-live__value,
+.widget-edit-preview .bsd-switch-live__line--network .bsd-switch-live__value,
+.bsd-root .bsd-switch-live__line--busy .bsd-switch-live__value,
+.widget-edit-preview .bsd-switch-live__line--busy .bsd-switch-live__value,
+.bsd-root .bsd-switch-live__line--telemetry .bsd-switch-live__value,
+.widget-edit-preview .bsd-switch-live__line--telemetry .bsd-switch-live__value {
+  color: #fcd34d;
   font-weight: 600;
 }
 
-.bsd-root .bsd-switch-track {
-  position: relative;
-  width: 100%;
-  max-width: 220px;
-  min-height: 52px;
-  border-radius: 999px;
-  border: 1px solid rgba(99, 102, 241, 0.35);
+.bsd-root .bsd-switch-live__line--network .bsd-switch-live__value::before,
+.widget-edit-preview .bsd-switch-live__line--network .bsd-switch-live__value::before {
+  content: '● ';
+  animation: bsd-switch-dot-blink 1s step-end infinite;
+}
+
+@keyframes bsd-switch-dot-blink {
+  50% {
+    opacity: 0.2;
+  }
+}
+
+.bsd-root .bsd-switch-live__updated,
+.widget-edit-preview .bsd-switch-live__updated {
+  font-size: clamp(10px, 2.6cqw, 12px);
+  color: var(--text-muted);
+  line-height: 1.35;
+  max-width: min(100%, 320px);
+}
+
+/* Interruptor skeuomórfico (referencia ON verde / OFF gris, perilla metal cepillada) */
+.bsd-root .bsd-switch-3d,
+.widget-edit-preview .bsd-switch-3d,
+.bsd-dash-grid-layout .bsd-switch-3d,
+.bsd-dash-static-cell .bsd-switch-3d {
+  --sw-frame: 5px;
+  --sw-pad: 5px;
+  --sw-track-h: clamp(42px, 13cqh, 54px);
+  --sw-width: min(100%, 13.5rem);
+  --sw-thumb: max(30px, calc(var(--sw-track-h) - var(--sw-pad) * 2));
+  display: block;
+  width: var(--sw-width);
+  min-width: 10.5rem;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
   cursor: pointer;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 10px;
-  transition: background 0.35s ease, box-shadow 0.35s ease, transform 0.2s ease;
   font-family: inherit;
+  flex: 0 0 auto;
+  touch-action: manipulation;
+  filter: drop-shadow(0 4px 10px rgba(15, 23, 42, 0.4));
+  margin: 0 auto;
+  box-sizing: border-box;
 }
 
-.bsd-root .bsd-switch-track.off {
-  background: linear-gradient(135deg, rgba(185, 28, 28, 0.55), rgba(127, 29, 29, 0.75));
+.bsd-root .bsd-switch-widget .bsd-switch-3d,
+.bsd-dash-grid-layout .widget.bsd-switch-widget .bsd-switch-3d,
+.bsd-dash-static-cell .widget.bsd-switch-widget .bsd-switch-3d {
+  --sw-width: min(100%, max(10.5rem, 88cqw));
+  --sw-track-h: clamp(46px, 20cqh, 60px);
+  --sw-thumb: max(32px, calc(var(--sw-track-h) - var(--sw-pad) * 2));
+}
+
+.bsd-root .bsd-switch-3d__frame,
+.widget-edit-preview .bsd-switch-3d__frame,
+.bsd-dash-grid-layout .bsd-switch-3d__frame,
+.bsd-dash-static-cell .bsd-switch-3d__frame {
+  display: block;
+  width: 100%;
+  padding: var(--sw-frame);
+  border-radius: 999px;
+  box-sizing: border-box;
+  background: linear-gradient(
+    180deg,
+    #f8fafc 0%,
+    #d1d5db 14%,
+    #94a3b8 38%,
+    #64748b 52%,
+    #94a3b8 72%,
+    #e2e8f0 100%
+  );
   box-shadow:
-    inset 0 2px 12px rgba(0, 0, 0, 0.28),
-    0 0 22px rgba(239, 68, 68, 0.28);
-  border-color: rgba(248, 113, 113, 0.55);
+    0 1px 0 rgba(255, 255, 255, 0.95),
+    0 4px 12px rgba(15, 23, 42, 0.38),
+    inset 0 1px 2px rgba(255, 255, 255, 0.7),
+    inset 0 -2px 5px rgba(30, 41, 59, 0.5);
 }
 
-.bsd-root .bsd-switch-track.on {
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.35), rgba(6, 182, 212, 0.25));
-  box-shadow: 0 0 28px rgba(16, 185, 129, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  border-color: rgba(16, 185, 129, 0.45);
-}
-
-.bsd-root .bsd-switch-track:hover:not(:disabled) {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 28px rgba(99, 102, 241, 0.25);
-}
-
-.bsd-root .bsd-switch-track.off:hover:not(:disabled) {
+.bsd-root .bsd-switch-3d__track,
+.widget-edit-preview .bsd-switch-3d__track,
+.bsd-dash-grid-layout .bsd-switch-3d__track,
+.bsd-dash-static-cell .bsd-switch-3d__track {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: var(--sw-track-h);
+  min-height: 40px;
+  border-radius: 999px;
+  box-sizing: border-box;
+  overflow: hidden;
+  transition: background 0.4s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.4s ease;
   box-shadow:
-    0 8px 28px rgba(239, 68, 68, 0.35),
-    inset 0 2px 12px rgba(0, 0, 0, 0.22);
-  border-color: rgba(252, 165, 165, 0.65);
+    inset 0 3px 10px rgba(0, 0, 0, 0.38),
+    inset 0 -1px 2px rgba(255, 255, 255, 0.1);
 }
 
-.bsd-root .bsd-switch-track:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  transform: none;
+.bsd-root .bsd-switch-3d.is-on .bsd-switch-3d__track,
+.widget-edit-preview .bsd-switch-3d.is-on .bsd-switch-3d__track,
+.bsd-dash-grid-layout .bsd-switch-3d.is-on .bsd-switch-3d__track {
+  background: linear-gradient(180deg, #bbf7d0 0%, #4ade80 22%, #22c55e 58%, #15803d 100%);
 }
 
-.bsd-root .bsd-switch-track.busy {
-  pointer-events: none;
-  opacity: 0.75;
+.bsd-root .bsd-switch-3d.is-off .bsd-switch-3d__track,
+.widget-edit-preview .bsd-switch-3d.is-off .bsd-switch-3d__track,
+.bsd-dash-grid-layout .bsd-switch-3d.is-off .bsd-switch-3d__track {
+  background: linear-gradient(90deg, #e5e7eb 0%, #9ca3af 42%, #6b7280 78%, #374151 100%);
 }
 
-.bsd-root .bsd-switch-knob {
-  width: 44px;
-  height: 44px;
-  border-radius: 50%;
-  background: linear-gradient(145deg, #e0e7ff, #a5b4fc);
-  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.45);
-  flex-shrink: 0;
-  transition: background 0.35s ease, box-shadow 0.35s ease;
-}
-
-.bsd-root .bsd-switch-track.off .bsd-switch-knob {
-  order: 1;
-  background: linear-gradient(145deg, #fda4af, #e11d48);
-  box-shadow:
-    0 4px 20px rgba(225, 29, 72, 0.52),
-    inset 0 1px 0 rgba(255, 255, 255, 0.22);
-}
-
-.bsd-root .bsd-switch-track.off .bsd-switch-label {
-  order: 2;
-}
-
-.bsd-root .bsd-switch-track.on .bsd-switch-knob {
-  order: 2;
-  background: linear-gradient(145deg, #34d399, #10b981);
-  box-shadow: 0 0 20px rgba(16, 185, 129, 0.55);
-}
-
-.bsd-root .bsd-switch-track.on .bsd-switch-label {
-  order: 1;
-}
-
-.bsd-root .bsd-switch-label {
-  flex: 1;
-  text-align: center;
+.bsd-root .bsd-switch-3d__mark,
+.widget-edit-preview .bsd-switch-3d__mark {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: clamp(9px, 2.8cqw, 12px);
   font-weight: 800;
-  font-size: 15px;
   letter-spacing: 0.12em;
-  color: var(--text-primary);
+  pointer-events: none;
+  z-index: 1;
+  user-select: none;
+  transition: opacity 0.35s ease, color 0.35s ease;
+}
+
+.bsd-root .bsd-switch-3d__mark--on,
+.widget-edit-preview .bsd-switch-3d__mark--on {
+  left: 18%;
+  transform: translate(-50%, -50%);
+  color: rgba(21, 128, 61, 0.55);
+  opacity: 0.35;
+}
+
+.bsd-root .bsd-switch-3d__mark--off,
+.widget-edit-preview .bsd-switch-3d__mark--off {
+  right: 18%;
+  transform: translate(50%, -50%);
+  color: rgba(31, 41, 55, 0.65);
+  opacity: 0.4;
+}
+
+.bsd-root .bsd-switch-3d.is-on .bsd-switch-3d__mark--on,
+.widget-edit-preview .bsd-switch-3d.is-on .bsd-switch-3d__mark--on {
+  opacity: 1;
+  color: rgba(20, 83, 45, 0.75);
+}
+
+.bsd-root .bsd-switch-3d.is-on .bsd-switch-3d__mark--off,
+.widget-edit-preview .bsd-switch-3d.is-on .bsd-switch-3d__mark--off {
+  opacity: 0.2;
+}
+
+.bsd-root .bsd-switch-3d.is-off .bsd-switch-3d__mark--off,
+.widget-edit-preview .bsd-switch-3d.is-off .bsd-switch-3d__mark--off {
+  opacity: 1;
+  color: rgba(30, 41, 59, 0.8);
+}
+
+.bsd-root .bsd-switch-3d.is-off .bsd-switch-3d__mark--on,
+.widget-edit-preview .bsd-switch-3d.is-off .bsd-switch-3d__mark--on {
+  opacity: 0.15;
+}
+
+.bsd-root .bsd-switch-3d__knob,
+.widget-edit-preview .bsd-switch-3d__knob {
+  position: absolute;
+  top: var(--sw-pad);
+  left: var(--sw-pad);
+  width: var(--sw-thumb);
+  height: var(--sw-thumb);
+  border-radius: 50%;
+  z-index: 2;
+  box-sizing: border-box;
+  border: 2px solid;
+  border-color: #f8fafc #94a3b8 #475569 #e2e8f0;
+  background: conic-gradient(
+    from 25deg,
+    #f8fafc 0deg,
+    #e2e8f0 35deg,
+    #94a3b8 70deg,
+    #64748b 110deg,
+    #cbd5e1 150deg,
+    #f1f5f9 190deg,
+    #94a3b8 230deg,
+    #64748b 270deg,
+    #e2e8f0 310deg,
+    #f8fafc 360deg
+  );
+  box-shadow:
+    0 4px 10px rgba(0, 0, 0, 0.45),
+    0 1px 0 rgba(255, 255, 255, 0.85) inset,
+    inset 0 -3px 6px rgba(51, 65, 85, 0.35);
+  transition: left 0.42s cubic-bezier(0.34, 1.2, 0.64, 1);
+}
+
+.bsd-root .bsd-switch-3d__knob-shine,
+.widget-edit-preview .bsd-switch-3d__knob-shine {
+  position: absolute;
+  inset: 12%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.55) 0%, transparent 55%);
+  pointer-events: none;
+}
+
+.bsd-root .bsd-switch-3d.is-on .bsd-switch-3d__knob,
+.widget-edit-preview .bsd-switch-3d.is-on .bsd-switch-3d__knob {
+  left: calc(100% - var(--sw-thumb) - var(--sw-pad));
+}
+
+.bsd-root .bsd-switch-3d:hover:not(:disabled) .bsd-switch-3d__frame,
+.widget-edit-preview .bsd-switch-3d:hover:not(:disabled) .bsd-switch-3d__frame {
+  filter: brightness(1.04);
+}
+
+.bsd-root .bsd-switch-3d:hover:not(:disabled) .bsd-switch-3d__knob,
+.widget-edit-preview .bsd-switch-3d:hover:not(:disabled) .bsd-switch-3d__knob {
+  filter: brightness(1.06);
+}
+
+.bsd-root .bsd-switch-3d:active:not(:disabled) .bsd-switch-3d__knob,
+.widget-edit-preview .bsd-switch-3d:active:not(:disabled) .bsd-switch-3d__knob {
+  filter: brightness(0.96);
+  box-shadow:
+    0 2px 6px rgba(0, 0, 0, 0.4),
+    inset 0 2px 4px rgba(51, 65, 85, 0.4);
+}
+
+.bsd-root .bsd-switch-3d.is-disabled,
+.widget-edit-preview .bsd-switch-3d.is-disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.bsd-root .bsd-switch-3d.is-busy,
+.widget-edit-preview .bsd-switch-3d.is-busy {
+  pointer-events: none;
+}
+
+.bsd-root .bsd-switch-3d.is-busy .bsd-switch-3d__knob-shine,
+.widget-edit-preview .bsd-switch-3d.is-busy .bsd-switch-3d__knob-shine {
+  animation: bsd-switch-thumb-busy 0.9s ease-in-out infinite;
+}
+
+@keyframes bsd-switch-thumb-busy {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.bsd-root .bsd-switch-3d.is-busy .bsd-switch-3d__track::after,
+.widget-edit-preview .bsd-switch-3d.is-busy .bsd-switch-3d__track::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(
+    105deg,
+    transparent 28%,
+    rgba(255, 255, 255, 0.22) 48%,
+    transparent 62%
+  );
+  animation: bsd-switch-shimmer 1.1s linear infinite;
+  pointer-events: none;
+  z-index: 3;
+}
+
+@keyframes bsd-switch-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
 }
 
 .bsd-root .bsd-downlink-stack {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: clamp(6px, 1.5cqh, 12px);
   flex: 1 1 auto;
   min-height: 0;
+  height: 100%;
   width: 100%;
   max-width: 100%;
   box-sizing: border-box;
-  overflow-y: auto;
-  overflow-x: hidden;
-  scrollbar-gutter: stable;
+  overflow: hidden;
+  justify-content: stretch;
+  align-items: stretch;
 }
 
 .bsd-root .bsd-downlink-btn {
   width: 100%;
-  padding: 12px 16px;
+  max-width: none;
+  flex: 1 1 0;
+  min-height: 0;
+  padding: clamp(6px, 1.4cqh, 18px) clamp(10px, 3.5cqw, 20px);
   border-radius: 999px;
-  border: 1px solid rgba(99, 102, 241, 0.35);
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.25), rgba(79, 70, 229, 0.15));
-  color: #e0e7ff;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-bottom-color: rgba(15, 23, 42, 0.28);
+  background: linear-gradient(
+    180deg,
+    rgba(129, 140, 248, 0.98) 0%,
+    rgba(99, 102, 241, 0.92) 45%,
+    rgba(67, 56, 202, 0.98) 100%
+  );
+  color: #f8fafc;
   font-family: inherit;
-  font-size: 0.88rem;
-  font-weight: 600;
+  font-size: clamp(0.65rem, min(3.2cqw, 4.5cqh), 1.05rem);
+  font-weight: 700;
   cursor: pointer;
-  transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+  transition:
+    transform 0.14s ease,
+    box-shadow 0.14s ease,
+    border-color 0.14s ease,
+    filter 0.14s ease;
   text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.25;
+  box-sizing: border-box;
+  text-shadow: 0 1px 1px rgba(15, 23, 42, 0.35);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.38),
+    0 3px 0 rgba(30, 27, 75, 0.55),
+    0 5px 14px rgba(15, 23, 42, 0.32);
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
 }
 
-.bsd-root .bsd-downlink-btn:hover:not(:disabled) {
-  transform: translateY(-2px);
-  border-color: rgba(129, 140, 248, 0.6);
-  box-shadow: 0 8px 24px rgba(99, 102, 241, 0.35);
+.bsd-root .bsd-downlink-btn:hover:not(:disabled):not(.bsd-downlink-btn--sending) {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.45),
+    0 4px 0 rgba(30, 27, 75, 0.5),
+    0 8px 20px rgba(99, 102, 241, 0.42);
+}
+
+.bsd-root .bsd-downlink-btn:active:not(:disabled):not(.bsd-downlink-btn--sending) {
+  transform: translateY(3px);
+  filter: brightness(0.94);
+  border-bottom-color: rgba(15, 23, 42, 0.4);
+  box-shadow:
+    inset 0 3px 8px rgba(15, 23, 42, 0.38),
+    0 1px 2px rgba(15, 23, 42, 0.22);
+  transition-duration: 0.06s;
+}
+
+.bsd-root .bsd-downlink-btn:focus-visible:not(:disabled) {
+  outline: 2px solid rgba(251, 191, 36, 0.9);
+  outline-offset: 2px;
 }
 
 .bsd-root .bsd-downlink-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
   transform: none;
+  filter: none;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 1px 3px rgba(15, 23, 42, 0.2);
 }
 
 .bsd-root .bsd-downlink-btn.bsd-downlink-btn--sending:disabled {
   opacity: 0.92;
   cursor: wait;
-  transform: scale(0.97);
+  transform: translateY(2px);
+  filter: brightness(0.95);
   box-shadow:
-    inset 0 2px 10px rgba(0, 0, 0, 0.22),
-    0 2px 14px rgba(99, 102, 241, 0.3);
-  border-color: rgba(165, 180, 252, 0.55);
+    inset 0 3px 10px rgba(15, 23, 42, 0.4),
+    0 1px 3px rgba(15, 23, 42, 0.25);
+  border-color: rgba(255, 255, 255, 0.22);
 }
 
 .bsd-root .bsd-downlink-btn.bsd-downlink-btn--sending:hover:disabled {
-  transform: scale(0.97);
+  transform: translateY(2px);
+  filter: brightness(0.95);
   box-shadow:
-    inset 0 2px 10px rgba(0, 0, 0, 0.22),
-    0 2px 14px rgba(99, 102, 241, 0.3);
+    inset 0 3px 10px rgba(15, 23, 42, 0.4),
+    0 1px 3px rgba(15, 23, 42, 0.25);
 }
 
 .bsd-root .bsd-downlink-search {
@@ -3266,15 +3898,18 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
 
 .bsd-root .bsd-downlink-btn--send {
   width: 100%;
-  flex-shrink: 0;
-  background: linear-gradient(135deg, rgba(99, 102, 241, 0.35), rgba(6, 182, 212, 0.2));
+  max-width: none;
+  flex: 1 1 0;
 }
 
 .bsd-root .bsd-downlink-widget-body {
-  padding: 8px 4px 12px;
+  padding: clamp(2px, 0.8cqh, 8px) 0 clamp(4px, 1cqh, 10px);
   display: flex;
   flex-direction: column;
   align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
 }
 
 .bsd-root .bsd-downlink-widget-single {

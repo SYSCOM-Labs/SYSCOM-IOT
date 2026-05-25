@@ -88,6 +88,7 @@ export function buildDefaultBsdGridLayout(variant, panelDevicesLen, visibilityMa
     DASH_WIDGET.BATTERY_LEVEL,
     DASH_WIDGET.METRIC_CIRCULAR,
     DASH_WIDGET.TEXT,
+    DASH_WIDGET.VEleta,
   ].filter((id) => V(id));
   /** Altura moderada tipo tarjeta compacta (coherente con vista dispositivo 3+3+6 cols). */
   const kpiRowH = 9;
@@ -182,6 +183,7 @@ export function buildModerateBsdGridTemplateForWidget(gridId) {
     case DASH_WIDGET.BATTERY_LEVEL:
     case DASH_WIDGET.METRIC_CIRCULAR:
     case DASH_WIDGET.TEXT:
+    case DASH_WIDGET.VEleta:
       return slot({ w: 3, h: 9, minW: 2, minH: 5 });
     default:
       return slot({ w: 3, h: 9, minW: 3, minH: 5 });
