@@ -1,4 +1,5 @@
 import {
+  APP_UPLINK_STALE_MS,
   DEVICE_STALE_OFFLINE_MS,
   isLastDbIngestStaleForDisplay,
 } from '../constants/commsStaleOfflineMs';
@@ -28,11 +29,22 @@ export function applyStaleOfflineConnectStatus(device) {
  * Join OTAA reciente en BD pero sin uplink de aplicación (p. ej. UC300 en bucle de re-join).
  * No equivale a «en línea» operativo ni a telemetría cada 1 min.
  */
+function lastAppUplinkMsFromDevice(device) {
+  if (!device) return null;
+  const raw = device.lastAppUplinkMs ?? device.properties?.lastAppUplinkMs;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 export function isDeviceJoinPendingOnly(device) {
   const d = applyStaleOfflineConnectStatus(device);
   const ms = lastSeenMsFromDevice(d);
   if (ms == null) return false;
   if (isLastDbIngestStaleForDisplay(ms)) return false;
+  const appMs = lastAppUplinkMsFromDevice(d);
+  if (appMs != null && isLastDbIngestStaleForDisplay(appMs, Date.now(), APP_UPLINK_STALE_MS)) {
+    return false;
+  }
   return isJoinOnlyDeviceRow(d);
 }
 

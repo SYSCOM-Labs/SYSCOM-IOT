@@ -1725,19 +1725,35 @@ class Store {
 
     const top = rowsForMerge[0];
     let ts = Number(top.ts);
+    let lastAppUplinkMs = null;
     for (const row of rows) {
       const t = Number(row.ts);
       if (Number.isFinite(t) && (!Number.isFinite(ts) || t > ts)) ts = t;
+      let p = {};
+      try {
+        p = JSON.parse(row.properties_json || '{}');
+      } catch {
+        /* ignore */
+      }
+      if (!this._isJoinOnlyTelemetryProperties(p)) {
+        const at = Number(row.ts);
+        if (Number.isFinite(at) && (!Number.isFinite(lastAppUplinkMs) || at > lastAppUplinkMs)) {
+          lastAppUplinkMs = at;
+        }
+      }
     }
     mergedFlat.lastUpdateTime = ts;
+    if (Number.isFinite(lastAppUplinkMs) && lastAppUplinkMs > 0) {
+      mergedFlat.lastAppUplinkMs = lastAppUplinkMs;
+    }
     if (hasDecodedPeopleCountTelemetry(mergedFlat)) {
       delete mergedFlat.ingestStatus;
     } else if (!appRows.length && rows.length) {
       mergedFlat.ingestStatus =
-        'Solo join LoRaWAN (sin uplink de aplicación con payload). El contador VS133 aún no ha enviado reporte en puerto 85.';
+        'Solo join LoRaWAN (sin uplink de aplicación con payload). Revise intervalo de reporte y sesión OTAA en el equipo.';
     }
 
-    return { top, mergedFlat, timestamp: ts };
+    return { top, mergedFlat, timestamp: ts, lastAppUplinkMs };
   }
 
   getMergedLatestTelemetryForDevice(userId, deviceId, opts = {}) {

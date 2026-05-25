@@ -8,6 +8,10 @@ import { tryShowAutomationBrowserNotification } from '../utils/browserNotificati
 import { playAutomationToastBell } from '../utils/automationToastSound.js';
 import { loadAllWidgetConfigs } from '../components/dashboard/widgetConfigUtils.js';
 import { resolveAutomationConditionCompareValue } from '../utils/automationWidgetValue.js';
+import {
+  effectiveAutomationConditions,
+  resolveAutomationRuleMode,
+} from '../utils/automationRuleMode.js';
 
 /**
  * Automation Engine
@@ -77,28 +81,13 @@ export const runAutomations = async (devices, deviceProperties, credentials, tok
   const widgetConfigsForRules = loadAllWidgetConfigs();
 
   for (const rule of activeRules) {
-    // 1. Check Schedule
-    const dayMatches =
-      !rule.activeDays ||
-      !Array.isArray(rule.activeDays) ||
-      rule.activeDays.length === 0 ||
-      rule.activeDays.some((d) => Number(d) === currentDay);
-    const timeMatches = isTimeInRange(currentTimeStr, rule.scheduleStart || '00:00', rule.scheduleEnd || '23:59');
+    const ruleMode = resolveAutomationRuleMode(rule);
+    const effectiveConditions = effectiveAutomationConditions(rule.conditions);
 
-    if (!dayMatches || !timeMatches) continue;
+    // Reglas solo por horario: el servidor las evalúa en el tick de agenda.
+    if (ruleMode === 'schedule') continue;
 
-    // 2. Condiciones: ignorar filas vacías (dispositivo/propiedad sin elegir). Sin condiciones válidas = solo horario.
-    const effectiveConditions = (rule.conditions || []).filter(
-      (c) =>
-        c &&
-        c.deviceId != null &&
-        String(c.deviceId).trim() &&
-        c.propKey != null &&
-        String(c.propKey).trim()
-    );
-
-    // Reglas solo por horario: el navegador no tiene tick de agenda; downlinks los hace el servidor en el tick.
-    if (effectiveConditions.length === 0) continue;
+    // Modo condiciones: sin ventana horaria (evita conflicto horario + IF).
 
     // Check Conditions (All must be true - AND logic)
     let allConditionsMet = true;
@@ -139,16 +128,13 @@ export const runAutomations = async (devices, deviceProperties, credentials, tok
       continue;
     }
 
-    const scheduleOnly = effectiveConditions.length === 0;
-
     // 3. Execute Actions
     for (let i = 0; i < (rule.actions || []).length; i++) {
         const action = rule.actions[i];
         const cooldownKey = `${rule.id}-${i}`;
         const lastExec = cooldownStorage[cooldownKey] || 0;
 
-        // Reglas solo por horario: siempre usar intervalo de reactivación (evita un downlink por cada uplink en la ventana).
-        if (rule.allowReactivation || scheduleOnly) {
+        if (rule.allowReactivation) {
           const reactivationLimit = Math.max(60, parseInt(String(rule.reactivation || 60), 10) || 60) * 1000;
           if (Date.now() - lastExec < reactivationLimit) continue;
         } else if (lastExec > 0) {

@@ -75,6 +75,29 @@ function scoreForTelemetry(key, rawVal) {
  * @param {Record<string, unknown>} liveProps
  * @returns {{ id: string, propertyKey: string, name: string, unit: string }}
  */
+/**
+ * Lista uniforme para selects de automatización / informes (siempre `propertyKey` usable).
+ * @param {Array<{ id?: string, propertyKey?: string, name?: string, unit?: string }>} rawList
+ */
+export function normalizeAutomationPropertyList(rawList) {
+  if (!Array.isArray(rawList)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const raw of rawList) {
+    if (!raw || typeof raw !== 'object') continue;
+    const key = String(raw.propertyKey || raw.id || raw.key || raw.identifier || '').trim();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      id: String(raw.id || key),
+      propertyKey: key,
+      name: String(raw.name || raw.label || humanizeKey(key)).trim() || humanizeKey(key),
+      unit: String(raw.unit || '').trim(),
+    });
+  }
+  return out;
+}
+
 export function pickDefaultTelemetryProperty(tslList, liveProps) {
   const live = liveProps && typeof liveProps === 'object' ? liveProps : {};
   const liveExpanded = expandNestedGatewayTelemetry(live);

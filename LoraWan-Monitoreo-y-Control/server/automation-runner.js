@@ -6,6 +6,10 @@
 
 const { resolveAutomationDownlinkHex } = require('./automation-downlink-resolve');
 const { resolveAutomationConditionCompareValue } = require('./automation-widget-value.cjs');
+const {
+  effectiveAutomationConditions,
+  resolveAutomationRuleMode,
+} = require('./lib/automation-rule-mode.cjs');
 
 /** @type {null | { store: object, tryLnsAppDownlinkEnqueue: Function, appendDownlinkLog: Function, insertUiEventWithStream: Function, buildLnsDownlinkApiSuccessBody: Function, canRunAutomationsForUser: Function }} */
 let _ctx = null;
@@ -15,6 +19,9 @@ const cooldownStorage = {};
 
 /** `userId::ruleId` → estuvo dentro de la ventana en el tick anterior (reglas solo-horario en ticker). */
 const scheduleEdgeState = {};
+
+/** `userId::ruleId` → firma del último uplink que disparó la regla (one-shot por evento, p. ej. botón). */
+const oneShotEventStorage = {};
 
 /** @type {ReturnType<typeof setTimeout> | null} */
 let _scheduleFirstTimeout = null;
@@ -148,6 +155,41 @@ function getConditionDeviceValue(props, propKey) {
     return props[k];
   }
   return undefined;
+}
+
+/**
+ * Identifica un uplink concreto (msgid, last_update, fcnt) para disparar cada pulsación
+ * aunque `press` siga en "short" en el mapa de última telemetría.
+ */
+function buildRuleConditionEventSignature(deviceProperties, effectiveConditions) {
+  const parts = [];
+  for (const cond of effectiveConditions) {
+    const did = cond.deviceId != null ? String(cond.deviceId) : '';
+    if (!did) return null;
+    const props = deviceProperties[did];
+    if (!props) return null;
+    const val = getConditionDeviceValue(props, cond.propKey);
+    if (val === undefined) return null;
+    const be = props.button_event;
+    const msgid =
+      be && typeof be === 'object' && !Array.isArray(be) && be.msgid != null ? String(be.msgid) : '';
+    const eventTick =
+      props.last_update != null
+        ? String(props.last_update)
+        : props.ts != null
+          ? String(props.ts)
+          : props.receivedAt != null
+            ? String(props.receivedAt)
+            : '';
+    const fcnt =
+      props.fcnt_up != null
+        ? String(props.fcnt_up)
+        : props.fcnt != null
+          ? String(props.fcnt)
+          : '';
+    parts.push(`${did}\x1f${cond.propKey}\x1f${val}\x1f${msgid}\x1f${eventTick}\x1f${fcnt}`);
+  }
+  return parts.length ? parts.join('\x1e') : null;
 }
 
 function dayMatchesRule(rule, currentDay) {
@@ -395,15 +437,9 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
     const schedEnd =
       rule.scheduleEnd != null && String(rule.scheduleEnd).trim() ? String(rule.scheduleEnd).trim() : '23:59';
 
-    const effectiveConditions = (rule.conditions || []).filter(
-      (c) =>
-        c &&
-        c.deviceId != null &&
-        String(c.deviceId).trim() &&
-        c.propKey != null &&
-        String(c.propKey).trim()
-    );
-    const scheduleOnly = effectiveConditions.length === 0;
+    const effectiveConditions = effectiveAutomationConditions(rule.conditions);
+    const ruleMode = resolveAutomationRuleMode(rule);
+    const scheduleOnly = ruleMode === 'schedule';
 
     if (scheduleTickOnly) {
       if (!scheduleOnly) continue;
@@ -432,11 +468,8 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
       continue;
     }
 
-    // Telemetría: no evaluar reglas solo-ventana (solo tick de agenda).
+    // Telemetría: reglas solo-horario se evalúan en el tick de agenda (sin filtro día/hora aquí).
     if (scheduleOnly) continue;
-
-    if (!dayMatchesRule(rule, currentDay)) continue;
-    if (!isTimeInRange(currentTimeStr, schedStart, schedEnd)) continue;
 
     let allConditionsMet = true;
     for (const cond of effectiveConditions) {
@@ -460,8 +493,13 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
       }
     }
 
+    const rid = rule.id != null ? String(rule.id) : `r${ridx}`;
+    const ruleSigKey = `${userId}::${rid}`;
+    const eventSig = buildRuleConditionEventSignature(deviceProperties, effectiveConditions);
+
     if (!allConditionsMet) {
       if (!rule.allowReactivation) {
+        delete oneShotEventStorage[ruleSigKey];
         for (let i = 0; i < (rule.actions || []).length; i++) {
           cooldownStorage[cooldownKey(userId, rule.id, i)] = 0;
         }
@@ -469,6 +507,11 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
       continue;
     }
 
+    if (!rule.allowReactivation && eventSig && oneShotEventStorage[ruleSigKey] === eventSig) {
+      continue;
+    }
+
+    let fired = false;
     for (let i = 0; i < (rule.actions || []).length; i++) {
       const action = rule.actions[i];
       const ck = cooldownKey(userId, rule.id, i);
@@ -477,12 +520,15 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
       if (rule.allowReactivation) {
         const reactivationLimit = Math.max(60, parseInt(String(rule.reactivation || 60), 10) || 60) * 1000;
         if (Date.now() - lastExec < reactivationLimit) continue;
-      } else if (lastExec > 0) {
-        continue;
       }
 
       enqueueAutomationAction(userId, action, rule, perm);
       cooldownStorage[ck] = Date.now();
+      fired = true;
+    }
+
+    if (fired && !rule.allowReactivation && eventSig) {
+      oneShotEventStorage[ruleSigKey] = eventSig;
     }
   }
 }
@@ -565,4 +611,12 @@ module.exports = {
   configure,
   onTelemetry,
   startAutomationScheduleTicker,
+  __test: {
+    clockToMinutes,
+    isTimeInRange,
+    getConditionDeviceValue,
+    expandNestedGatewayTelemetry,
+    buildRuleConditionEventSignature,
+    evaluateCondition,
+  },
 };

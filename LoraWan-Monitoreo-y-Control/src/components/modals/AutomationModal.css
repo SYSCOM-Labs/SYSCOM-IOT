@@ -35,6 +35,34 @@
 }
 
 /* Schedule Config */
+.rule-mode-section {
+  padding: 14px 16px;
+  border-radius: 12px;
+  margin-bottom: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-color);
+}
+
+.rule-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  margin-bottom: 8px;
+}
+
+.rule-mode-toggle-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.rule-mode-hint {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
 .schedule-config {
   display: flex;
   flex-wrap: wrap;
@@ -73,8 +101,23 @@
 
 .time-range-selector {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  align-items: flex-end;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.schedule-time-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.schedule-time-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .time-input {

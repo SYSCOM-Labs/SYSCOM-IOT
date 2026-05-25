@@ -6,18 +6,11 @@ import './DeviceList.css';
 import '../styles/premiumPageShell.css';
 import { fetchAutomationRules, saveAutomationRules } from '../services/api';
 import { invalidateAutomationRulesCache } from '../services/automationService';
+import {
+  effectiveAutomationConditions,
+  isScheduleAutomationRule,
+} from '../utils/automationRuleMode';
 import './Automations.css';
-
-function effectiveAutomationConditions(conds) {
-  return (conds || []).filter(
-    (c) =>
-      c &&
-      c.deviceId != null &&
-      String(c.deviceId).trim() &&
-      c.propKey != null &&
-      String(c.propKey).trim()
-  );
-}
 
 const AutomationsPage = () => {
   const { t } = useLanguage();
@@ -137,7 +130,8 @@ const AutomationsPage = () => {
 
       <div className="rules-grid">
         {rules.map((rule) => {
-          const scheduleOnlyCard = effectiveAutomationConditions(rule.conditions).length === 0;
+          const scheduleOnlyCard = isScheduleAutomationRule(rule);
+          const conditionRows = effectiveAutomationConditions(rule.conditions);
           return (
           <div
             key={String(rule.id)}
@@ -166,6 +160,7 @@ const AutomationsPage = () => {
             </div>
             
             <div className="rule-content">
+              {scheduleOnlyCard ? (
               <div className="rule-info-row">
                 <div className="info-item">
                   <Calendar size={12} />
@@ -176,32 +171,21 @@ const AutomationsPage = () => {
                   <span>{(rule.scheduleStart || '00:00')} - {(rule.scheduleEnd || '23:59')}</span>
                 </div>
               </div>
+              ) : null}
 
               <div className="rule-section">
                 <span className="badge-if">IF</span>
                 <div className="conditions-list">
-                  {(rule.conditions || []).filter(
-                    (c) =>
-                      c &&
-                      c.deviceId != null &&
-                      String(c.deviceId).trim() &&
-                      c.propKey != null &&
-                      String(c.propKey).trim()
-                  ).length === 0 ? (
+                  {scheduleOnlyCard ? (
                     <div className="condition-summary condition-summary--schedule-only">
-                      Solo ventana horaria (sin condiciones IF)
+                      Por horario y días (sin condiciones IF)
+                    </div>
+                  ) : conditionRows.length === 0 ? (
+                    <div className="condition-summary condition-summary--schedule-only">
+                      Sin condiciones configuradas
                     </div>
                   ) : (
-                    (rule.conditions || [])
-                      .filter(
-                        (c) =>
-                          c &&
-                          c.deviceId != null &&
-                          String(c.deviceId).trim() &&
-                          c.propKey != null &&
-                          String(c.propKey).trim()
-                      )
-                      .map((c, i) => (
+                    conditionRows.map((c, i) => (
                         <div key={i} className="condition-summary">
                           {i > 0 && <span className="join">AND</span>}
                           <span className="prop">{c.propName || c.propKey || 'Prop'}</span>{' '}

@@ -4,30 +4,56 @@ import { fetchDevices, fetchDeviceTsl, fetchDeviceProperties } from '../../servi
 import { useAuth } from '../../context/AuthContext';
 import { getLatestDeviceData } from '../../services/localAuth';
 import { PROPERTY_INFER_IGNORE_KEYS, expandNestedGatewayTelemetry } from '../../utils/gatewayPayload';
+import {
+  inferTslPropsFromLive,
+  normalizeAutomationPropertyList,
+} from '../../utils/telemetryPropertyPicker';
 import { readDownlinksFromLocalStorage } from '../../services/deviceTemplates';
+import {
+  effectiveAutomationConditions,
+  resolveAutomationRuleMode,
+} from '../../utils/automationRuleMode';
 import './AutomationModal.css';
-
-function effectiveAutomationConditions(conds) {
-  return (conds || []).filter(
-    (c) =>
-      c &&
-      c.deviceId != null &&
-      String(c.deviceId).trim() &&
-      c.propKey != null &&
-      String(c.propKey).trim()
-  );
-}
 
 function normalizeConditionRow(c) {
   const base = c && typeof c === 'object' ? c : {};
+  const propKey = String(
+    base.propKey ?? base.propertyKey ?? base.fieldKey ?? base.field ?? base.metric ?? ''
+  ).trim();
+  const propName = String(
+    base.propName ?? base.propertyName ?? base.fieldName ?? base.metricName ?? ''
+  ).trim();
   return {
     deviceId: base.deviceId != null ? String(base.deviceId) : '',
-    propKey: base.propKey != null ? String(base.propKey) : '',
-    propName: base.propName != null ? String(base.propName) : '',
+    propKey,
+    propName: propName || propKey,
     operator: base.operator != null ? String(base.operator) : '==',
     value: base.value != null ? String(base.value) : '',
     useWidgetValue: Boolean(base.useWidgetValue),
   };
+}
+
+function findPropertyMeta(list, propKey) {
+  const pk = String(propKey || '').trim();
+  if (!pk || !Array.isArray(list)) return null;
+  return (
+    list.find((x) => String(x.propertyKey || x.id || '').trim() === pk) ||
+    list.find((x) => String(x.id || '').trim() === pk) ||
+    null
+  );
+}
+
+function collectDeviceIdsFromRule(conds, acts) {
+  const ids = new Set();
+  for (const c of conds || []) {
+    const id = c?.deviceId != null ? String(c.deviceId).trim() : '';
+    if (id) ids.add(id);
+  }
+  for (const a of acts || []) {
+    const id = a?.targetDeviceId != null ? String(a.targetDeviceId).trim() : '';
+    if (id) ids.add(id);
+  }
+  return [...ids];
 }
 
 function defaultConditionRow() {
@@ -90,6 +116,9 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
   const [activeDays, setActiveDays] = useState(rule?.activeDays || [0, 1, 2, 3, 4, 5, 6]); // 0-6 Sun-Sat
   const [scheduleStart, setScheduleStart] = useState(rule?.scheduleStart || '00:00');
   const [scheduleEnd, setScheduleEnd] = useState(rule?.scheduleEnd || '23:59');
+  const [ruleBySchedule, setRuleBySchedule] = useState(
+    () => resolveAutomationRuleMode(rule) === 'schedule'
+  );
 
   const [reactivation, setReactivation] = useState(rule?.reactivation || 60);
   const [allowReactivation, setAllowReactivation] = useState(rule?.allowReactivation || false);
@@ -103,8 +132,8 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
   useEffect(() => {
     if (!isOpen) return;
     setName(rule?.name || '');
-    setConditions(buildConditionsFromRule(rule));
-    setActions(
+    const builtConditions = buildConditionsFromRule(rule);
+    const builtActions =
       Array.isArray(rule?.actions) && rule.actions.length
         ? rule.actions.filter((a) => a && String(a.type) !== 'telegram').map((a) => ({ ...a }))
         : [
@@ -123,14 +152,35 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
               toastMessage: '',
               toastVariant: 'indigo',
             },
-          ]
-    );
+          ];
+    setConditions(builtConditions);
+    setActions(builtActions);
     setActiveDays(rule?.activeDays || [0, 1, 2, 3, 4, 5, 6]);
     setScheduleStart(rule?.scheduleStart || '00:00');
     setScheduleEnd(rule?.scheduleEnd || '23:59');
+    setRuleBySchedule(resolveAutomationRuleMode(rule) === 'schedule');
     setReactivation(rule?.reactivation ?? 60);
     setAllowReactivation(Boolean(rule?.allowReactivation));
+    for (const deviceId of collectDeviceIdsFromRule(builtConditions, builtActions)) {
+      void fetchProps(deviceId);
+    }
   }, [isOpen, rule]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    setConditions((prev) =>
+      prev.map((cond) => {
+        if (!cond.deviceId || !cond.propKey) return cond;
+        const list = deviceProperties[cond.deviceId];
+        if (!list?.length) return cond;
+        const p = findPropertyMeta(list, cond.propKey);
+        if (!p) return cond;
+        const name = p.name || cond.propName || cond.propKey;
+        if (name === cond.propName) return cond;
+        return { ...cond, propName: name };
+      })
+    );
+  }, [deviceProperties, isOpen]);
 
   useEffect(() => {
     if (!isOpen || loading) return;
@@ -157,16 +207,17 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
   }, [isOpen, loading, token, credentials]);
 
   const fetchProps = async (deviceId) => {
-    if (!deviceId || deviceProperties[deviceId]) return;
+    const did = deviceId != null ? String(deviceId).trim() : '';
+    if (!did) return;
     try {
       const [tslResp, propsResp, localResp] = await Promise.all([
-        fetchDeviceTsl(deviceId, credentials, token),
-        fetchDeviceProperties(deviceId, credentials, token),
+        fetchDeviceTsl(did, credentials, token),
+        fetchDeviceProperties(did, credentials, token),
         getLatestDeviceData()
       ]);
       
       const liveFromAPI = propsResp.data?.properties || propsResp.data?.data?.properties || {};
-      const localEntry = (localResp || []).find(d => d.deviceId.toString() === deviceId.toString());
+      const localEntry = (localResp || []).find(d => d.deviceId.toString() === did.toString());
       const liveFromLocal = localEntry ? localEntry.properties || {} : {};
       const combinedLive = { ...liveFromAPI, ...liveFromLocal };
       const expandedLive = expandNestedGatewayTelemetry(combinedLive);
@@ -174,28 +225,12 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
       let props = tslResp.data?.data?.properties || tslResp.data?.properties || tslResp.properties || [];
       const services = tslResp.data?.data?.services || tslResp.data?.services || tslResp.services || [];
       
-      // Fallback: If TSL is empty, infer from live properties
-      if (props.length === 0) {
-        const ignoreKeys = new Set(PROPERTY_INFER_IGNORE_KEYS);
-
-        props = Object.keys(expandedLive)
-          .filter(
-            (key) =>
-              !ignoreKeys.has(key) &&
-              !String(key).endsWith('_alarm') &&
-              expandedLive[key] != null &&
-              typeof expandedLive[key] !== 'object' &&
-              !Array.isArray(expandedLive[key])
-          )
-          .map(key => ({
-            id: key,
-            propertyKey: key,
-            name: key.charAt(0).toUpperCase() + key.slice(1).replace(/_/g, ' '),
-            unit: ''
-          }));
+      if (!Array.isArray(props) || props.length === 0) {
+        props = inferTslPropsFromLive(expandedLive);
       }
 
-      setDeviceProperties(prev => ({ ...prev, [deviceId]: props }));
+      const normalized = normalizeAutomationPropertyList(props);
+      setDeviceProperties((prev) => ({ ...prev, [did]: normalized }));
       if (Array.isArray(services)) {
         const mappedServices = services
           .filter(s => s?.id)
@@ -242,9 +277,12 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
     const newConditions = [...conditions];
     newConditions[index][field] = value;
     if (field === 'deviceId') { fetchProps(value); newConditions[index].propKey = ''; }
-    if (field === 'propKey' && deviceProperties[newConditions[index].deviceId]) {
-      const p = deviceProperties[newConditions[index].deviceId].find(x => x.propertyKey === value);
-      newConditions[index].propName = p ? p.name : value;
+    if (field === 'propKey') {
+      const pk = String(value || '').trim();
+      newConditions[index].propKey = pk;
+      const list = deviceProperties[newConditions[index].deviceId];
+      const p = findPropertyMeta(list, pk);
+      newConditions[index].propName = p ? p.name : pk;
     }
     setConditions(newConditions);
   };
@@ -306,15 +344,37 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (!name) return alert('Por favor, introduce un nombre.');
-    onSave({ 
-      name, 
-      conditions, 
-      actions, 
-      activeDays, 
-      scheduleStart, 
-      scheduleEnd, 
-      reactivation, 
-      allowReactivation 
+
+    const ruleMode = ruleBySchedule ? 'schedule' : 'conditions';
+
+    const persistedConditions = ruleBySchedule
+      ? []
+      : conditions.map((c) => {
+          const row = normalizeConditionRow(c);
+          if (row.deviceId && row.propKey) {
+            const p = findPropertyMeta(deviceProperties[row.deviceId], row.propKey);
+            if (p?.name) row.propName = p.name;
+          }
+          return row;
+        });
+
+    if (!ruleBySchedule && effectiveAutomationConditions(persistedConditions).length === 0) {
+      return alert('Agrega al menos una condición (dispositivo, propiedad y valor).');
+    }
+    if (ruleBySchedule && (!activeDays || activeDays.length === 0)) {
+      return alert('Selecciona al menos un día para la regla por horario.');
+    }
+
+    onSave({
+      name,
+      ruleMode,
+      conditions: persistedConditions,
+      actions,
+      activeDays: ruleBySchedule ? activeDays : [],
+      scheduleStart: ruleBySchedule ? scheduleStart : '00:00',
+      scheduleEnd: ruleBySchedule ? scheduleEnd : '23:59',
+      reactivation,
+      allowReactivation,
     });
   };
 
@@ -344,8 +404,6 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
     { id: '>=', label: 'mayor o igual a' }, { id: '>', label: 'mayor a' }
   ];
 
-  const scheduleOnlyRule = effectiveAutomationConditions(conditions).length === 0;
-
   if (!isOpen) return null;
 
   return (
@@ -364,6 +422,23 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
               {!name && <span className="error-text">Introduce un nombre</span>}
             </div>
 
+            <div className="rule-mode-section glass">
+              <label className="rule-mode-toggle checkbox-label">
+                <input
+                  type="checkbox"
+                  checked={ruleBySchedule}
+                  onChange={(e) => setRuleBySchedule(e.target.checked)}
+                />
+                <span className="rule-mode-toggle-title">Regla por horario y días</span>
+              </label>
+              <p className="rule-mode-hint">
+                {ruleBySchedule
+                  ? 'La regla se activa solo dentro de los días y la franja horaria. No use condiciones IF en este modo.'
+                  : 'La regla se evalúa cuando se cumplen las condiciones IF (24 h, todos los días). No aplica ventana horaria.'}
+              </p>
+            </div>
+
+            {ruleBySchedule ? (
             <div className="rule-config-section">
               <label className="section-label">Horario de funcionamiento</label>
               <div className="schedule-config glass">
@@ -380,19 +455,36 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
                   ))}
                 </div>
                 <div className="time-range-selector">
-                  <div className="time-input">
-                    <Clock size={14} />
-                    <input type="time" value={scheduleStart} onChange={e => setScheduleStart(e.target.value)} />
+                  <div className="schedule-time-field">
+                    <span className="schedule-time-label">Inicio</span>
+                    <div className="time-input">
+                      <Clock size={14} aria-hidden />
+                      <input
+                        type="time"
+                        value={scheduleStart}
+                        onChange={(e) => setScheduleStart(e.target.value)}
+                        aria-label="Hora de inicio"
+                      />
+                    </div>
                   </div>
-                  <span className="joiner">hasta</span>
-                  <div className="time-input">
-                    <Clock size={14} />
-                    <input type="time" value={scheduleEnd} onChange={e => setScheduleEnd(e.target.value)} />
+                  <div className="schedule-time-field">
+                    <span className="schedule-time-label">Fin</span>
+                    <div className="time-input">
+                      <Clock size={14} aria-hidden />
+                      <input
+                        type="time"
+                        value={scheduleEnd}
+                        onChange={(e) => setScheduleEnd(e.target.value)}
+                        aria-label="Hora de fin"
+                      />
+                    </div>
                   </div>
                 </div>
               </div>
             </div>
+            ) : null}
 
+            {!ruleBySchedule ? (
             <div className="rule-config-section">
               <label className="section-label">Condiciones</label>
               {devicesLoadError ? (
@@ -417,9 +509,30 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
                           );
                         })}
                       </select>
-                      <select value={cond.propKey} onChange={e => updateCondition(index, 'propKey', e.target.value)} className="field-prop" disabled={!cond.deviceId}>
-                        <option value="">Valor</option>
-                        {(deviceProperties[cond.deviceId] || []).map(p => (<option key={p.id} value={p.propertyKey}>{p.name}</option>))}
+                      <select
+                        value={cond.propKey != null ? String(cond.propKey) : ''}
+                        onChange={(e) => updateCondition(index, 'propKey', e.target.value)}
+                        className="field-prop"
+                        disabled={!cond.deviceId}
+                      >
+                        <option value="">Elegir propiedad</option>
+                        {(deviceProperties[cond.deviceId] || []).map((p) => {
+                          const pk = String(p.propertyKey || p.id || '').trim();
+                          if (!pk) return null;
+                          return (
+                            <option key={pk} value={pk}>
+                              {p.name || pk}
+                            </option>
+                          );
+                        })}
+                        {cond.propKey &&
+                        !(deviceProperties[cond.deviceId] || []).some(
+                          (p) => String(p.propertyKey || p.id || '').trim() === String(cond.propKey).trim()
+                        ) ? (
+                          <option value={String(cond.propKey)}>
+                            {cond.propName || cond.propKey} (guardado)
+                          </option>
+                        ) : null}
                       </select>
                       <span className="joiner">es</span>
                       <select value={cond.operator} onChange={e => updateCondition(index, 'operator', e.target.value)} className="field-operator">
@@ -448,6 +561,7 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
                 </button>
               </div>
             </div>
+            ) : null}
 
             <div className="rule-config-section">
               <label className="section-label">Then (Acciones)</label>
@@ -583,7 +697,7 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
                         <input type="number" value={action.delay} onChange={e => updateAction(index, 'delay', e.target.value)} min="0" />
                         <span className="unit">segundos</span>
                       </div>
-                      {scheduleOnlyRule && (
+                      {ruleBySchedule && (
                         <label className="schedule-run-at-label">
                           <span>Momento (solo ventana horaria)</span>
                           <select

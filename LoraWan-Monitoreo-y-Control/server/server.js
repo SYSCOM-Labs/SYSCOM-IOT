@@ -54,6 +54,7 @@ const { mountYahooAuthRoutes } = require('./yahoo-auth-routes');
 const { mountOAuthProvidersConfig } = require('./oauth-providers-config');
 const {
   resolveCommsStaleOfflineMs,
+  resolveAppUplinkStaleMs,
   isLastDbIngestStale,
 } = require('./comms-stale-policy');
 
@@ -220,6 +221,8 @@ const RETENTION_MS =
   parseInt(process.env.SYSCOM_TELEMETRY_RETENTION_MS, 10) || 365 * 24 * 60 * 60 * 1000;
 /** Misma ventana que gateways: sin nueva ingesta en BD → OFFLINE (ver `comms-stale-policy.js`). */
 const COMMS_STALE_OFFLINE_MS = resolveCommsStaleOfflineMs();
+/** Sin payload de aplicación reciente → no «En línea» aunque haya joins OTAA (p. ej. WT201 cada 1 min). */
+const APP_UPLINK_STALE_MS = resolveAppUplinkStaleMs();
 
 /**
  * FPort LoRaWAN para downlinks de aplicación.
@@ -613,13 +616,50 @@ function applyStaleOfflineFromTelemetryRow(row, telemetryRow) {
   }
 }
 
-/** Si hay ingesta reciente y el payload no trae estado, inferir ONLINE (p. ej. LoRaWAN sin connectStatus en cada uplink). */
-function inferFreshOnlineConnectStatus(row, telemetryRow) {
+/**
+ * Estado de conexión para el listado: usa el último paquete en aire (raw) y la edad del último uplink de app.
+ * Evita marcar ONLINE al fusionar telemetría vieja cuando el nodo solo envía joins (WT201 clase C).
+ * @param {object} row Fila del listado
+ * @param {object} telemetryRow Telemetría mostrada (puede ser fusionada)
+ * @param {object|null} [rawLatestRow] Última fila en BD sin fusionar
+ */
+function inferFreshOnlineConnectStatus(row, telemetryRow, rawLatestRow = null) {
   if (!telemetryRow || telemetryRow.timestamp == null) return;
-  const ts = Number(telemetryRow.timestamp);
-  if (!Number.isFinite(ts)) return;
-  if (isLastDbIngestStale(ts, Date.now(), COMMS_STALE_OFFLINE_MS)) return;
-  const p = telemetryRow.properties || {};
+  const now = Date.now();
+  const activityTs = Number(telemetryRow.timestamp);
+  if (!Number.isFinite(activityTs)) return;
+  if (isLastDbIngestStale(activityTs, now, COMMS_STALE_OFFLINE_MS)) return;
+
+  const displayProps = telemetryRow.properties || {};
+  const rawProps =
+    rawLatestRow && rawLatestRow.properties && typeof rawLatestRow.properties === 'object'
+      ? rawLatestRow.properties
+      : displayProps;
+
+  const lastAppTs = Number(displayProps.lastAppUplinkMs);
+  const hasAppTs = Number.isFinite(lastAppTs) && lastAppTs > 0;
+  const appStale = hasAppTs && isLastDbIngestStale(lastAppTs, now, APP_UPLINK_STALE_MS);
+
+  if (joinOnlyTelemetryHint(rawProps)) {
+    row.connectStatus = appStale ? 'OFFLINE' : 'JOIN_PENDING';
+    if (appStale) {
+      row.ingestStatus =
+        'Sin reporte de aplicación reciente (solo join OTAA). Revise ToolBox: Activate, App Key, LoRaWAN 1.0.3, Rejoin OFF.';
+    }
+    if (hasAppTs) row.lastUpdateTime = lastAppTs;
+    return;
+  }
+
+  if (appStale) {
+    row.connectStatus = 'OFFLINE';
+    row.ingestStatus =
+      row.ingestStatus ||
+      'Último reporte de sensor antiguo. El equipo no cumple el intervalo configurado (p. ej. 1 min).';
+    if (hasAppTs) row.lastUpdateTime = lastAppTs;
+    return;
+  }
+
+  const p = displayProps;
   if (joinOnlyTelemetryHint(p)) {
     row.connectStatus = 'JOIN_PENDING';
     return;
@@ -630,6 +670,7 @@ function inferFreshOnlineConnectStatus(row, telemetryRow) {
     row.connectStatus = 'ONLINE';
     return;
   }
+  if (csU === 'JOIN' || csU === 'JOIN_PENDING') return;
   if (cs) return;
   row.connectStatus = 'ONLINE';
 }
@@ -701,6 +742,7 @@ function buildDevicesContentAssignedOnly(userId) {
   const regIds = registered.map((r) => r.deviceId).filter(Boolean);
   const decodeMap = store.getDeviceDecodeConfigMap(regIds);
   const licenseMap = store.getDeviceLicenseMetaMap(regIds);
+  const latestRawMap = store.getLatestMap(userId);
   const mergedMap = store.getDeviceListTelemetryMap(userId, regIds, decodeMap, { historyRowLimit: 16 });
 
   const content = [];
@@ -712,7 +754,7 @@ function buildDevicesContentAssignedOnly(userId) {
         labelById[tel.deviceId] || tel.deviceName || p.deviceName || tel.deviceId
       );
       applyStaleOfflineFromTelemetryRow(row, t);
-      inferFreshOnlineConnectStatus(row, t);
+      inferFreshOnlineConnectStatus(row, t, latestRawMap[reg.deviceId] || null);
       if (reg.displayName) row.name = reg.displayName;
       if (reg.devEUI && !row.devEUI && !row.devEui) row.devEUI = reg.devEUI;
       const tplModel = resolvedDeviceProductModelFast(reg.deviceId, reg, decodeMap);
@@ -804,8 +846,10 @@ function buildDevicesContentSuperadmin() {
     if (!byTelemetryUser.has(tuid)) byTelemetryUser.set(tuid, []);
     byTelemetryUser.get(tuid).push(deviceId);
   }
+  const latestRawByDevice = {};
   const mergedByDevice = {};
   for (const [tuid, dids] of byTelemetryUser) {
+    Object.assign(latestRawByDevice, store.getLatestMap(tuid));
     Object.assign(
       mergedByDevice,
       store.getDeviceListTelemetryMap(tuid, dids, decodeMap, { historyRowLimit: 16 })
@@ -826,7 +870,7 @@ function buildDevicesContentSuperadmin() {
     if (t) {
       row = mapDeviceListTelemetryRow(t, (tel, p) => tel.deviceName || p.deviceName || tel.deviceId);
       applyStaleOfflineFromTelemetryRow(row, t);
-      inferFreshOnlineConnectStatus(row, t);
+      inferFreshOnlineConnectStatus(row, t, latestRawByDevice[deviceId] || null);
       const lbl = labelOpts.find((l) => assigns.some((a) => a.userId === l.userId));
       if (lbl) row.name = lbl.displayName;
       else if (reg0 && reg0.displayName) row.name = reg0.displayName;

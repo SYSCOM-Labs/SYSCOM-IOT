@@ -20,6 +20,15 @@ function resolveCommsStaleOfflineMs() {
   );
 }
 
+/** Sin uplink de aplicación (payload decodificado) dentro de este margen → no «En línea» (p. ej. reporte cada 1 min). */
+function resolveAppUplinkStaleMs() {
+  return (
+    parsePositiveMs(process.env.SYSCOM_APP_UPLINK_STALE_MS) ||
+    parsePositiveMs(process.env.SYSCOM_COMMS_APP_UPLINK_STALE_MS) ||
+    3 * 60 * 1000
+  );
+}
+
 /**
  * @param {number} lastIngestTsMs - `telemetry.ts` (ingesta en servidor), no campos del payload del nodo.
  * @param {number} nowMs
@@ -33,5 +42,6 @@ function isLastDbIngestStale(lastIngestTsMs, nowMs, staleMs) {
 module.exports = {
   DEFAULT_COMMS_STALE_OFFLINE_MS,
   resolveCommsStaleOfflineMs,
+  resolveAppUplinkStaleMs,
   isLastDbIngestStale,
 };
