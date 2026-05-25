@@ -43,6 +43,7 @@ test('shouldSkipTelemetryInsert: join duplicado', () => {
   });
   assert.equal(r.skip, true);
   assert.equal(r.reason, 'join_duplicate');
+  assert.equal(r.refreshLastSeen, true);
 });
 
 test('isJoinOnlyProperties', () => {

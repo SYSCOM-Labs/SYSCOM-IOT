@@ -816,6 +816,7 @@ body.theme-dark .device-table tbody tr.row-active {
 }
 
 .status-dot.online { background: var(--success); box-shadow: 0 0 8px var(--success); }
+.status-dot.join-pending { background: #f59e0b; box-shadow: 0 0 8px rgba(245, 158, 11, 0.45); }
 .status-dot.offline { background: var(--danger); }
 
 .battery-cell {
@@ -1414,6 +1415,11 @@ body.theme-dark .device-list-page--premium .device-table tbody tr.row-active {
   font-weight: 600;
   color: #e4e4e7;
   box-shadow: 0 0 14px rgba(99, 102, 241, 0.1);
+}
+
+.device-list-page--premium .status-dot.join-pending {
+  background: #f59e0b;
+  box-shadow: 0 0 10px rgba(245, 158, 11, 0.5);
 }
 
 .device-list-page--premium .status-dot.online {

@@ -139,7 +139,7 @@ function shouldSkipTelemetryInsert(store, userId, deviceId, properties) {
   if (isJoinOnlyProperties(prepared)) {
     const joinDedupMs = envMs('SYSCOM_TELEMETRY_JOIN_DEDUP_MS', 120_000);
     if (ageMs < joinDedupMs && isJoinOnlyProperties(prevProps)) {
-      return { skip: true, reason: 'join_duplicate', prepared };
+      return { skip: true, reason: 'join_duplicate', prepared, refreshLastSeen: true };
     }
     return { skip: false, prepared };
   }

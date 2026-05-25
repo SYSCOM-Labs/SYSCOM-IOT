@@ -49,7 +49,11 @@ import {
   getDownlinkSendOptionsForDevice,
 } from '../services/deviceTemplates';
 import { getLatestDeviceData, getUsers } from '../services/localAuth';
-import { applyStaleOfflineConnectStatus, isDeviceVisuallyOnline } from '../utils/deviceConnectionStatus';
+import {
+  applyStaleOfflineConnectStatus,
+  isDeviceJoinPendingOnly,
+  isDeviceVisuallyOnline,
+} from '../utils/deviceConnectionStatus';
 import { pushAppActivityLog } from '../utils/appActivityLog';
 import { SYSCOM_REALTIME_TELEMETRY } from '../constants/realtimeEvents';
 import { collectDeviceBsdBundle, deviceBsdBundleIsEmpty } from '../utils/deviceBsdPreferencesBundle';
@@ -220,9 +224,10 @@ function mergeDeviceRowWithLatestTelemetry(dev, localUpdate) {
   const p = localUpdate.properties;
   let connectStatus = p.connectStatus || p.status || dev.connectStatus;
   const ev = p.lorawan_event != null ? String(p.lorawan_event).trim() : '';
-  if (ev && /join/i.test(ev)) {
-    connectStatus = 'ONLINE';
-  } else if (!connectStatus && (p.payload_hex || p.fPort != null)) {
+  const hex = p.payload_hex != null ? String(p.payload_hex).trim() : '';
+  if (ev && /join/i.test(ev) && !hex) {
+    connectStatus = 'JOIN_PENDING';
+  } else if (!connectStatus && (hex || p.fPort != null)) {
     connectStatus = 'ONLINE';
   }
   const merged = {
@@ -943,6 +948,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
             )}
             {deviceListPagination.paginatedDevices.map((device) => {
               const lic = licenseExpiryDisplay(device);
+              const joinPendingOnly = isDeviceJoinPendingOnly(device);
               const visuallyOnline = isDeviceVisuallyOnline(device);
               const power = formatDevicePowerCell(device);
               return (
@@ -965,9 +971,20 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                   </span>
                 </td>
                 <td>
-                  <div className="status-cell">
-                    <span className={`status-dot ${visuallyOnline ? 'online' : 'offline'}`}></span>
-                    {visuallyOnline ? t('devices.online') : t('devices.offline')}
+                  <div
+                    className="status-cell"
+                    title={device.ingestStatus || (joinPendingOnly ? t('devices.join_pending_hint') : undefined)}
+                  >
+                    <span
+                      className={`status-dot ${
+                        visuallyOnline ? 'online' : joinPendingOnly ? 'join-pending' : 'offline'
+                      }`}
+                    ></span>
+                    {visuallyOnline
+                      ? t('devices.online')
+                      : joinPendingOnly
+                        ? t('devices.join_pending')
+                        : t('devices.offline')}
                   </div>
                 </td>
                 <td>

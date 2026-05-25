@@ -786,6 +786,9 @@ class Store {
         WHERE user_id = ? AND device_id = ?
         ORDER BY ts DESC, id DESC LIMIT 1
       `),
+      updateTelemetryTs: prepareBare(this.db, `
+        UPDATE telemetry SET ts = @ts WHERE id = @id
+      `),
       labelsForUser: this.db.prepare('SELECT * FROM device_labels WHERE user_id = ?'),
       upsertLabel: this.db.prepare(`
         INSERT INTO device_labels (user_id, device_id, display_name) VALUES (?, ?, ?)
@@ -1597,6 +1600,42 @@ class Store {
     return this._emitTelemetryRealtimeHooks(userId, did, deviceName, properties, tss);
   }
 
+  /**
+   * Actualiza `ts` de la última fila (p. ej. join LoRaWAN duplicado: misma carga, nueva actividad en radio).
+   * @returns {boolean} false si no hay fila previa.
+   */
+  touchLastTelemetryTimestamp(userId, deviceId, deviceName, properties, ts) {
+    const uid = String(userId);
+    const did = String(deviceId);
+    const row = this.st.latestForDevice.get(uid, did);
+    if (!row) return false;
+    const tss = ts || Date.now();
+    this.st.updateTelemetryTs.run({ id: row.id, ts: tss });
+    const affected = new Set([uid]);
+    const peers = this.st.udUserIdsForDevice.all(did);
+    for (const p of peers) {
+      const peerUid = String(p.user_id);
+      if (peerUid === uid || affected.has(peerUid)) continue;
+      const peerRow = this.st.latestForDevice.get(peerUid, did);
+      if (peerRow) {
+        this.st.updateTelemetryTs.run({ id: peerRow.id, ts: tss });
+        affected.add(peerUid);
+      }
+    }
+    if (this.deviceInSuperadminPool(did, userId)) {
+      for (const sid of this.listSuperadminUserIds()) {
+        if (affected.has(sid)) continue;
+        const peerRow = this.st.latestForDevice.get(sid, did);
+        if (peerRow) {
+          this.st.updateTelemetryTs.run({ id: peerRow.id, ts: tss });
+          affected.add(sid);
+        }
+      }
+    }
+    this._emitTelemetryRealtimeHooks(uid, did, deviceName, properties, tss);
+    return true;
+  }
+
   setRetentionMs(ms) {
     this.retentionMs = ms;
   }
@@ -1617,12 +1656,17 @@ class Store {
     return this.st.telemetryRecentForUser.all(userId, since, lim).map(rowToTelemetryRow);
   }
 
+  /** Última fila en BD sin fusionar historial (evita recursión con getMergedLatestTelemetryForDevice). */
+  _getLatestRowDirect(userId, deviceId) {
+    const row = this.st.latestForDevice.get(String(userId), String(deviceId));
+    return row ? rowToTelemetryRow(row) : null;
+  }
+
   getLatestForDevice(userId, deviceId) {
     const did = String(deviceId);
     const merged = this.getMergedLatestTelemetryForDevice(userId, did, { historyRowLimit: 12 });
     if (merged) return merged;
-    const row = this.st.latestForDevice.get(userId, did);
-    return row ? rowToTelemetryRow(row) : null;
+    return this._getLatestRowDirect(userId, did);
   }
 
   /**
@@ -1705,10 +1749,10 @@ class Store {
     );
     const endMs = Date.now();
     const rows = this.st.telemetryHistory.all(uid, did, 0, endMs, rowLimit);
-    if (!rows.length) return this.getLatestForDevice(uid, did);
+    if (!rows.length) return this._getLatestRowDirect(uid, did);
 
     const merged = this._mergeTelemetryHistoryRows(rows);
-    if (!merged) return this.getLatestForDevice(uid, did);
+    if (!merged) return this._getLatestRowDirect(uid, did);
 
     const { top, mergedFlat, timestamp } = merged;
     return {

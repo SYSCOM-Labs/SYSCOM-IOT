@@ -2,6 +2,7 @@ import {
   DEVICE_STALE_OFFLINE_MS,
   isLastDbIngestStaleForDisplay,
 } from '../constants/commsStaleOfflineMs';
+import { isJoinOnlyDeviceRow } from './joinOnlyTelemetry';
 
 export { DEVICE_STALE_OFFLINE_MS };
 
@@ -24,10 +25,23 @@ export function applyStaleOfflineConnectStatus(device) {
 }
 
 /**
- * En línea si hay ingesta reciente en BD y el payload no dice explícitamente lo contrario.
- * Los uplinks LoRaWAN a menudo omiten `connectStatus`; antes eso marcaba «offline» pese a telemetría cada minuto.
+ * Join OTAA reciente en BD pero sin uplink de aplicación (p. ej. UC300 en bucle de re-join).
+ * No equivale a «en línea» operativo ni a telemetría cada 1 min.
+ */
+export function isDeviceJoinPendingOnly(device) {
+  const d = applyStaleOfflineConnectStatus(device);
+  const ms = lastSeenMsFromDevice(d);
+  if (ms == null) return false;
+  if (isLastDbIngestStaleForDisplay(ms)) return false;
+  return isJoinOnlyDeviceRow(d);
+}
+
+/**
+ * En línea si hay ingesta reciente en BD con telemetría de aplicación (o estado explícito online).
+ * Los joins LoRaWAN solos no cuentan como en línea (ToolBox puede seguir en De-Activate).
  */
 export function isDeviceVisuallyOnline(device) {
+  if (isDeviceJoinPendingOnly(device)) return false;
   const d = applyStaleOfflineConnectStatus(device);
   const ms = lastSeenMsFromDevice(d);
   if (ms == null) return false;
@@ -42,6 +56,8 @@ export function isDeviceVisuallyOnline(device) {
   if (u === 'OFFLINE' || u === 'DISCONNECTED' || u === 'FALSE' || u === '0' || u.includes('SIN TELEMET')) {
     return false;
   }
+
+  if (u === 'JOIN_PENDING' || u === 'JOIN PENDING') return false;
 
   if (u === 'JOINED' || u === 'CONNECTED' || u === 'ONLINE' || u === 'TRUE' || u === '1') {
     return true;

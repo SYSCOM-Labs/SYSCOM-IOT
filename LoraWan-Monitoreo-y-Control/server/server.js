@@ -619,6 +619,11 @@ function inferFreshOnlineConnectStatus(row, telemetryRow) {
   const ts = Number(telemetryRow.timestamp);
   if (!Number.isFinite(ts)) return;
   if (isLastDbIngestStale(ts, Date.now(), COMMS_STALE_OFFLINE_MS)) return;
+  const p = telemetryRow.properties || {};
+  if (joinOnlyTelemetryHint(p)) {
+    row.connectStatus = 'JOIN_PENDING';
+    return;
+  }
   const cs = row.connectStatus != null ? String(row.connectStatus).trim() : '';
   const csU = cs.toUpperCase();
   if (csU === 'JOINED' || csU === 'CONNECTED') {
@@ -1219,12 +1224,22 @@ function saveIngestEntry(userId, data) {
   const persistCheck = shouldSkipTelemetryInsert(store, userId, canonicalDeviceId, properties);
   if (persistCheck.skip) {
     metrics.inc('telemetry_duplicate_skipped');
+    const tsDedup = Date.now();
+    Object.assign(properties, persistCheck.prepared);
+    properties.deviceId = canonicalDeviceId;
+    properties.deviceName = normalizedDeviceName;
+    if (persistCheck.refreshLastSeen) {
+      store.touchLastTelemetryTimestamp(
+        userId,
+        canonicalDeviceId,
+        normalizedDeviceName,
+        properties,
+        tsDedup
+      );
+      invalidateDevicesLatestCache();
+    }
     const sseOnDedup = String(process.env.SYSCOM_TELEMETRY_SSE_ON_DEDUP || '1').trim() !== '0';
-    if (sseOnDedup && !isJoinOnlyProperties(persistCheck.prepared)) {
-      const tsDedup = Date.now();
-      Object.assign(properties, persistCheck.prepared);
-      properties.deviceId = canonicalDeviceId;
-      properties.deviceName = normalizedDeviceName;
+    if (sseOnDedup && (persistCheck.refreshLastSeen || !isJoinOnlyProperties(persistCheck.prepared))) {
       store.broadcastTelemetryRealtime(
         userId,
         canonicalDeviceId,
@@ -1254,6 +1269,7 @@ function saveIngestEntry(userId, data) {
 
   const ts = Date.now();
   store.appendTelemetry(userId, canonicalDeviceId, normalizedDeviceName, properties, ts);
+  invalidateDevicesLatestCache();
   metrics.inc('telemetry_saved');
   console.log(`[Ingest] user=${userId} device=${canonicalDeviceId} (raw=${rawDeviceId})`);
   return { ok: true, saved: true, deviceId: canonicalDeviceId };
