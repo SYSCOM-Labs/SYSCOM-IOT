@@ -10,6 +10,7 @@ import {
   Zap,
   Image as ImageIcon,
   Pencil,
+  Copy,
   Plus,
   LayoutGrid,
   MapPin,
@@ -79,10 +80,8 @@ import {
 import { pushAppActivityLog } from '../../utils/appActivityLog';
 import WidgetEditModal from './WidgetEditModal';
 import BsdWindVaneWidget from './BsdWindVaneWidget';
-import BsdRealisticSwitch from './BsdRealisticSwitch';
-import { usePersistentSwitchState } from './usePersistentSwitchState';
-import { useSwitchAutomationSync } from './useSwitchAutomationSync';
-import { pickSwitchDownlinkHexForToggle } from './switchDownlinkBinding';
+import BsdSwitchWidgetSlot from './BsdSwitchWidgetSlot';
+import BsdDownlinkWidgetSlot from './BsdDownlinkWidgetSlot';
 import { computeVeletaWidgetUiForSlot, resolveWindDirectionScalar } from './windVaneUi';
 import CenteredAlertModal from '../CenteredAlertModal';
 import ValueIndicator from './ValueIndicator';
@@ -128,6 +127,8 @@ import {
   MULTI_INSTANCE_DASH_WIDGETS,
   dashboardWidgetBaseId,
   makeDashboardWidgetCloneId,
+  listDashboardWidgetSlotIds,
+  cloneWidgetConfigBetweenKeys,
   isDashboardMultiLayoutSlotId,
 } from './widgetConfigUtils';
 import {
@@ -146,6 +147,7 @@ import {
   computeMetricCircularUiForSlot,
   computeContainerTankUi,
   computeBatteryLevelUi,
+  computeSatisfactionRingUi,
 } from './metricCircularUi';
 import BsdContainerTankView from './BsdContainerTankView';
 import BsdBatteryLevelView from './BsdBatteryLevelView';
@@ -2566,7 +2568,6 @@ export default function BudgetSensorsDashboard({
     [telemetryHintMap]
   );
   const [downlinkList, setDownlinkList] = useState([]);
-  const [switchProcessing, setSwitchProcessing] = useState(false);
   /** HEX normalizados en envío; ref + tick para re-render sin bloquear otros botones. */
   const downlinkSendingHexRef = useRef(new Set());
   const [downlinkSendingVersion, setDownlinkSendingVersion] = useState(0);
@@ -3760,93 +3761,66 @@ export default function BudgetSensorsDashboard({
     return () => window.removeEventListener(SYSCOM_REALTIME_LNS, onLns);
   }, []);
 
-  /** Circular (porcentaje): anillo y texto desde telemetría si hay campo configurado (no __bsd_*). */
-  const satisfactionUi = useMemo(() => {
-    const key = dk(DASH_WIDGET.SATISFACTION);
-    const cfg = widgetConfigs[key];
-    const min = Number(cfg?.gauge?.scaleMin);
-    const max = Number(cfg?.gauge?.scaleMax);
-    const scaleLo = Number.isFinite(min) ? min : 0;
-    const scaleHi = Number.isFinite(max) && max > scaleLo ? max : scaleLo + 100;
-    const gaugeRanges = Array.isArray(cfg?.gauge?.ranges) ? cfg.gauge.ranges : [];
-    const inverseFill = Boolean(cfg?.gauge?.inverseFill);
+  const dashWidgetSlotIds = useCallback(
+    (baseId) => listDashboardWidgetSlotIds(visibilityMap, gridLayout, baseId),
+    [visibilityMap, gridLayout]
+  );
 
-    const fkRaw = cfg?.data?.fieldKey;
-    const fkStr = fkRaw != null ? String(fkRaw).trim() : '';
-    const readFk = telemetryFieldKeyForFormula(cfg, fkStr);
-    const telProps = telemetryLivePropsForPanelWidget(DASH_WIDGET.SATISFACTION);
-    const rawScalar =
-      telProps && typeof telProps === 'object' && !Array.isArray(telProps)
-        ? resolveTelemetryDisplaySource(telProps, readFk)
-        : undefined;
-    const useLive = Boolean(readFk) && !readFk.startsWith('__bsd_') && rawScalar !== undefined;
-    const nParsed = useLive ? parseNumeric(rawScalar) : null;
-    const n = transformWidgetNumeric(cfg, nParsed);
-    const formulaActive =
-      Boolean(cfg?.data?.formulaEnabled) && String(cfg?.data?.formulaExpression ?? '').trim() !== '';
-    const lastAtLine = formatLastTelemetryUpdateLine(telProps?.lastUpdateTime);
+  const textDashSlotIds = useMemo(
+    () => dashWidgetSlotIds(DASH_WIDGET.TEXT),
+    [dashWidgetSlotIds]
+  );
 
-    if (n !== null && Number.isFinite(n)) {
-      const decRaw = cfg?.data?.decimals;
-      const dec =
-        decRaw != null && decRaw !== '' && Number.isFinite(Number(decRaw))
-          ? Math.min(20, Math.max(0, Number(decRaw)))
-          : 2;
-      const unit = cfg?.data?.unit != null ? String(cfg.data.unit) : '';
-      const t = Math.min(1, Math.max(0, gaugeFillProgressT(n, scaleLo, scaleHi, inverseFill)));
-      const pct = Math.round(t * 100);
-      const rawLive = useLive ? rawScalar : undefined;
-      const rowModel = resolveLiveDeviceModelForPanelWidget(DASH_WIDGET.SATISFACTION);
-      const rowHints = resolveTelemetryHintsForPanelWidget(DASH_WIDGET.SATISFACTION);
-      const friendly =
-        !formulaActive && useLive && rawLive !== undefined
-          ? tryTelemetryDisplayLabel(rowModel, fkStr, rawLive, rowHints)
-          : null;
-      const label = friendly || `${n.toFixed(dec)}${unit ? ` ${unit}` : ''}`.trim();
-      return {
-        ringPct: pct,
-        centerLabel: label,
-        usesLiveField: true,
-        rawValue: n,
-        scaleMin: scaleLo,
-        scaleMax: scaleHi,
-        ranges: gaugeRanges,
-        lastAtLine,
-      };
+  const veletaDashSlotIds = useMemo(
+    () => dashWidgetSlotIds(DASH_WIDGET.VEleta),
+    [dashWidgetSlotIds]
+  );
+
+  const metricCircularDashSlotIds = useMemo(
+    () => dashWidgetSlotIds(DASH_WIDGET.METRIC_CIRCULAR),
+    [dashWidgetSlotIds]
+  );
+
+  const satisfactionUiBySlot = useMemo(() => {
+    const out = {};
+    for (const slotId of dashWidgetSlotIds(DASH_WIDGET.SATISFACTION)) {
+      const cfg = widgetConfigs[dk(slotId)];
+      let ui = computeSatisfactionRingUi(
+        cfg,
+        telemetryLivePropsForPanelWidget(slotId),
+        resolveLiveDeviceModelForPanelWidget(slotId),
+        resolveTelemetryHintsForPanelWidget(slotId)
+      );
+      if (ui.rawValue == null && slotId === DASH_WIDGET.SATISFACTION) {
+        const fallback = satisfactionPct;
+        ui = { ...ui, ringPct: fallback, centerLabel: `${fallback}%` };
+      }
+      out[slotId] = ui;
     }
-
-    const fallback = satisfactionPct;
-    return {
-      ringPct: fallback,
-      centerLabel: `${fallback}%`,
-      usesLiveField: false,
-      rawValue: null,
-      scaleMin: scaleLo,
-      scaleMax: scaleHi,
-      ranges: gaugeRanges,
-      lastAtLine,
-    };
+    return out;
   }, [
+    dashWidgetSlotIds,
     widgetConfigs,
-    variant,
+    dk,
     satisfactionPct,
-    dk,
     telemetryLivePropsForPanelWidget,
     resolveLiveDeviceModelForPanelWidget,
     resolveTelemetryHintsForPanelWidget,
   ]);
 
-  /** Contenedor (tanque): misma lógica de escala / telemetría / fórmula que Circular. */
-  const containerUi = useMemo(() => {
-    const key = dk(DASH_WIDGET.CONTAINER);
-    const cfg = widgetConfigs[key];
-    return computeContainerTankUi(
-      cfg,
-      telemetryLivePropsForPanelWidget(DASH_WIDGET.CONTAINER),
-      resolveLiveDeviceModelForPanelWidget(DASH_WIDGET.CONTAINER),
-      resolveTelemetryHintsForPanelWidget(DASH_WIDGET.CONTAINER)
-    );
+  const containerUiBySlot = useMemo(() => {
+    const out = {};
+    for (const slotId of dashWidgetSlotIds(DASH_WIDGET.CONTAINER)) {
+      out[slotId] = computeContainerTankUi(
+        widgetConfigs[dk(slotId)],
+        telemetryLivePropsForPanelWidget(slotId),
+        resolveLiveDeviceModelForPanelWidget(slotId),
+        resolveTelemetryHintsForPanelWidget(slotId)
+      );
+    }
+    return out;
   }, [
+    dashWidgetSlotIds,
     widgetConfigs,
     dk,
     telemetryLivePropsForPanelWidget,
@@ -3854,17 +3828,19 @@ export default function BudgetSensorsDashboard({
     resolveTelemetryHintsForPanelWidget,
   ]);
 
-  /** Nivel Batería (pila): misma lógica de escala / telemetría / fórmula que Circular. */
-  const batteryLevelUi = useMemo(() => {
-    const key = dk(DASH_WIDGET.BATTERY_LEVEL);
-    const cfg = widgetConfigs[key];
-    return computeBatteryLevelUi(
-      cfg,
-      telemetryLivePropsForPanelWidget(DASH_WIDGET.BATTERY_LEVEL),
-      resolveLiveDeviceModelForPanelWidget(DASH_WIDGET.BATTERY_LEVEL),
-      resolveTelemetryHintsForPanelWidget(DASH_WIDGET.BATTERY_LEVEL)
-    );
+  const batteryLevelUiBySlot = useMemo(() => {
+    const out = {};
+    for (const slotId of dashWidgetSlotIds(DASH_WIDGET.BATTERY_LEVEL)) {
+      out[slotId] = computeBatteryLevelUi(
+        widgetConfigs[dk(slotId)],
+        telemetryLivePropsForPanelWidget(slotId),
+        resolveLiveDeviceModelForPanelWidget(slotId),
+        resolveTelemetryHintsForPanelWidget(slotId)
+      );
+    }
+    return out;
   }, [
+    dashWidgetSlotIds,
     widgetConfigs,
     dk,
     telemetryLivePropsForPanelWidget,
@@ -3872,26 +3848,43 @@ export default function BudgetSensorsDashboard({
     resolveTelemetryHintsForPanelWidget,
   ]);
 
-  const textDashSlotIds = useMemo(() => {
-    if (visibilityMap[DASH_WIDGET.TEXT] === false) return [];
-    return (gridLayout || [])
-      .map((it) => String(it.i))
-      .filter((id) => dashboardWidgetBaseId(id) === DASH_WIDGET.TEXT);
-  }, [gridLayout, visibilityMap]);
+  const imageUrlBySlot = useMemo(() => {
+    const out = {};
+    for (const slotId of dashWidgetSlotIds(DASH_WIDGET.IMAGE)) {
+      out[slotId] = resolveImageDisplayUrl(
+        telemetryLivePropsForPanelWidget(slotId),
+        widgetConfigs[dk(slotId)]
+      );
+    }
+    return out;
+  }, [dashWidgetSlotIds, telemetryLivePropsForPanelWidget, widgetConfigs, dk]);
 
-  const veletaDashSlotIds = useMemo(() => {
-    if (visibilityMap[DASH_WIDGET.VEleta] === false) return [];
-    return (gridLayout || [])
-      .map((it) => String(it.i))
-      .filter((id) => dashboardWidgetBaseId(id) === DASH_WIDGET.VEleta);
-  }, [gridLayout, visibilityMap]);
+  const mapCoordsBySlot = useMemo(() => {
+    const out = {};
+    for (const slotId of dashWidgetSlotIds(DASH_WIDGET.MAP)) {
+      out[slotId] = resolveMapCoords(
+        telemetryLivePropsForPanelWidget(slotId),
+        widgetConfigs[dk(slotId)]
+      );
+    }
+    return out;
+  }, [dashWidgetSlotIds, telemetryLivePropsForPanelWidget, widgetConfigs, dk]);
 
-  const metricCircularDashSlotIds = useMemo(() => {
-    if (visibilityMap[DASH_WIDGET.METRIC_CIRCULAR] === false) return [];
-    return (gridLayout || [])
-      .map((it) => String(it.i))
-      .filter((id) => dashboardWidgetBaseId(id) === DASH_WIDGET.METRIC_CIRCULAR);
-  }, [gridLayout, visibilityMap]);
+  const mapBaseLayerBySlot = useMemo(() => {
+    const out = {};
+    for (const slotId of dashWidgetSlotIds(DASH_WIDGET.MAP)) {
+      out[slotId] = normalizeMapBaseLayerId(widgetConfigs[dk(slotId)]?.data?.mapBaseLayer);
+    }
+    return out;
+  }, [dashWidgetSlotIds, widgetConfigs, dk]);
+
+  const trackingMapBaseLayerBySlot = useMemo(() => {
+    const out = {};
+    for (const slotId of dashWidgetSlotIds(DASH_WIDGET.TRACKING_MAP)) {
+      out[slotId] = normalizeMapBaseLayerId(widgetConfigs[dk(slotId)]?.data?.mapBaseLayer);
+    }
+    return out;
+  }, [dashWidgetSlotIds, widgetConfigs, dk]);
 
   const enrichTelemetryForValueWidget = useCallback(
     (baseTel, wid) => {
@@ -4131,33 +4124,6 @@ export default function BudgetSensorsDashboard({
   }, [barWidgetSlice, telemetryLivePropsForPanelWidget, barChartWidgetCfgMerged]);
 
   barWidgetTelSnapshotRef.current = telemetryLivePropsForPanelWidget(DASH_WIDGET.BAR_CHART);
-
-  const satisfactionArcStroke = useMemo(() => {
-    const lo = satisfactionUi.scaleMin;
-    const hi = satisfactionUi.scaleMax;
-    const cfg = widgetConfigs[dk(DASH_WIDGET.SATISFACTION)];
-    const val = resolveGaugeColorLookupValue(cfg, satisfactionUi);
-    return colorForValueInRanges(val, satisfactionUi.ranges, lo, hi) || `url(#bsd-circ-grad-${gradId})`;
-  }, [satisfactionUi, gradId, widgetConfigs, dk]);
-
-  const satisfactionArcDashOffset =
-    BSD_CIRCULAR_GAUGE_LEN - (satisfactionUi.ringPct / 100) * BSD_CIRCULAR_GAUGE_LEN;
-
-  const containerLiquidColor = useMemo(() => {
-    const lo = containerUi.scaleMin;
-    const hi = containerUi.scaleMax;
-    const cfg = widgetConfigs[dk(DASH_WIDGET.CONTAINER)];
-    const val = resolveGaugeColorLookupValue(cfg, containerUi);
-    return colorForValueInRanges(val, containerUi.ranges, lo, hi) || '#22c55e';
-  }, [containerUi, widgetConfigs, dk]);
-
-  const batteryFillColor = useMemo(() => {
-    const lo = batteryLevelUi.scaleMin;
-    const hi = batteryLevelUi.scaleMax;
-    const cfg = widgetConfigs[dk(DASH_WIDGET.BATTERY_LEVEL)];
-    const val = resolveGaugeColorLookupValue(cfg, batteryLevelUi);
-    return colorForValueInRanges(val, batteryLevelUi.ranges, lo, hi) || '#f97316';
-  }, [batteryLevelUi, widgetConfigs, dk]);
 
   useLayoutEffect(() => {
     if (visibilityMap[DASH_WIDGET.STREAM] === false) {
@@ -5452,10 +5418,10 @@ export default function BudgetSensorsDashboard({
     });
   };
 
-  const applyStreamTimePreset = useCallback((presetId) => {
+  const applyStreamTimePreset = useCallback((slotId, presetId) => {
     const id = STREAM_PRESET_IDS.has(presetId) ? presetId : 'live';
     setStreamTimePreset(id);
-    const k = dk(DASH_WIDGET.STREAM);
+    const k = dk(slotId);
     const prev = widgetConfigsRef.current[k];
     const draft = mergeWidgetConfig(dashboardWidgetSensorStub(DASH_WIDGET.STREAM), prev || {});
     draft.data = { ...draft.data, historyRangePreset: id };
@@ -5464,8 +5430,8 @@ export default function BudgetSensorsDashboard({
     setWidgetConfigs(loadAllWidgetConfigs());
   }, [dk]);
 
-  const applyBarChartGranularity = useCallback((gran) => {
-    const k = dk(DASH_WIDGET.BAR_CHART);
+  const applyBarChartGranularity = useCallback((slotId, gran) => {
+    const k = dk(slotId);
     const prev = widgetConfigs[k];
     const draft = mergeWidgetConfig(dashboardWidgetSensorStub(DASH_WIDGET.BAR_CHART), prev);
     if (gran) applyHistoryGranularityPreset(draft, gran);
@@ -5483,8 +5449,8 @@ export default function BudgetSensorsDashboard({
   }, [variant, widgetConfigs, dk]);
 
   const applyTrackingTimeRange = useCallback(
-    (range) => {
-      const k = dk(DASH_WIDGET.TRACKING_MAP);
+    (slotId, range) => {
+      const k = dk(slotId);
       const prev = widgetConfigs[k];
       const draft = mergeWidgetConfig(dashboardWidgetSensorStub(DASH_WIDGET.TRACKING_MAP), prev);
       draft.data = { ...draft.data, trackingTimeRange: range };
@@ -5651,39 +5617,6 @@ export default function BudgetSensorsDashboard({
     [variant, dashDeviceId, ensureGridSlotForWidget, panelInstanceId, panelOwnerSegment]
   );
 
-  const dashWidgetChrome = (wid, onEditClick) => (
-    <div className="bsd-widget-actions">
-      <button type="button" className="bsd-widget-edit-btn" onClick={onEditClick} aria-label="Editar widget">
-        <Pencil size={16} />
-      </button>
-      <button
-        type="button"
-        className="bsd-widget-remove-btn"
-        onClick={(e) => {
-          e.stopPropagation();
-          removeDashWidget(wid);
-        }}
-        aria-label="Quitar widget del tablero"
-      >
-        <Trash2 size={16} />
-      </button>
-    </div>
-  );
-
-  const switchTargetDeviceId =
-    variant === 'device' && device?.deviceId
-      ? String(device.deviceId)
-      : variant === 'panel'
-        ? resolveWidgetBoundDeviceId(DASH_WIDGET.SWITCH)
-        : controlDeviceId;
-
-  const downlinkWidgetTargetDeviceId =
-    variant === 'device' && device?.deviceId
-      ? String(device.deviceId)
-      : variant === 'panel'
-        ? resolveWidgetBoundDeviceId(DASH_WIDGET.DOWNLINK)
-        : controlDeviceId;
-
   const resolvePanelDeviceModel = useCallback(
     (devId) => {
       if (!devId) return '';
@@ -5691,113 +5624,6 @@ export default function BudgetSensorsDashboard({
       return dev?.model || dev?.productModel || '';
     },
     [panelDevices]
-  );
-
-  const switchWidgetDownlinkList = useMemo(() => {
-    if (variant !== 'panel') return downlinkList;
-    const id = switchTargetDeviceId;
-    if (!id) return [];
-    return loadDownlinksFromStorage(id, resolvePanelDeviceModel(id));
-  }, [variant, downlinkList, switchTargetDeviceId, resolvePanelDeviceModel]);
-
-  const downlinkWidgetDownlinkList = useMemo(() => {
-    if (variant !== 'panel') return downlinkList;
-    const id = downlinkWidgetTargetDeviceId;
-    if (!id) return [];
-    return loadDownlinksFromStorage(id, resolvePanelDeviceModel(id));
-  }, [variant, downlinkList, downlinkWidgetTargetDeviceId, resolvePanelDeviceModel]);
-
-  const switchTelemetryForToggle = useMemo(() => {
-    const raw =
-      variant === 'panel' ? telemetryLivePropsForPanelWidget(DASH_WIDGET.SWITCH) : liveProps;
-    return expandMergedDeviceTelemetryLive(raw);
-  }, [variant, liveProps, telemetryLivePropsForPanelWidget]);
-
-  const switchTelemetryFieldCfg = widgetConfigs[dk(DASH_WIDGET.SWITCH)]?.data?.switchTelemetryField;
-  const switchTelemetryField =
-    typeof switchTelemetryFieldCfg === 'string' ? switchTelemetryFieldCfg.trim() : '';
-
-  const switchWidgetData = widgetConfigs[dk(DASH_WIDGET.SWITCH)]?.data;
-
-  const { isOn: switchOn, setManualSwitchState, setAutomationSwitchState } = usePersistentSwitchState({
-    telemetry: switchTelemetryForToggle,
-    preferredFieldKey: switchTelemetryField,
-    deviceId: switchTargetDeviceId,
-  });
-
-  useSwitchAutomationSync({
-    switchTargetDeviceId,
-    switchWidgetData,
-    switchWidgetDownlinkList,
-    setAutomationSwitchState,
-  });
-
-  const imageUrl = useMemo(
-    () =>
-      resolveImageDisplayUrl(
-        telemetryLivePropsForPanelWidget(DASH_WIDGET.IMAGE),
-        widgetConfigs[dk(DASH_WIDGET.IMAGE)]
-      ),
-    [telemetryLivePropsForPanelWidget, widgetConfigs, dk]
-  );
-  const mapCoords = useMemo(
-    () =>
-      resolveMapCoords(
-        telemetryLivePropsForPanelWidget(DASH_WIDGET.MAP),
-        widgetConfigs[dk(DASH_WIDGET.MAP)]
-      ),
-    [telemetryLivePropsForPanelWidget, widgetConfigs, dk]
-  );
-
-  const mapBaseLayerId = useMemo(
-    () => normalizeMapBaseLayerId(widgetConfigs[dk(DASH_WIDGET.MAP)]?.data?.mapBaseLayer),
-    [widgetConfigs, dk]
-  );
-
-  const trackingMapBaseLayerId = useMemo(
-    () => normalizeMapBaseLayerId(widgetConfigs[dk(DASH_WIDGET.TRACKING_MAP)]?.data?.mapBaseLayer),
-    [widgetConfigs, dk]
-  );
-
-  /** Botones del widget Downlink: filas con HEX válido → etiqueta opcional o nombre del comando. */
-  const panelDownlinkActions = useMemo(() => {
-    const cfgData = widgetConfigs[dk(DASH_WIDGET.DOWNLINK)]?.data || {};
-    const ensured = ensureDownlinkButtonsDraft(cfgData);
-    const fromRows = (ensured.downlinkButtons || [])
-      .map((r) => {
-        const n = normalizeDownlinkHex(r.hex);
-        if (!n) return null;
-        const hit = downlinkWidgetDownlinkList.find((d) => normalizeDownlinkHex(d.hex) === n);
-        if (!hit) return null;
-        const label =
-          String(r.label || '').trim() || String(hit.name || '').trim() || 'Enviar';
-        const buttonColor = parseCssHex(r.buttonColor) || '';
-        return { hex: hit.hex, label, buttonColor };
-      })
-      .filter(Boolean);
-    if (fromRows.length) return fromRows;
-    const legacy = normalizeDownlinkHex(cfgData.downlinkDefaultHex);
-    if (legacy) {
-      const hit = downlinkWidgetDownlinkList.find((d) => normalizeDownlinkHex(d.hex) === legacy);
-      if (hit) {
-        return [{ hex: hit.hex, label: String(hit.name || '').trim() || 'Enviar comando', buttonColor: '' }];
-      }
-    }
-    if (downlinkWidgetDownlinkList[0]) {
-      return [
-        {
-          hex: downlinkWidgetDownlinkList[0].hex,
-          label: String(downlinkWidgetDownlinkList[0].name || '').trim() || 'Enviar comando',
-          buttonColor: '',
-        },
-      ];
-    }
-    return [];
-  }, [downlinkWidgetDownlinkList, widgetConfigs, dk, variant]);
-
-  const downlinkWidgetTitleColor = useMemo(
-    () => widgetConfigs[dk(DASH_WIDGET.DOWNLINK)]?.appearance?.titleColor || '#f97316',
-    [widgetConfigs, dk, variant]
   );
 
   const availableDataFields = useMemo(() => {
@@ -5939,102 +5765,6 @@ export default function BudgetSensorsDashboard({
     [sensors, hiddenSensorCardKeys]
   );
 
-  const handleSwitchClick = useCallback(async () => {
-    if (!canSendLnsCommands || !switchTargetDeviceId || switchProcessing) return;
-    const dls = switchWidgetDownlinkList;
-    if (dls.length === 0) {
-      window.alert('No hay downlinks guardados. Configúralos en Dispositivos → acciones → Downlink.');
-      return;
-    }
-    const hex = pickSwitchDownlinkHexForToggle(switchOn, switchWidgetData, dls);
-    if (!hex) {
-      window.alert('Configura los downlinks ON y OFF del widget Switch.');
-      return;
-    }
-    const switchRow =
-      variant === 'device' && device
-        ? device
-        : (panelDevicesRef.current || []).find((d) => String(d.deviceId) === String(switchTargetDeviceId));
-    const dlOpts = getDownlinkSendOptionsForDevice(switchTargetDeviceId, switchRow);
-    const previousOn = switchOn;
-    const targetOn = !switchOn;
-    setManualSwitchState(targetOn);
-    setSwitchProcessing(true);
-    try {
-      await sendDownlink(switchTargetDeviceId, hex, credentials, token, dlOpts);
-    } catch (err) {
-      setManualSwitchState(previousOn);
-      const code = err.response?.data?.code;
-      const st = err.response?.status;
-      pushAppActivityLog({
-        level: 'warn',
-        tag: 'Downlink',
-        message: `Intento switch · ${switchTargetDeviceId}${code ? ` · ${code}` : st ? ` · HTTP ${st}` : ''}`,
-        detail: err.response?.data?.errMsg || err.response?.data?.error || err.message,
-      });
-      window.alert(downlinkErrorMessage(err));
-    } finally {
-      setSwitchProcessing(false);
-    }
-  }, [
-    canSendLnsCommands,
-    switchTargetDeviceId,
-    switchProcessing,
-    switchWidgetDownlinkList,
-    switchOn,
-    setManualSwitchState,
-    credentials,
-    token,
-    widgetConfigs,
-    switchWidgetData,
-    variant,
-  ]);
-
-  const handlePanelDownlinkClick = useCallback(
-    async (hex) => {
-      const n = normalizeDownlinkHex(hex);
-      const dl = downlinkWidgetDownlinkList.find((d) => normalizeDownlinkHex(d.hex) === n);
-      if (!canSendLnsCommands || !downlinkWidgetTargetDeviceId || !dl) return;
-      if (downlinkSendingHexRef.current.has(n)) return;
-      downlinkSendingHexRef.current.add(n);
-      setDownlinkSendingVersion((v) => v + 1);
-      const sendingSafetyMs = 12000;
-      const sendingSafetyId = window.setTimeout(() => {
-        if (downlinkSendingHexRef.current.delete(n)) {
-          setDownlinkSendingVersion((v) => v + 1);
-        }
-      }, sendingSafetyMs);
-      const dlRow =
-        variant === 'device' && device
-          ? device
-          : (panelDevicesRef.current || []).find(
-              (d) => String(d.deviceId) === String(downlinkWidgetTargetDeviceId)
-            );
-      const dlOpts = getDownlinkSendOptionsForDevice(downlinkWidgetTargetDeviceId, dlRow);
-      try {
-        await sendDownlink(downlinkWidgetTargetDeviceId, dl.hex, credentials, token, dlOpts);
-      } catch (err) {
-        const code = err.response?.data?.code;
-        const st = err.response?.status;
-        const deferred = err.response?.data?.deferred;
-        pushAppActivityLog({
-          level: deferred ? 'info' : 'warn',
-          tag: 'Downlink',
-          message: deferred
-            ? `Encolado (próximo uplink) · ${downlinkWidgetTargetDeviceId}`
-            : `Intento · ${downlinkWidgetTargetDeviceId}${code ? ` · ${code}` : st ? ` · HTTP ${st}` : ''}`,
-          detail: err.response?.data?.errMsg || err.response?.data?.error || err.message,
-        });
-        window.alert(`${dl.name || 'Downlink'}: ${downlinkErrorMessage(err)}`);
-      } finally {
-        window.clearTimeout(sendingSafetyId);
-        downlinkSendingHexRef.current.delete(n);
-        setDownlinkSendingVersion((v) => v + 1);
-      }
-    },
-    [canSendLnsCommands, downlinkWidgetTargetDeviceId, downlinkWidgetDownlinkList, credentials, token, variant, device]
-  );
-
   const buildDashboardWidgetSensor = useCallback(
     (wid) => {
       const pk = `__bsd_${wid}`;
@@ -6054,7 +5784,7 @@ export default function BudgetSensorsDashboard({
           return {
             id: 0,
             name: 'Switch',
-            value: switchOn ? 1 : 0,
+            value: 0,
             unit: '',
             icon: '⚡',
             threshold: 1,
@@ -6065,35 +5795,39 @@ export default function BudgetSensorsDashboard({
           return {
             id: 0,
             name: 'Downlink',
-            value: downlinkWidgetDownlinkList.length,
+            value: 0,
             unit: 'cmds',
             icon: '⚡',
             threshold: 10,
             propertyKey: pk,
             sourceDeviceId: 'dashboard',
           };
-        case DASH_WIDGET.IMAGE:
+        case DASH_WIDGET.IMAGE: {
+          const imgUrl = imageUrlBySlot[wid];
           return {
             id: 0,
             name: 'Imagen',
-            value: imageUrl ? 1 : 0,
+            value: imgUrl ? 1 : 0,
             unit: '',
             icon: '🖼️',
             threshold: 1,
             propertyKey: pk,
             sourceDeviceId: 'dashboard',
           };
-        case DASH_WIDGET.MAP:
+        }
+        case DASH_WIDGET.MAP: {
+          const coords = mapCoordsBySlot[wid];
           return {
             id: 0,
             name: 'Mapa',
-            value: mapCoords ? 1 : 0,
+            value: coords ? 1 : 0,
             unit: '',
             icon: '📍',
             threshold: 1,
             propertyKey: pk,
             sourceDeviceId: 'dashboard',
           };
+        }
         case DASH_WIDGET.TRACKING_MAP:
           return {
             id: 0,
@@ -6105,39 +5839,45 @@ export default function BudgetSensorsDashboard({
             propertyKey: pk,
             sourceDeviceId: 'dashboard',
           };
-        case DASH_WIDGET.SATISFACTION:
+        case DASH_WIDGET.SATISFACTION: {
+          const su = satisfactionUiBySlot[wid];
           return {
             id: 0,
             name: 'Circular',
-            value: satisfactionUi.rawValue != null ? satisfactionUi.rawValue : satisfactionUi.ringPct,
+            value: su?.rawValue != null ? su.rawValue : su?.ringPct ?? 0,
             unit: '%',
             icon: '◎',
             threshold: 100,
             propertyKey: pk,
             sourceDeviceId: 'dashboard',
           };
-        case DASH_WIDGET.CONTAINER:
+        }
+        case DASH_WIDGET.CONTAINER: {
+          const cu = containerUiBySlot[wid];
           return {
             id: 0,
             name: 'Contenedor',
-            value: containerUi.rawValue != null ? containerUi.rawValue : containerUi.ringPct,
+            value: cu?.rawValue != null ? cu.rawValue : cu?.ringPct ?? 0,
             unit: '%',
             icon: '🛢',
             threshold: 100,
             propertyKey: pk,
             sourceDeviceId: 'dashboard',
           };
-        case DASH_WIDGET.BATTERY_LEVEL:
+        }
+        case DASH_WIDGET.BATTERY_LEVEL: {
+          const bu = batteryLevelUiBySlot[wid];
           return {
             id: 0,
             name: 'Nivel Batería',
-            value: batteryLevelUi.rawValue != null ? batteryLevelUi.rawValue : batteryLevelUi.ringPct,
+            value: bu?.rawValue != null ? bu.rawValue : bu?.ringPct ?? 0,
             unit: '%',
             icon: '🔋',
             threshold: 100,
             propertyKey: pk,
             sourceDeviceId: 'dashboard',
           };
+        }
         case DASH_WIDGET.METRIC_CIRCULAR: {
           const ui = metricCircularUiBySlot[wid];
           return {
@@ -6208,17 +5948,12 @@ export default function BudgetSensorsDashboard({
     },
     [
       panelDevices.length,
-      switchOn,
-      downlinkWidgetDownlinkList.length,
-      imageUrl,
-      mapCoords,
+      imageUrlBySlot,
+      mapCoordsBySlot,
       trackingPathPoints.length,
-      satisfactionUi.rawValue,
-      satisfactionUi.ringPct,
-      containerUi.rawValue,
-      containerUi.ringPct,
-      batteryLevelUi.rawValue,
-      batteryLevelUi.ringPct,
+      satisfactionUiBySlot,
+      containerUiBySlot,
+      batteryLevelUiBySlot,
       metricCircularUiBySlot,
       veletaWidgetUiBySlot,
       widgetConfigs,
@@ -6226,6 +5961,192 @@ export default function BudgetSensorsDashboard({
       streamDisplay,
       streamUnit,
     ]
+  );
+
+  const duplicateDashWidget = useCallback(
+    (sourceWid) => {
+      if (!canEditDashboard) return;
+      const widStr = String(sourceWid);
+      const baseId = dashboardWidgetBaseId(widStr);
+      if (baseId === DASH_WIDGET.PANEL_DEVICE_BAR || baseId === DASH_WIDGET.SENSOR_GRID) return;
+      if (!MULTI_INSTANCE_DASH_WIDGETS.has(baseId)) return;
+
+      const newId = makeDashboardWidgetCloneId(baseId);
+      cloneWidgetConfigBetweenKeys(dk(widStr), dk(newId), baseId);
+
+      const panelLen = variant === 'panel' ? ((panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0) : 0;
+      const curVis = { ...visibilityMapRef.current, [baseId]: true };
+      visibilityMapRef.current = curVis;
+      setVisibilityMap(() => {
+        saveDashboardVisibility(
+          variant,
+          curVis,
+          dashDeviceId,
+          variant === 'panel' ? panelInstanceId : undefined,
+          variant === 'panel' ? panelOwnerSegment : undefined
+        );
+        return curVis;
+      });
+
+      const cur = normalizeLayoutForPersistence(gridLayoutLatestRef.current || []);
+      const srcPiece = cur.find((it) => String(it.i) === widStr);
+      const defaults = buildDefaultBsdGridLayout(variant, panelLen, curVis);
+      const tmpl =
+        srcPiece ||
+        defaults.find((d) => String(d.i) === widStr) ||
+        defaults.find((d) => String(d.i) === baseId) ||
+        buildModerateBsdGridTemplateForWidget(newId);
+      if (!tmpl) return;
+
+      const appended = placeNewBsdGridItem(cur, { ...tmpl, i: newId });
+      const next = normalizeLayoutForPersistence([...cur, appended]);
+      let clamped = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(next));
+      clamped = relocateBsdGridItemIfOverlapping(clamped, newId);
+      if (bsdDashboardLayoutHasOverlap(clamped)) {
+        clamped = compactBsdGridLayoutTopLeft(clamped);
+      }
+      gridLayoutLatestRef.current = clamped;
+      setGridLayout(clamped);
+      persistBsdGridLayoutDisk(clamped);
+      setWidgetConfigs(loadAllWidgetConfigs());
+      scheduleBsdServerPersistRef.current?.();
+
+      openWidgetEditModal({
+        storageKey: dk(newId),
+        sensor: buildDashboardWidgetSensor(newId),
+        editScope: 'value',
+      });
+    },
+    [
+      canEditDashboard,
+      variant,
+      dashDeviceId,
+      dk,
+      persistBsdGridLayoutDisk,
+      buildDashboardWidgetSensor,
+      openWidgetEditModal,
+      panelInstanceId,
+      panelOwnerSegment,
+    ]
+  );
+
+  const duplicateSensorCardAsTextWidget = useCallback(
+    (sensor) => {
+      if (!canEditDashboard) return;
+      const baseId = DASH_WIDGET.TEXT;
+      const newId = makeDashboardWidgetCloneId(baseId);
+      const srcCfg = getWidgetConfig(sensor);
+      const stub = dashboardWidgetSensorStub(baseId);
+      const merged = mergeWidgetConfig(stub, srcCfg ? JSON.parse(JSON.stringify(srcCfg)) : null);
+      merged.basics = {
+        ...(merged.basics || {}),
+        title: srcCfg?.basics?.title || sensor.name || String(sensor.propertyKey || 'Texto'),
+      };
+      merged.data = {
+        ...(merged.data || {}),
+        fieldKey: srcCfg?.data?.fieldKey || sensor.propertyKey,
+        unit: srcCfg?.data?.unit != null ? srcCfg.data.unit : sensor.unit || '',
+      };
+      if (variant === 'panel' && sensor.sourceDeviceId && sensor.sourceDeviceId !== 'demo') {
+        merged.data.panelBoundDeviceId = String(sensor.sourceDeviceId);
+      }
+      saveWidgetConfig(dk(newId), merged);
+
+      const panelLen = variant === 'panel' ? ((panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0) : 0;
+      const curVis = { ...visibilityMapRef.current, [baseId]: true };
+      visibilityMapRef.current = curVis;
+      setVisibilityMap(() => {
+        saveDashboardVisibility(
+          variant,
+          curVis,
+          dashDeviceId,
+          variant === 'panel' ? panelInstanceId : undefined,
+          variant === 'panel' ? panelOwnerSegment : undefined
+        );
+        return curVis;
+      });
+
+      const cur = normalizeLayoutForPersistence(gridLayoutLatestRef.current || []);
+      const defaults = buildDefaultBsdGridLayout(variant, panelLen, curVis);
+      const sameFamily = cur.filter((it) => dashboardWidgetBaseId(String(it.i)) === baseId);
+      const tmpl =
+        (sameFamily.length ? sameFamily[sameFamily.length - 1] : null) ||
+        defaults.find((d) => String(d.i) === baseId) ||
+        buildModerateBsdGridTemplateForWidget(newId);
+      if (!tmpl) return;
+
+      const appended = placeNewBsdGridItem(cur, { ...tmpl, i: newId });
+      const next = normalizeLayoutForPersistence([...cur, appended]);
+      let clamped = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(next));
+      clamped = relocateBsdGridItemIfOverlapping(clamped, newId);
+      if (bsdDashboardLayoutHasOverlap(clamped)) {
+        clamped = compactBsdGridLayoutTopLeft(clamped);
+      }
+      gridLayoutLatestRef.current = clamped;
+      setGridLayout(clamped);
+      persistBsdGridLayoutDisk(clamped);
+      setWidgetConfigs(loadAllWidgetConfigs());
+      scheduleBsdServerPersistRef.current?.();
+
+      openWidgetEditModal({
+        storageKey: dk(newId),
+        sensor: buildDashboardWidgetSensor(newId),
+        editScope: 'value',
+      });
+    },
+    [
+      canEditDashboard,
+      getWidgetConfig,
+      variant,
+      dashDeviceId,
+      dk,
+      persistBsdGridLayoutDisk,
+      buildDashboardWidgetSensor,
+      openWidgetEditModal,
+      panelInstanceId,
+      panelOwnerSegment,
+    ]
+  );
+
+  const dashWidgetChrome = useCallback(
+    (wid, onEditClick) => {
+      const baseId = dashboardWidgetBaseId(String(wid));
+      const canDuplicate =
+        baseId !== DASH_WIDGET.PANEL_DEVICE_BAR && baseId !== DASH_WIDGET.SENSOR_GRID;
+      return (
+        <div className="bsd-widget-actions">
+          {canDuplicate ? (
+            <button
+              type="button"
+              className="bsd-widget-duplicate-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                duplicateDashWidget(wid);
+              }}
+              aria-label="Duplicar widget"
+              title="Duplicar widget"
+            >
+              <Copy size={16} />
+            </button>
+          ) : null}
+          <button type="button" className="bsd-widget-edit-btn" onClick={onEditClick} aria-label="Editar widget">
+            <Pencil size={16} />
+          </button>
+          <button
+            type="button"
+            className="bsd-widget-remove-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              removeDashWidget(wid);
+            }}
+            aria-label="Quitar widget del tablero"
+          >
+            <Trash2 size={16} />
+          </button>
+        </div>
+      );
+    },
+    [duplicateDashWidget, removeDashWidget]
   );
 
   /** Misma galería que Dispositivos; en Panel Control el equipo se elige al editar el widget (`panelBoundDeviceId`). */
@@ -6328,6 +6249,8 @@ export default function BudgetSensorsDashboard({
       const cur = normalizeLayoutForPersistence(gridLayoutLatestRef.current || []);
       const defaults = buildDefaultBsdGridLayout(variant, panelLen, curVis);
       const sameFamily = cur.filter((it) => dashboardWidgetBaseId(String(it.i)) === baseId);
+      const srcSlot = sameFamily.length ? String(sameFamily[sameFamily.length - 1].i) : baseId;
+      cloneWidgetConfigBetweenKeys(dk(srcSlot), dk(newId), baseId);
       const tmpl =
         (sameFamily.length ? sameFamily[sameFamily.length - 1] : null) ||
         defaults.find((d) => String(d.i) === baseId) ||
@@ -6344,6 +6267,8 @@ export default function BudgetSensorsDashboard({
       gridLayoutLatestRef.current = clamped;
       setGridLayout(clamped);
       persistBsdGridLayoutDisk(clamped);
+      setWidgetConfigs(loadAllWidgetConfigs());
+      scheduleBsdServerPersistRef.current?.();
       openWidgetEditModal({
         storageKey: dk(newId),
         sensor: buildDashboardWidgetSensor(newId),
@@ -6579,136 +6504,79 @@ export default function BudgetSensorsDashboard({
           </div>
         )}
 
-          {isVis(DASH_WIDGET.SWITCH) && (
-          <div
-            key={DASH_WIDGET.SWITCH}
-            {...mergeShell(DASH_WIDGET.SWITCH, 'widget bsd-control-widget bsd-switch-widget bsd-widget-editable')}
-          >
-            {dashWidgetChrome(DASH_WIDGET.SWITCH, (e) => {
-              e.stopPropagation();
-              openDashWidgetEdit(DASH_WIDGET.SWITCH, () => ({
-                id: 0,
-                name: 'Switch',
-                value: switchOn ? 1 : 0,
-                unit: '',
-                icon: '⚡',
-                threshold: 1,
-                propertyKey: `__bsd_${DASH_WIDGET.SWITCH}`,
-                sourceDeviceId: 'dashboard',
-              }));
-            })}
-            <div className="widget-header">
-              <div className="widget-title" style={wTitleStyle(DASH_WIDGET.SWITCH)}>
-                <span className="bsd-control-ico">⚡</span> {wTitle(DASH_WIDGET.SWITCH, 'Switch')}
-              </div>
-            </div>
-            <div className="bsd-switch-body">
-              <BsdRealisticSwitch
-                isOn={switchOn}
-                busy={switchProcessing}
-                disabled={
-                  !canSendLnsCommands || !switchTargetDeviceId || switchWidgetDownlinkList.length === 0
-                }
-                onClick={handleSwitchClick}
+          {isVis(DASH_WIDGET.SWITCH) &&
+            dashWidgetSlotIds(DASH_WIDGET.SWITCH).map((slotId) => (
+              <BsdSwitchWidgetSlot
+                key={slotId}
+                slotId={slotId}
+                variant={variant}
+                device={device}
+                controlDeviceId={controlDeviceId}
+                canSendLnsCommands={canSendLnsCommands}
+                dk={dk}
+                widgetConfigs={widgetConfigs}
+                resolveWidgetBoundDeviceId={resolveWidgetBoundDeviceId}
+                telemetryLivePropsForPanelWidget={telemetryLivePropsForPanelWidget}
+                liveProps={liveProps}
+                downlinkList={downlinkList}
+                panelDevices={panelDevices}
+                credentials={credentials}
+                token={token}
+                expandTelemetryLive={expandMergedDeviceTelemetryLive}
+                wTitle={wTitle}
+                wTitleStyle={wTitleStyle}
+                mergeShell={mergeShell}
+                dashWidgetChrome={dashWidgetChrome}
+                openDashWidgetEdit={openDashWidgetEdit}
               />
-              {!canSendLnsCommands && (
-                <p className="bsd-control-hint">Inicie sesión para enviar comandos LoRaWAN desde el panel.</p>
-              )}
-            </div>
-          </div>
-          )}
+            ))}
 
-          {isVis(DASH_WIDGET.DOWNLINK) && (
-          <div key={DASH_WIDGET.DOWNLINK} {...mergeShell(DASH_WIDGET.DOWNLINK, 'widget bsd-control-widget bsd-widget-editable bsd-downlink-widget')}>
-            {dashWidgetChrome(DASH_WIDGET.DOWNLINK, (e) => {
+          {isVis(DASH_WIDGET.DOWNLINK) &&
+            dashWidgetSlotIds(DASH_WIDGET.DOWNLINK).map((slotId) => (
+              <BsdDownlinkWidgetSlot
+                key={slotId}
+                slotId={slotId}
+                variant={variant}
+                device={device}
+                controlDeviceId={controlDeviceId}
+                canSendLnsCommands={canSendLnsCommands}
+                dk={dk}
+                widgetConfigs={widgetConfigs}
+                resolveWidgetBoundDeviceId={resolveWidgetBoundDeviceId}
+                downlinkList={downlinkList}
+                panelDevices={panelDevices}
+                credentials={credentials}
+                token={token}
+                lastTelemetryAtLabel={lastTelemetryAtLabel}
+                wTitle={wTitle}
+                wTitleStyle={wTitleStyle}
+                mergeShell={mergeShell}
+                dashWidgetChrome={dashWidgetChrome}
+                openDashWidgetEdit={openDashWidgetEdit}
+              />
+            ))}
+
+          {isVis(DASH_WIDGET.IMAGE) &&
+            dashWidgetSlotIds(DASH_WIDGET.IMAGE).map((slotId) => {
+              const imageUrl = imageUrlBySlot[slotId];
+              return (
+          <div key={slotId} {...mergeShell(slotId, 'widget bsd-control-widget bsd-widget-editable bsd-image-widget')}>
+            {dashWidgetChrome(slotId, (e) => {
               e.stopPropagation();
-              openDashWidgetEdit(DASH_WIDGET.DOWNLINK, () => ({
-                id: 0,
-                name: 'Downlink',
-                value: downlinkWidgetDownlinkList.length,
-                unit: 'cmds',
-                icon: '⚡',
-                threshold: 10,
-                propertyKey: `__bsd_${DASH_WIDGET.DOWNLINK}`,
-                sourceDeviceId: 'dashboard',
-              }));
-            })}
-            <div className="widget-header">
-              <div className="widget-title" style={wTitleStyle(DASH_WIDGET.DOWNLINK)}>
-                <Zap size={18} className="bsd-lucide-glow" strokeWidth={2} /> {wTitle(DASH_WIDGET.DOWNLINK, 'Downlink')}
-              </div>
-            </div>
-            <div className="bsd-downlink-widget-body">
-              {downlinkWidgetDownlinkList.length === 0 ? (
-                <div className="bsd-control-hint">
-                  Sin comandos guardados. Créalos en la ficha del dispositivo → Downlink y define los botones en Editar
-                  widget → Datos.
-                </div>
-              ) : panelDownlinkActions.length === 0 ? (
-                <div className="bsd-control-hint">
-                  Añade al menos un comando con HEX válido en Editar widget → Datos.
-                </div>
-              ) : (
-                <div className="bsd-downlink-stack" data-downlink-sending={downlinkSendingVersion}>
-                  {panelDownlinkActions.map((act, i) => {
-                    const hexKey = normalizeDownlinkHex(act.hex);
-                    const isSending = downlinkSendingHexRef.current.has(hexKey);
-                    return (
-                      <button
-                        key={`${hexKey}_${i}`}
-                        type="button"
-                        className={`bsd-downlink-btn bsd-downlink-btn--send${isSending ? ' bsd-downlink-btn--sending' : ''}`}
-                        disabled={!canSendLnsCommands || !downlinkWidgetTargetDeviceId || isSending}
-                        aria-busy={isSending}
-                        onClick={() => handlePanelDownlinkClick(act.hex)}
-                        style={
-                          act.buttonColor
-                            ? {
-                                background: act.buttonColor,
-                                color: resolveDownlinkButtonTextColor(downlinkWidgetTitleColor, act.buttonColor),
-                                borderColor: 'rgba(255, 255, 255, 0.22)',
-                              }
-                            : undefined
-                        }
-                      >
-                        {isSending ? 'Enviando…' : act.label}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-            {!canSendLnsCommands && (
-              <p className="bsd-control-hint">Inicie sesión para enviar downlinks desde el panel.</p>
-            )}
-            {lastTelemetryAtLabel ? (
-              <div className="bsd-widget-footnote" style={wTitleStyle(DASH_WIDGET.DOWNLINK)}>
-                {lastTelemetryAtLabel}
-              </div>
-            ) : null}
-          </div>
-          )}
-          {isVis(DASH_WIDGET.IMAGE) && (
-          <div
-            key={DASH_WIDGET.IMAGE}
-            {...mergeShell(DASH_WIDGET.IMAGE, 'widget bsd-control-widget bsd-widget-editable bsd-image-widget')}
-          >
-            {dashWidgetChrome(DASH_WIDGET.IMAGE, (e) => {
-              e.stopPropagation();
-              openDashWidgetEdit(DASH_WIDGET.IMAGE, () => ({
+              openDashWidgetEdit(slotId, () => ({
                 id: 0,
                 name: 'Imagen',
                 value: imageUrl ? 1 : 0,
                 unit: '',
                 icon: '🖼️',
                 threshold: 1,
-                propertyKey: `__bsd_${DASH_WIDGET.IMAGE}`,
+                propertyKey: `__bsd_${slotId}`,
                 sourceDeviceId: 'dashboard',
               }));
             })}
             <div className="widget-header">
-              <div className="widget-title" style={wTitleStyle(DASH_WIDGET.IMAGE)}>
-                <ImageIcon size={18} className="bsd-lucide-glow" strokeWidth={2} /> {wTitle(DASH_WIDGET.IMAGE, 'Imagen')}
+              <div className="widget-title" style={wTitleStyle(slotId)}>
+                <ImageIcon size={18} className="bsd-lucide-glow" strokeWidth={2} /> {wTitle(slotId, 'Imagen')}
               </div>
             </div>
             <div className="bsd-image-widget-body">
@@ -6717,254 +6585,152 @@ export default function BudgetSensorsDashboard({
               ) : (
                 <div className="bsd-image-placeholder">
                   <ImageIcon size={40} strokeWidth={1} />
-                  <span>
-                    Configura la imagen en <strong>Básicos</strong> (archivo o URL) o publica una URL en telemetría.
-                  </span>
+                  <span>Configura la imagen en <strong>Básicos</strong> (archivo o URL) o publica una URL en telemetría.</span>
                 </div>
               )}
             </div>
           </div>
-          )}
-          {isVis(DASH_WIDGET.MAP) && (
-          <div
-            key={DASH_WIDGET.MAP}
-            {...mergeShell(DASH_WIDGET.MAP, 'widget bsd-control-widget bsd-widget-editable bsd-map-widget')}
-          >
-            {dashWidgetChrome(DASH_WIDGET.MAP, (e) => {
+              );
+            })}
+
+          {isVis(DASH_WIDGET.MAP) &&
+            dashWidgetSlotIds(DASH_WIDGET.MAP).map((slotId) => {
+              const mapCoords = mapCoordsBySlot[slotId];
+              const mapBaseLayerId = mapBaseLayerBySlot[slotId];
+              return (
+          <div key={slotId} {...mergeShell(slotId, 'widget bsd-control-widget bsd-widget-editable bsd-map-widget')}>
+            {dashWidgetChrome(slotId, (e) => {
               e.stopPropagation();
-              openDashWidgetEdit(DASH_WIDGET.MAP, () => ({
+              openDashWidgetEdit(slotId, () => ({
                 id: 0,
                 name: 'Mapa',
                 value: mapCoords ? 1 : 0,
                 unit: '',
                 icon: '📍',
                 threshold: 1,
-                propertyKey: `__bsd_${DASH_WIDGET.MAP}`,
+                propertyKey: `__bsd_${slotId}`,
                 sourceDeviceId: 'dashboard',
               }));
             })}
             <div className="widget-header">
-              <div className="widget-title" style={wTitleStyle(DASH_WIDGET.MAP)}>
-                <MapPin size={18} className="bsd-lucide-glow" strokeWidth={2} /> {wTitle(DASH_WIDGET.MAP, 'Mapa')}
+              <div className="widget-title" style={wTitleStyle(slotId)}>
+                <MapPin size={18} className="bsd-lucide-glow" strokeWidth={2} /> {wTitle(slotId, 'Mapa')}
               </div>
             </div>
             <div className="bsd-map-widget-body">
               {mapCoords ? (
                 <>
-                  <BsdMapLayerMenu value={mapBaseLayerId} onChange={(id) => applyMapBaseLayer(DASH_WIDGET.MAP, id)} />
-                  <BsdLeafletStaticMap
-                    lat={mapCoords.lat}
-                    lng={mapCoords.lng}
-                    baseLayerId={mapBaseLayerId}
-                    className="bsd-map-leaflet"
-                  />
+                  <BsdMapLayerMenu value={mapBaseLayerId} onChange={(id) => applyMapBaseLayer(slotId, id)} />
+                  <BsdLeafletStaticMap lat={mapCoords.lat} lng={mapCoords.lng} baseLayerId={mapBaseLayerId} className="bsd-map-leaflet" />
                 </>
               ) : (
                 <div className="bsd-map-placeholder">
                   <MapPin size={40} strokeWidth={1} />
-                  <span>
-                    Indica latitud y longitud en <strong>Básicos</strong> o envía <code>latitude</code> /{' '}
-                    <code>longitude</code> en telemetría.
-                  </span>
+                  <span>Indica latitud y longitud en <strong>Básicos</strong> o envía <code>latitude</code> / <code>longitude</code> en telemetría.</span>
                 </div>
               )}
             </div>
           </div>
-          )}
+              );
+            })}
 
-          {isVis(DASH_WIDGET.TRACKING_MAP) && (
-          <div
-            key={DASH_WIDGET.TRACKING_MAP}
-            {...mergeShell(DASH_WIDGET.TRACKING_MAP, 'widget bsd-widget-editable bsd-tracking-map-widget')}
-          >
-            {dashWidgetChrome(DASH_WIDGET.TRACKING_MAP, (e) => {
+          {isVis(DASH_WIDGET.TRACKING_MAP) &&
+            dashWidgetSlotIds(DASH_WIDGET.TRACKING_MAP).map((slotId) => {
+              const trackingMapBaseLayerId = trackingMapBaseLayerBySlot[slotId];
+              return (
+          <div key={slotId} {...mergeShell(slotId, 'widget bsd-widget-editable bsd-tracking-map-widget')}>
+            {dashWidgetChrome(slotId, (e) => {
               e.stopPropagation();
-              openDashWidgetEdit(DASH_WIDGET.TRACKING_MAP, () => ({
+              openDashWidgetEdit(slotId, () => ({
                 id: 0,
                 name: 'Mapa de rastreo',
                 value: trackingPathPoints.length,
                 unit: '',
                 icon: '🛰️',
                 threshold: 1000,
-                propertyKey: `__bsd_${DASH_WIDGET.TRACKING_MAP}`,
+                propertyKey: `__bsd_${slotId}`,
                 sourceDeviceId: 'dashboard',
               }));
             })}
             <div className="widget-header bsd-tracking-map-widget__header">
-              <div className="widget-title" style={wTitleStyle(DASH_WIDGET.TRACKING_MAP)}>
-                <Route size={18} className="bsd-lucide-glow" strokeWidth={2} />{' '}
-                {wTitle(DASH_WIDGET.TRACKING_MAP, 'Mapa de rastreo')}
+              <div className="widget-title" style={wTitleStyle(slotId)}>
+                <Route size={18} className="bsd-lucide-glow" strokeWidth={2} /> {wTitle(slotId, 'Mapa de rastreo')}
               </div>
               <div className="bsd-tracking-map-presets" role="group" aria-label="Periodo del historial GPS">
-                {[
-                  { id: 'day', lab: 'Día' },
-                  { id: 'week', lab: 'Semana' },
-                  { id: 'month', lab: 'Mes' },
-                ].map(({ id, lab }) => (
-                  <button
-                    key={id}
-                    type="button"
-                    className={`bsd-bar-chart-preset${
-                      (widgetConfigs[dk(DASH_WIDGET.TRACKING_MAP)]?.data?.trackingTimeRange || 'day') === id
-                        ? ' active'
-                        : ''
-                    }`}
-                    onClick={() => applyTrackingTimeRange(id)}
-                  >
-                    {lab}
-                  </button>
+                {[{ id: 'day', lab: 'Día' }, { id: 'week', lab: 'Semana' }, { id: 'month', lab: 'Mes' }].map(({ id, lab }) => (
+                  <button key={id} type="button" className={`bsd-bar-chart-preset${(widgetConfigs[dk(slotId)]?.data?.trackingTimeRange || 'day') === id ? ' active' : ''}`} onClick={() => applyTrackingTimeRange(slotId, id)}>{lab}</button>
                 ))}
               </div>
             </div>
-            <div className="bsd-tracking-map-status" style={wTitleStyle(DASH_WIDGET.TRACKING_MAP)}>
-              {trackingLoading
-                ? 'Cargando trayectoria…'
-                : [trackingError || (trackingPathPoints.length ? `${trackingPathPoints.length} puntos` : ''), lastTelemetryAtLabel]
-                    .filter(Boolean)
-                    .join(' · ')}
+            <div className="bsd-tracking-map-status" style={wTitleStyle(slotId)}>
+              {trackingLoading ? 'Cargando trayectoria…' : [trackingError || (trackingPathPoints.length ? `${trackingPathPoints.length} puntos` : ''), lastTelemetryAtLabel].filter(Boolean).join(' · ')}
             </div>
             <div className="bsd-tracking-map-body">
-              <BsdMapLayerMenu
-                value={trackingMapBaseLayerId}
-                onChange={(id) => applyMapBaseLayer(DASH_WIDGET.TRACKING_MAP, id)}
-              />
-              <BsdLeafletTrackingMap
-                latLngs={trackingPathPoints}
-                className="bsd-tracking-map-leaflet"
-                baseLayerId={trackingMapBaseLayerId}
-              />
+              <BsdMapLayerMenu value={trackingMapBaseLayerId} onChange={(id) => applyMapBaseLayer(slotId, id)} />
+              <BsdLeafletTrackingMap latLngs={trackingPathPoints} className="bsd-tracking-map-leaflet" baseLayerId={trackingMapBaseLayerId} />
             </div>
           </div>
-          )}
-
-          {isVis(DASH_WIDGET.SATISFACTION) && (
-          <div key={DASH_WIDGET.SATISFACTION} {...mergeShell(DASH_WIDGET.SATISFACTION, 'widget bsd-widget-editable bsd-circular-widget')}>
-            {dashWidgetChrome(DASH_WIDGET.SATISFACTION, (e) => {
-              e.stopPropagation();
-              openDashWidgetEdit(DASH_WIDGET.SATISFACTION, () => ({
-                id: 0,
-                name: 'Circular',
-                value: satisfactionUi.rawValue != null ? satisfactionUi.rawValue : satisfactionUi.ringPct,
-                unit: '%',
-                icon: '◎',
-                threshold: 100,
-                propertyKey: `__bsd_${DASH_WIDGET.SATISFACTION}`,
-                sourceDeviceId: 'dashboard',
-              }));
+              );
             })}
-            <div className="widget-header">
-              <div className="widget-title" style={wTitleStyle(DASH_WIDGET.SATISFACTION)}>
-                <span>◎</span> {wTitle(DASH_WIDGET.SATISFACTION, 'Circular')}
-              </div>
-            </div>
+
+          {isVis(DASH_WIDGET.SATISFACTION) &&
+            dashWidgetSlotIds(DASH_WIDGET.SATISFACTION).map((slotId) => {
+              const satisfactionUi = satisfactionUiBySlot[slotId];
+              const slotGradId = `${gradId}-${String(slotId).replace(/[^a-zA-Z0-9_-]/g, '')}`;
+              const lo = satisfactionUi?.scaleMin ?? 0;
+              const hi = satisfactionUi?.scaleMax ?? 100;
+              const cfg = widgetConfigs[dk(slotId)];
+              const val = resolveGaugeColorLookupValue(cfg, satisfactionUi);
+              const satisfactionArcStroke = colorForValueInRanges(val, satisfactionUi?.ranges || [], lo, hi) || `url(#bsd-circ-grad-${slotGradId})`;
+              const satisfactionArcDashOffset = BSD_CIRCULAR_GAUGE_LEN - ((satisfactionUi?.ringPct ?? 0) / 100) * BSD_CIRCULAR_GAUGE_LEN;
+              return (
+          <div key={slotId} {...mergeShell(slotId, 'widget bsd-widget-editable bsd-circular-widget')}>
+            {dashWidgetChrome(slotId, (e) => { e.stopPropagation(); openDashWidgetEdit(slotId, () => ({ id: 0, name: 'Circular', value: satisfactionUi?.rawValue != null ? satisfactionUi.rawValue : satisfactionUi?.ringPct ?? 0, unit: '%', icon: '◎', threshold: 100, propertyKey: `__bsd_${slotId}`, sourceDeviceId: 'dashboard' })); })}
+            <div className="widget-header"><div className="widget-title" style={wTitleStyle(slotId)}><span>◎</span> {wTitle(slotId, 'Circular')}</div></div>
             <div className="bsd-circular-gauge">
-              <svg
-                className="bsd-circular-gauge__svg"
-                viewBox="0 0 200 200"
-                width="100%"
-                height="100%"
-                aria-hidden
-              >
-                <defs>
-                  <linearGradient id={`bsd-circ-grad-${gradId}`} x1="28%" y1="12%" x2="72%" y2="92%">
-                    <stop offset="0%" stopColor="#ff9a8b" />
-                    <stop offset="45%" stopColor="#ff7b7a" />
-                    <stop offset="100%" stopColor="#ff5569" />
-                  </linearGradient>
-                </defs>
-                <circle
-                  className="bsd-circular-gauge__track"
-                  cx="100"
-                  cy="100"
-                  r={BSD_CIRCULAR_GAUGE_R}
-                  fill="none"
-                  stroke="#e4e4ec"
-                  strokeWidth={BSD_CIRCULAR_GAUGE_STROKE}
-                />
-                <circle
-                  className="bsd-circular-gauge__arc"
-                  cx="100"
-                  cy="100"
-                  r={BSD_CIRCULAR_GAUGE_R}
-                  fill="none"
-                  stroke={satisfactionArcStroke}
-                  strokeWidth={BSD_CIRCULAR_GAUGE_STROKE}
-                  strokeLinecap="round"
-                  strokeDasharray={BSD_CIRCULAR_GAUGE_LEN}
-                  strokeDashoffset={satisfactionArcDashOffset}
-                />
+              <svg className="bsd-circular-gauge__svg" viewBox="0 0 200 200" width="100%" height="100%" aria-hidden>
+                <defs><linearGradient id={`bsd-circ-grad-${slotGradId}`} x1="28%" y1="12%" x2="72%" y2="92%"><stop offset="0%" stopColor="#ff9a8b" /><stop offset="45%" stopColor="#ff7b7a" /><stop offset="100%" stopColor="#ff5569" /></linearGradient></defs>
+                <circle className="bsd-circular-gauge__track" cx="100" cy="100" r={BSD_CIRCULAR_GAUGE_R} fill="none" stroke="#e4e4ec" strokeWidth={BSD_CIRCULAR_GAUGE_STROKE} />
+                <circle className="bsd-circular-gauge__arc" cx="100" cy="100" r={BSD_CIRCULAR_GAUGE_R} fill="none" stroke={satisfactionArcStroke} strokeWidth={BSD_CIRCULAR_GAUGE_STROKE} strokeLinecap="round" strokeDasharray={BSD_CIRCULAR_GAUGE_LEN} strokeDashoffset={satisfactionArcDashOffset} />
               </svg>
-              <div className="bsd-circular-gauge__hub">
-                <span className="bsd-circular-gauge__value">{satisfactionUi.centerLabel}</span>
-              </div>
+              <div className="bsd-circular-gauge__hub"><span className="bsd-circular-gauge__value">{satisfactionUi?.centerLabel ?? '—'}</span></div>
             </div>
-            {satisfactionUi.lastAtLine ? (
-              <div className="bsd-circular-gauge__foot-at" style={wTitleStyle(DASH_WIDGET.SATISFACTION)}>
-                {satisfactionUi.lastAtLine}
-              </div>
-            ) : null}
+            {satisfactionUi?.lastAtLine ? <div className="bsd-circular-gauge__foot-at" style={wTitleStyle(slotId)}>{satisfactionUi.lastAtLine}</div> : null}
           </div>
-          )}
-
-          {isVis(DASH_WIDGET.CONTAINER) && (
-          <div key={DASH_WIDGET.CONTAINER} {...mergeShell(DASH_WIDGET.CONTAINER, 'widget bsd-widget-editable')}>
-            {dashWidgetChrome(DASH_WIDGET.CONTAINER, (e) => {
-              e.stopPropagation();
-              openDashWidgetEdit(DASH_WIDGET.CONTAINER, () => ({
-                id: 0,
-                name: 'Contenedor',
-                value: containerUi.rawValue != null ? containerUi.rawValue : containerUi.ringPct,
-                unit: '%',
-                icon: '🛢',
-                threshold: 100,
-                propertyKey: `__bsd_${DASH_WIDGET.CONTAINER}`,
-                sourceDeviceId: 'dashboard',
-              }));
+              );
             })}
-            <div className="widget-header">
-              <div className="widget-title" style={wTitleStyle(DASH_WIDGET.CONTAINER)}>
-                <span aria-hidden>🛢</span> {wTitle(DASH_WIDGET.CONTAINER, 'Contenedor')}
-              </div>
-            </div>
-            <BsdContainerTankView
-              fillPct={containerUi.ringPct}
-              fillColor={containerLiquidColor}
-              centerLabel={containerUi.centerLabel}
-              lastAtLine={containerUi.lastAtLine}
-              titleColor={wTitleStyle(DASH_WIDGET.CONTAINER)?.color}
-            />
-          </div>
-          )}
 
-          {isVis(DASH_WIDGET.BATTERY_LEVEL) && (
-          <div key={DASH_WIDGET.BATTERY_LEVEL} {...mergeShell(DASH_WIDGET.BATTERY_LEVEL, 'widget bsd-widget-editable')}>
-            {dashWidgetChrome(DASH_WIDGET.BATTERY_LEVEL, (e) => {
-              e.stopPropagation();
-              openDashWidgetEdit(DASH_WIDGET.BATTERY_LEVEL, () => ({
-                id: 0,
-                name: 'Nivel Batería',
-                value: batteryLevelUi.rawValue != null ? batteryLevelUi.rawValue : batteryLevelUi.ringPct,
-                unit: '%',
-                icon: '🔋',
-                threshold: 100,
-                propertyKey: `__bsd_${DASH_WIDGET.BATTERY_LEVEL}`,
-                sourceDeviceId: 'dashboard',
-              }));
-            })}
-            <div className="widget-header">
-              <div className="widget-title" style={wTitleStyle(DASH_WIDGET.BATTERY_LEVEL)}>
-                <span aria-hidden>🔋</span> {wTitle(DASH_WIDGET.BATTERY_LEVEL, 'Nivel Batería')}
-              </div>
-            </div>
-            <BsdBatteryLevelView
-              fillPct={batteryLevelUi.ringPct}
-              fillColor={batteryFillColor}
-              centerLabel={batteryLevelUi.centerLabel}
-              lastAtLine={batteryLevelUi.lastAtLine}
-              titleColor={wTitleStyle(DASH_WIDGET.BATTERY_LEVEL)?.color}
-            />
+          {isVis(DASH_WIDGET.CONTAINER) &&
+            dashWidgetSlotIds(DASH_WIDGET.CONTAINER).map((slotId) => {
+              const containerUi = containerUiBySlot[slotId];
+              const lo = containerUi?.scaleMin ?? 0; const hi = containerUi?.scaleMax ?? 100;
+              const cfg = widgetConfigs[dk(slotId)];
+              const val = resolveGaugeColorLookupValue(cfg, containerUi);
+              const containerLiquidColor = colorForValueInRanges(val, containerUi?.ranges || [], lo, hi) || '#22c55e';
+              return (
+          <div key={slotId} {...mergeShell(slotId, 'widget bsd-widget-editable')}>
+            {dashWidgetChrome(slotId, (e) => { e.stopPropagation(); openDashWidgetEdit(slotId, () => ({ id: 0, name: 'Contenedor', value: containerUi?.rawValue != null ? containerUi.rawValue : containerUi?.ringPct ?? 0, unit: '%', icon: '🛢', threshold: 100, propertyKey: `__bsd_${slotId}`, sourceDeviceId: 'dashboard' })); })}
+            <div className="widget-header"><div className="widget-title" style={wTitleStyle(slotId)}><span aria-hidden>🛢</span> {wTitle(slotId, 'Contenedor')}</div></div>
+            <BsdContainerTankView fillPct={containerUi?.ringPct ?? 0} fillColor={containerLiquidColor} centerLabel={containerUi?.centerLabel ?? '—'} lastAtLine={containerUi?.lastAtLine} titleColor={wTitleStyle(slotId)?.color} />
           </div>
-          )}
+              );
+            })}
+
+          {isVis(DASH_WIDGET.BATTERY_LEVEL) &&
+            dashWidgetSlotIds(DASH_WIDGET.BATTERY_LEVEL).map((slotId) => {
+              const batteryLevelUi = batteryLevelUiBySlot[slotId];
+              const lo = batteryLevelUi?.scaleMin ?? 0; const hi = batteryLevelUi?.scaleMax ?? 100;
+              const cfg = widgetConfigs[dk(slotId)];
+              const val = resolveGaugeColorLookupValue(cfg, batteryLevelUi);
+              const batteryFillColor = colorForValueInRanges(val, batteryLevelUi?.ranges || [], lo, hi) || '#f97316';
+              return (
+          <div key={slotId} {...mergeShell(slotId, 'widget bsd-widget-editable')}>
+            {dashWidgetChrome(slotId, (e) => { e.stopPropagation(); openDashWidgetEdit(slotId, () => ({ id: 0, name: 'Nivel Batería', value: batteryLevelUi?.rawValue != null ? batteryLevelUi.rawValue : batteryLevelUi?.ringPct ?? 0, unit: '%', icon: '🔋', threshold: 100, propertyKey: `__bsd_${slotId}`, sourceDeviceId: 'dashboard' })); })}
+            <div className="widget-header"><div className="widget-title" style={wTitleStyle(slotId)}><span aria-hidden>🔋</span> {wTitle(slotId, 'Nivel Batería')}</div></div>
+            <BsdBatteryLevelView fillPct={batteryLevelUi?.ringPct ?? 0} fillColor={batteryFillColor} centerLabel={batteryLevelUi?.centerLabel ?? '—'} lastAtLine={batteryLevelUi?.lastAtLine} titleColor={wTitleStyle(slotId)?.color} />
+          </div>
+              );
+            })}
 
           {isVis(DASH_WIDGET.METRIC_CIRCULAR) &&
             metricCircularDashSlotIds.map((slotId) => {
@@ -7227,56 +6993,48 @@ export default function BudgetSensorsDashboard({
               );
             })}
 
-          {isVis(DASH_WIDGET.BAR_CHART) && (
-          <div key={DASH_WIDGET.BAR_CHART} {...mergeShell(DASH_WIDGET.BAR_CHART, 'widget bsd-widget-editable bsd-bar-chart-widget')}>
-            {dashWidgetChrome(DASH_WIDGET.BAR_CHART, (e) => {
+          {isVis(DASH_WIDGET.BAR_CHART) &&
+            dashWidgetSlotIds(DASH_WIDGET.BAR_CHART).map((slotId) => (
+          <div key={slotId} {...mergeShell(slotId, 'widget bsd-widget-editable bsd-bar-chart-widget')}>
+            {dashWidgetChrome(slotId, (e) => {
               e.stopPropagation();
-              openDashWidgetEdit(DASH_WIDGET.BAR_CHART, () => ({
+              openDashWidgetEdit(slotId, () => ({
                 id: 0,
                 name: 'Grafico Barras',
                 value: 0,
                 unit: '',
                 icon: '📊',
                 threshold: 100,
-                propertyKey: `__bsd_${DASH_WIDGET.BAR_CHART}`,
+                propertyKey: `__bsd_${slotId}`,
                 sourceDeviceId: 'dashboard',
               }));
             })}
             <div className="widget-header bsd-bar-chart-widget__header">
-              <div className="widget-title" style={wTitleStyle(DASH_WIDGET.BAR_CHART)}>
-                <span aria-hidden>📊</span> {wTitle(DASH_WIDGET.BAR_CHART, 'Grafico Barras')}
+              <div className="widget-title" style={wTitleStyle(slotId)}>
+                <span aria-hidden>📊</span> {wTitle(slotId, 'Grafico Barras')}
               </div>
               <div className="bsd-bar-chart-presets" role="group" aria-label="Agrupación del historial">
                 {(() => {
-                  const raw = normalizeBarChartGranularity(
-                    widgetConfigs[dk(DASH_WIDGET.BAR_CHART)]?.timeframe?.granularity
-                  );
-                  const activeGran = BAR_CHART_WIDGET_GRANULARITY_OPTIONS.some((o) => o.value === raw)
-                    ? raw
-                    : 'hour';
+                  const raw = normalizeBarChartGranularity(widgetConfigs[dk(slotId)]?.timeframe?.granularity);
+                  const activeGran = BAR_CHART_WIDGET_GRANULARITY_OPTIONS.some((o) => o.value === raw) ? raw : 'hour';
                   return BAR_CHART_WIDGET_GRANULARITY_OPTIONS.map(({ value, label }) => (
-                    <button
-                      key={value}
-                      type="button"
-                      className={`bsd-bar-chart-preset${activeGran === value ? ' active' : ''}`}
-                      onClick={() => applyBarChartGranularity(value)}
-                    >
-                      {label}
-                    </button>
+                    <button key={value} type="button" className={`bsd-bar-chart-preset${activeGran === value ? ' active' : ''}`} onClick={() => applyBarChartGranularity(slotId, value)}>{label}</button>
                   ));
                 })()}
               </div>
             </div>
-            <div className="bsd-bar-chart-status" style={wTitleStyle(DASH_WIDGET.BAR_CHART)}>
-              {barChartLoading
-                ? 'Cargando historial…'
-                : [barChartError, barChartHint, lastTelemetryAtLabel].filter(Boolean).join(' · ') || ''}
+            <div className="bsd-bar-chart-status" style={wTitleStyle(slotId)}>
+              {barChartLoading ? 'Cargando historial…' : [barChartError, barChartHint, lastTelemetryAtLabel].filter(Boolean).join(' · ') || ''}
             </div>
             <div className="bsd-bar-chart-canvas-wrap">
-              <canvas ref={barChartCanvasRef} className="bsd-bar-chart-canvas" />
+              {slotId === dashWidgetSlotIds(DASH_WIDGET.BAR_CHART)[0] ? (
+                <canvas ref={barChartCanvasRef} className="bsd-bar-chart-canvas" />
+              ) : (
+                <div className="bsd-control-hint">Gráfico activo en la primera instancia del tablero.</div>
+              )}
             </div>
           </div>
-          )}
+            ))}
 
         {isVis(DASH_WIDGET.SENSOR_GRID) && (
         <div key={DASH_WIDGET.SENSOR_GRID} {...mergeShell(DASH_WIDGET.SENSOR_GRID, 'widget bsd-sensor-grid-shell bsd-widget-editable')}>
@@ -7397,6 +7155,18 @@ export default function BudgetSensorsDashboard({
                   <div className="sensor-card__actions">
                     <button
                       type="button"
+                      className="sensor-card__duplicate"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        duplicateSensorCardAsTextWidget(sensor);
+                      }}
+                      aria-label="Duplicar como widget Texto"
+                      title="Duplicar como widget Texto"
+                    >
+                      <Copy size={16} />
+                    </button>
+                    <button
+                      type="button"
                       className="sensor-card__edit"
                       onClick={(e) => {
                         e.stopPropagation();
@@ -7471,76 +7241,58 @@ export default function BudgetSensorsDashboard({
         </div>
         )}
 
-          {isVis(DASH_WIDGET.STREAM) && (
-          <div key={DASH_WIDGET.STREAM} {...mergeShell(DASH_WIDGET.STREAM, 'widget bsd-widget-editable bsd-stream-widget-wrap')}>
-            {dashWidgetChrome(DASH_WIDGET.STREAM, (e) => {
+          {isVis(DASH_WIDGET.STREAM) &&
+            dashWidgetSlotIds(DASH_WIDGET.STREAM).map((slotId) => (
+          <div key={slotId} {...mergeShell(slotId, 'widget bsd-widget-editable bsd-stream-widget-wrap')}>
+            {dashWidgetChrome(slotId, (e) => {
               e.stopPropagation();
-              openDashWidgetEdit(DASH_WIDGET.STREAM, () => ({
+              openDashWidgetEdit(slotId, () => ({
                 id: 0,
                 name: 'Grafico Lineal',
                 value: streamDisplay,
                 unit: streamUnit,
                 icon: '📡',
                 threshold: 100,
-                propertyKey: `__bsd_${DASH_WIDGET.STREAM}`,
+                propertyKey: `__bsd_${slotId}`,
                 sourceDeviceId: 'dashboard',
               }));
             })}
             <div className="widget-header bsd-stream-widget-header">
               <div className="bsd-stream-widget-head-main">
-                <div className="widget-title" style={wTitleStyle(DASH_WIDGET.STREAM)}>
-                  <span>📡</span> {wTitle(DASH_WIDGET.STREAM, 'Grafico Lineal')}
+                <div className="widget-title" style={wTitleStyle(slotId)}>
+                  <span>📡</span> {wTitle(slotId, 'Grafico Lineal')}
                 </div>
-                <div className="bsd-stream-status" style={wTitleStyle(DASH_WIDGET.STREAM)}>
+                <div className="bsd-stream-status" style={wTitleStyle(slotId)}>
                   {streamTimePreset === 'live' ? (
                     <>
                       <span className="live-badge" aria-hidden />
-                      <span>
-                        En vivo
-                        {lastTelemetryAtLabel ? ` · ${lastTelemetryAtLabel}` : ''}
-                      </span>
+                      <span>En vivo{lastTelemetryAtLabel ? ` · ${lastTelemetryAtLabel}` : ''}</span>
                     </>
                   ) : streamHistoryLoading ? (
                     <span>Cargando historial…</span>
                   ) : (
-                    <span>
-                      {[
-                        streamHistoryError,
-                        streamHistoryFetchedAt
-                          ? `Actualizado ${new Date(streamHistoryFetchedAt).toLocaleTimeString()}`
-                          : streamHistoryError
-                            ? null
-                            : 'Historial',
-                        lastTelemetryAtLabel,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </span>
+                    <span>{[streamHistoryError, streamHistoryFetchedAt ? `Actualizado ${new Date(streamHistoryFetchedAt).toLocaleTimeString()}` : streamHistoryError ? null : 'Historial', lastTelemetryAtLabel].filter(Boolean).join(' · ')}</span>
                   )}
                 </div>
               </div>
               <div className="bsd-stream-presets" role="group" aria-label="Rango temporal del gráfico">
                 {STREAM_TIME_PRESETS.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    className={`bsd-stream-preset${streamTimePreset === p.id ? ' active' : ''}`}
-                    onClick={() => applyStreamTimePreset(p.id)}
-                  >
-                    {p.label}
-                  </button>
+                  <button key={p.id} type="button" className={`bsd-stream-preset${streamTimePreset === p.id ? ' active' : ''}`} onClick={() => applyStreamTimePreset(slotId, p.id)}>{p.label}</button>
                 ))}
               </div>
             </div>
-            <div
-              className={`streaming-container${streamSeriesNormalized.length > 1 ? ' streaming-container--multi' : ''}`}
-            >
-              <div className="bsd-stream-chart-canvas-wrap" ref={streamChartWrapRef}>
-                <canvas ref={streamingRef} className="bsd-stream-chart-canvas" />
-              </div>
+            <div className={`streaming-container${streamSeriesNormalized.length > 1 ? ' streaming-container--multi' : ''}`}>
+              {slotId === dashWidgetSlotIds(DASH_WIDGET.STREAM)[0] ? (
+                <div className="bsd-stream-chart-canvas-wrap" ref={streamChartWrapRef}>
+                  <canvas ref={streamingRef} className="bsd-stream-chart-canvas" />
+                </div>
+              ) : (
+                <div className="bsd-control-hint">Gráfico activo en la primera instancia del tablero.</div>
+              )}
             </div>
           </div>
-          )}
+            ))}
+
             </>
           );
           /**
@@ -7566,7 +7318,7 @@ export default function BudgetSensorsDashboard({
               onResizeStop={handleGridResizeStop}
               isDraggable={!dashboardLayoutLocked}
               isResizable={!dashboardLayoutLocked}
-              draggableCancel=".bsd-widget-actions,.bsd-widget-edit-btn,.bsd-widget-remove-btn,.bsd-widget-menu-summary,.bsd-widget-menu-panel,.bsd-widget-gallery-overlay,.bsd-widget-gallery-modal,.bsd-widget-gallery-card,.bsd-widget-gallery-filters,.bsd-widget-gallery-search,input,textarea,select,option,button,.bsd-switch-3d,.bsd-downlink-btn,.bsd-emergency-body,.sensor-card,.alert-item,.year-btn,.bsd-stream-preset,canvas,.bsd-map-iframe,.leaflet-container,.leaflet-pane,.bsd-map-leaflet,.bsd-tracking-map-leaflet,.bsd-map-layer-menu,.bsd-map-layer-menu__trigger,.bsd-map-layer-menu__list,.bsd-map-layer-menu__opt,.bsd-panel-device-bar-inner label,.bsd-file-label"
+              draggableCancel=".bsd-widget-actions,.bsd-widget-duplicate-btn,.bsd-widget-edit-btn,.bsd-widget-remove-btn,.sensor-card__duplicate,.bsd-widget-menu-summary,.bsd-widget-menu-panel,.bsd-widget-gallery-overlay,.bsd-widget-gallery-modal,.bsd-widget-gallery-card,.bsd-widget-gallery-filters,.bsd-widget-gallery-search,input,textarea,select,option,button,.bsd-switch-3d,.bsd-downlink-btn,.bsd-emergency-body,.sensor-card,.alert-item,.year-btn,.bsd-stream-preset,canvas,.bsd-map-iframe,.leaflet-container,.leaflet-pane,.bsd-map-leaflet,.bsd-tracking-map-leaflet,.bsd-map-layer-menu,.bsd-map-layer-menu__trigger,.bsd-map-layer-menu__list,.bsd-map-layer-menu__opt,.bsd-panel-device-bar-inner label,.bsd-file-label"
               compactType={null}
               preventCollision
               /** En modo lectura: sin empujes automáticos al redimensionar el contenedor (RGL + solapamiento prohibido movían celdas solas). */

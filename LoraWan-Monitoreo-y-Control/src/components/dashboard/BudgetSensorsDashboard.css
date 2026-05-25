@@ -2171,6 +2171,7 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   justify-content: flex-end;
 }
 
+.bsd-root .bsd-widget-duplicate-btn,
 .bsd-root .bsd-widget-edit-btn,
 .bsd-root .bsd-widget-remove-btn {
   display: flex;
@@ -2191,6 +2192,33 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
     filter 0.2s ease,
     box-shadow 0.22s ease,
     border-color 0.2s ease;
+}
+
+/** Duplicar: icono copiar sobre vidrio azul. */
+.bsd-root .bsd-widget-duplicate-btn {
+  background: linear-gradient(165deg, #7dd3fc 0%, #0ea5e9 42%, #0369a1 100%);
+  border: 1px solid rgba(125, 211, 252, 0.75);
+  color: #082f49;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.28),
+    0 5px 18px rgba(3, 105, 161, 0.38),
+    inset 0 2px 0 rgba(224, 242, 254, 0.65),
+    inset 0 -4px 8px rgba(7, 89, 133, 0.28);
+}
+
+.bsd-root .bsd-widget-duplicate-btn:hover {
+  transform: translateY(-1px) scale(1.03);
+  border-color: rgba(186, 230, 253, 0.95);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.35),
+    0 8px 26px rgba(3, 105, 161, 0.48),
+    inset 0 2px 0 rgba(240, 249, 255, 0.75),
+    inset 0 -4px 8px rgba(7, 89, 133, 0.22);
+}
+
+.bsd-root .bsd-widget-duplicate-btn svg {
+  filter: drop-shadow(0 1px 1px rgba(255, 255, 255, 0.45));
+  stroke-width: 2.25px;
 }
 
 /** Editar: lápiz dorado (misma referencia que widget Texto). */
@@ -2734,6 +2762,7 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   justify-content: flex-end;
 }
 
+.bsd-root .sensor-card__duplicate,
 .bsd-root .sensor-card__edit,
 .bsd-root .sensor-card__remove {
   display: flex;
@@ -2749,6 +2778,27 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   transition: transform 0.2s ease, box-shadow 0.22s ease, border-color 0.2s ease;
+}
+
+.bsd-root .sensor-card__duplicate {
+  background: linear-gradient(165deg, #7dd3fc 0%, #0ea5e9 42%, #0369a1 100%);
+  border: 1px solid rgba(125, 211, 252, 0.75);
+  color: #082f49;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.28),
+    0 5px 18px rgba(3, 105, 161, 0.38),
+    inset 0 2px 0 rgba(224, 242, 254, 0.65),
+    inset 0 -4px 8px rgba(7, 89, 133, 0.28);
+}
+
+.bsd-root .sensor-card__duplicate:hover {
+  transform: translateY(-1px) scale(1.03);
+  border-color: rgba(186, 230, 253, 0.95);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.35),
+    0 8px 26px rgba(3, 105, 161, 0.48),
+    inset 0 2px 0 rgba(240, 249, 255, 0.75),
+    inset 0 -4px 8px rgba(7, 89, 133, 0.22);
 }
 
 .bsd-root .sensor-card__edit {

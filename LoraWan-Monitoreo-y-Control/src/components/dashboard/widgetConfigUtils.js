@@ -110,10 +110,51 @@ export const DASH_WIDGET = {
 
 /** Tipos de widget que pueden repetirse en el mismo tablero (id de celda `base__…`). */
 export const MULTI_INSTANCE_DASH_WIDGETS = new Set([
-  DASH_WIDGET.TEXT,
+  DASH_WIDGET.SWITCH,
+  DASH_WIDGET.DOWNLINK,
+  DASH_WIDGET.IMAGE,
+  DASH_WIDGET.MAP,
+  DASH_WIDGET.TRACKING_MAP,
+  DASH_WIDGET.SATISFACTION,
+  DASH_WIDGET.CONTAINER,
+  DASH_WIDGET.BATTERY_LEVEL,
   DASH_WIDGET.METRIC_CIRCULAR,
+  DASH_WIDGET.TEXT,
   DASH_WIDGET.VEleta,
+  DASH_WIDGET.BAR_CHART,
+  DASH_WIDGET.STREAM,
 ]);
+
+/**
+ * Ids de celdas visibles en el grid para un tipo de widget (p. ej. `dw_text`, `dw_text__abc`).
+ * @param {Record<string, boolean> | null | undefined} visibilityMap
+ * @param {{ i?: string }[] | null | undefined} gridLayout
+ * @param {string} baseId
+ */
+export function listDashboardWidgetSlotIds(visibilityMap, gridLayout, baseId) {
+  const b = String(baseId ?? '');
+  if (!b) return [];
+  if (visibilityMap && visibilityMap[b] === false) return [];
+  const ids = (Array.isArray(gridLayout) ? gridLayout : [])
+    .map((it) => String(it.i))
+    .filter((id) => dashboardWidgetBaseId(id) === b);
+  return ids.length > 0 ? ids : [b];
+}
+
+/**
+ * Copia la configuración guardada de un widget a otra clave de almacenamiento.
+ * @param {string} fromStorageKey
+ * @param {string} toStorageKey
+ * @param {string} baseId id base del tipo (`dw_text`, etc.)
+ */
+export function cloneWidgetConfigBetweenKeys(fromStorageKey, toStorageKey, baseId) {
+  const all = loadAllWidgetConfigs();
+  const src = all[fromStorageKey];
+  const stub = dashboardWidgetSensorStub(baseId);
+  const merged = mergeWidgetConfig(stub, src || null);
+  const copy = JSON.parse(JSON.stringify(merged));
+  saveWidgetConfig(toStorageKey, copy);
+}
 
 /**
  * Id base del tipo de widget (`dw_text`) a partir del id de celda (`dw_text` o `dw_text__abc`).
