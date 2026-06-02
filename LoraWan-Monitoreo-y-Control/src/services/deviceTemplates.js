@@ -141,17 +141,19 @@ export async function hydrateDeviceTemplatesCatalogFromServer(opts = {}) {
     (t) => t?.id != null && String(t.id).trim() && !serverIds.has(String(t.id).trim())
   ).length;
   const merged = mergeCatalogTemplatesById(serverTemplates, localTemplates);
+  const filtered = filterCatalogByExcludedBuiltinSeeds(merged);
   applyServerDeviceTemplatesCatalog({
     ...doc,
-    templates: merged,
+    templates: filtered,
     defaultTemplateId: resolveDefaultTemplateIdFromDoc(doc),
   });
-  persistList(merged);
+  persistList(filtered);
 
-  if (opts.syncLocalExtrasToServer && localOnlyCount > 0) {
+  const hadServerEntriesRemovedByExclusion = filtered.length < merged.length;
+  if (opts.syncLocalExtrasToServer && (localOnlyCount > 0 || hadServerEntriesRemovedByExclusion)) {
     await flushDeviceTemplatesCatalogToServer();
   }
-  return { ...doc, templates: merged };
+  return { ...doc, templates: filtered };
 }
 
 export async function publishLocalCustomTemplatesIfServerEmpty(isSuperAdmin) {
@@ -247,6 +249,28 @@ function rememberExcludedBuiltinSeedKey(key) {
     const set = loadExcludedBuiltinSeedKeys();
     set.add(key);
     localStorage.setItem(EXCLUDED_BUILTIN_SEEDS_KEY, JSON.stringify([...set]));
+  } catch {
+    /* ignore quota */
+  }
+}
+
+function clearExcludedBuiltinSeedKeysForTemplate(t) {
+  if (typeof window === 'undefined' || !t) return;
+  const modeloNorm = templateModeloKey(t);
+  if (!modeloNorm) return;
+  try {
+    const set = loadExcludedBuiltinSeedKeys();
+    let changed = false;
+    for (const seed of SEED_DEVICE_TEMPLATES) {
+      if ((seed.modelo || '').trim().toLowerCase() !== modeloNorm) continue;
+      const key = seedKeyForSeedEntry(seed);
+      if (set.delete(key)) changed = true;
+    }
+    const customKey = seedCatalogKey(t.marca, t.modelo);
+    if (set.delete(customKey)) changed = true;
+    if (changed) {
+      localStorage.setItem(EXCLUDED_BUILTIN_SEEDS_KEY, JSON.stringify([...set]));
+    }
   } catch {
     /* ignore quota */
   }
@@ -612,12 +636,24 @@ function ensureBuiltinSeedsMerged() {
   }
 }
 
+function filterCatalogByExcludedBuiltinSeeds(list) {
+  const excluded = loadExcludedBuiltinSeedKeys();
+  if (!excluded.size) return Array.isArray(list) ? [...list] : [];
+  return (Array.isArray(list) ? list : []).filter((t) => {
+    if (!t) return false;
+    const key = seedCatalogKey(t.marca, t.modelo);
+    return !excluded.has(key);
+  });
+}
+
 export function getDeviceTemplates() {
   if (serverTemplatesState.status === 'loaded') {
-    return mergeSeedsIntoTemplateList(serverTemplatesState.templates);
+    return mergeSeedsIntoTemplateList(
+      filterCatalogByExcludedBuiltinSeeds(serverTemplatesState.templates)
+    );
   }
   ensureBuiltinSeedsMerged();
-  return loadRaw();
+  return filterCatalogByExcludedBuiltinSeeds(loadRaw());
 }
 
 function templateModeloKey(t) {
@@ -687,23 +723,41 @@ export function saveDeviceTemplate(payload) {
   if (customIdx >= 0) customList[customIdx] = entry;
   else customList.push(entry);
 
+  clearExcludedBuiltinSeedKeysForTemplate(entry);
   commitDeviceTemplatesCatalog(customList);
   return entry;
 }
 
-export function deleteDeviceTemplate(id) {
-  const sid = id != null ? String(id).trim() : '';
-  const sourceList =
+export function deleteDeviceTemplate(idOrTemplate) {
+  const template =
+    idOrTemplate != null && typeof idOrTemplate === 'object' && !Array.isArray(idOrTemplate)
+      ? idOrTemplate
+      : getDeviceTemplateById(String(idOrTemplate || '').trim());
+
+  const sid = template?.id != null ? String(template.id).trim() : String(idOrTemplate || '').trim();
+  const modeloNorm = template ? templateModeloKey(template) : '';
+
+  const customList =
     serverTemplatesState.status === 'loaded' ? [...serverTemplatesState.templates] : [...loadRaw()];
-  const victim = sid ? sourceList.find((t) => String(t.id ?? '').trim() === sid) : null;
-  if (victim && templateMatchesSeedCatalog(victim)) {
-    rememberExcludedBuiltinSeedKey(seedCatalogKey(victim.marca, victim.modelo));
+
+  const next = customList.filter((t) => {
+    if (sid && String(t.id ?? '').trim() === sid) return false;
+    if (modeloNorm && templateModeloKey(t) === modeloNorm) return false;
+    return true;
+  });
+
+  if (modeloNorm) {
+    for (const seed of SEED_DEVICE_TEMPLATES) {
+      if ((seed.modelo || '').trim().toLowerCase() === modeloNorm) {
+        rememberExcludedBuiltinSeedKey(seedKeyForSeedEntry(seed));
+      }
+    }
+  } else if (template && templateMatchesSeedCatalog(template)) {
+    rememberExcludedBuiltinSeedKey(seedCatalogKey(template.marca, template.modelo));
   }
-  const next = sid ? sourceList.filter((t) => String(t.id ?? '').trim() !== sid) : sourceList;
-  if (serverTemplatesState.status === 'loaded') {
-    serverTemplatesState = { ...serverTemplatesState, templates: next };
-  }
-  persistList(next);
+
+  commitDeviceTemplatesCatalog(next);
+
   const def = getDefaultTemplateId();
   if (typeof window !== 'undefined' && sid && def != null && String(def).trim() === sid) {
     setDefaultTemplateId(null);
@@ -1065,6 +1119,7 @@ export function mergeDeviceTemplatesFromImport(parsed) {
       list.push(entry);
       added += 1;
     }
+    clearExcludedBuiltinSeedKeysForTemplate(entry);
     affectedTemplateIds.push(id);
   });
 

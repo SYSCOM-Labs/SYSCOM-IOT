@@ -299,13 +299,22 @@ const TemplatesPage = () => {
   };
 
   const handleDelete = async (t) => {
-    if (!window.confirm(`¿Eliminar la plantilla "${t.modelo}" (${t.marca})?`)) return;
-    deleteDeviceTemplate(t.id);
+    if (!window.confirm(`¿Eliminar permanentemente la plantilla "${t.modelo}" (${t.marca})?`)) return;
+    deleteDeviceTemplate(t);
     refresh();
     try {
       await flushDeviceTemplatesCatalogToServer();
     } catch (e) {
-      console.warn('[TemplatesPage] publicar catálogo tras borrar:', e?.message || e);
+      const msg = e?.response?.data?.error || e?.message || 'No se pudo guardar el catálogo en el servidor.';
+      console.warn('[TemplatesPage] publicar catálogo tras borrar:', msg);
+      setTemplatesNoticeModal({
+        open: true,
+        title: 'Eliminación incompleta',
+        message: `La plantilla se quitó en este navegador, pero no se pudo publicar en el servidor:\n\n${msg}\n\nAl volver a entrar podría reaparecer hasta que se sincronice correctamente.`,
+        variant: 'warning',
+        wide: true,
+        confirmLabel: 'Entendido',
+      });
     }
   };
 
