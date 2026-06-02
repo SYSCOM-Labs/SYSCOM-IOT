@@ -21,6 +21,7 @@ import {
   publishLocalCustomTemplatesIfServerEmpty,
   flushDeviceTemplatesCatalogToServer,
   templateMatchesSeedCatalog,
+  reconcileDuplicateDeviceTemplatesInCatalog,
 } from '../services/deviceTemplates';
 import { saveDeviceDecodeConfig } from '../services/api';
 import { adaptDecoderScriptForSyscom } from '../utils/adaptDecoderScript';
@@ -80,6 +81,7 @@ const TemplatesPage = () => {
     (async () => {
       try {
         await hydrateDeviceTemplatesCatalogFromServer({ syncLocalExtrasToServer: isSuperAdmin });
+        if (!cancelled) await reconcileDuplicateDeviceTemplatesInCatalog({ publish: isSuperAdmin });
         if (!cancelled) await publishLocalCustomTemplatesIfServerEmpty(isSuperAdmin);
       } catch (e) {
         if (!cancelled) console.warn('[TemplatesPage] catálogo servidor:', e?.message || e);

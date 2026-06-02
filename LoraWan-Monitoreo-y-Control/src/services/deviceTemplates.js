@@ -95,8 +95,9 @@ function resolveDefaultTemplateIdFromDoc(doc) {
 }
 
 /** Actualiza catálogo en memoria y localStorage (sin semillas integradas). */
-function commitDeviceTemplatesCatalog(list, defaultTemplateId = undefined) {
-  const templates = Array.isArray(list) ? list.map((t) => (t && typeof t === 'object' ? { ...t } : {})) : [];
+function commitDeviceTemplatesCatalog(list, defaultTemplateId = undefined, preferId = undefined) {
+  let templates = Array.isArray(list) ? list.map((t) => (t && typeof t === 'object' ? { ...t } : {})) : [];
+  templates = dedupeCustomCatalogByModelo(templates, preferId);
   const def =
     defaultTemplateId === undefined
       ? getDefaultTemplateId()
@@ -116,7 +117,7 @@ function commitDeviceTemplatesCatalog(list, defaultTemplateId = undefined) {
  * @param {object} doc respuesta GET /api/device-templates
  */
 export function applyServerDeviceTemplatesCatalog(doc) {
-  const templates = Array.isArray(doc?.templates) ? doc.templates : [];
+  const templates = dedupeCustomCatalogByModelo(Array.isArray(doc?.templates) ? doc.templates : []);
   serverTemplatesState = {
     status: 'loaded',
     templates: templates.map((t) => (t && typeof t === 'object' ? { ...t } : {})),
@@ -142,18 +143,23 @@ export async function hydrateDeviceTemplatesCatalogFromServer(opts = {}) {
   ).length;
   const merged = mergeCatalogTemplatesById(serverTemplates, localTemplates);
   const filtered = filterCatalogByExcludedBuiltinSeeds(merged);
+  const deduped = dedupeCustomCatalogByModelo(filtered);
   applyServerDeviceTemplatesCatalog({
     ...doc,
-    templates: filtered,
+    templates: deduped,
     defaultTemplateId: resolveDefaultTemplateIdFromDoc(doc),
   });
-  persistList(filtered);
+  persistList(deduped);
 
   const hadServerEntriesRemovedByExclusion = filtered.length < merged.length;
-  if (opts.syncLocalExtrasToServer && (localOnlyCount > 0 || hadServerEntriesRemovedByExclusion)) {
+  const hadDuplicatesRemoved = deduped.length < filtered.length;
+  if (
+    opts.syncLocalExtrasToServer &&
+    (localOnlyCount > 0 || hadServerEntriesRemovedByExclusion || hadDuplicatesRemoved)
+  ) {
     await flushDeviceTemplatesCatalogToServer();
   }
-  return { ...doc, templates: filtered };
+  return { ...doc, templates: deduped };
 }
 
 export async function publishLocalCustomTemplatesIfServerEmpty(isSuperAdmin) {
@@ -180,15 +186,30 @@ export async function publishLocalCustomTemplatesIfServerEmpty(isSuperAdmin) {
 }
 
 export async function flushDeviceTemplatesCatalogToServer() {
-  const templates =
+  let templates =
     serverTemplatesState.status === 'loaded'
       ? [...serverTemplatesState.templates]
       : [...loadRaw()];
+  templates = dedupeCustomCatalogByModelo(templates);
+  commitDeviceTemplatesCatalog(templates);
   const defaultTemplateId = getDefaultTemplateId();
   const { putDeviceTemplatesCatalog } = await import('./api.js');
   const saved = await putDeviceTemplatesCatalog({ templates, defaultTemplateId });
   applyServerDeviceTemplatesCatalog(saved);
-  persistList(Array.isArray(saved?.templates) ? saved.templates : templates);
+  persistList(Array.isArray(saved?.templates) ? dedupeCustomCatalogByModelo(saved.templates) : templates);
+}
+
+/** Fusiona duplicados por modelo en catálogo y opcionalmente publica al servidor. */
+export async function reconcileDuplicateDeviceTemplatesInCatalog(opts = {}) {
+  const list =
+    serverTemplatesState.status === 'loaded' ? [...serverTemplatesState.templates] : [...loadRaw()];
+  const deduped = dedupeCustomCatalogByModelo(list);
+  if (deduped.length === list.length) return false;
+  commitDeviceTemplatesCatalog(deduped);
+  if (opts.publish) {
+    await flushDeviceTemplatesCatalogToServer();
+  }
+  return true;
 }
 
 function mergeSeedsIntoTemplateList(customList) {
@@ -224,6 +245,42 @@ function seedCatalogKey(marca, modelo) {
 
 function seedKeyForSeedEntry(seed) {
   return seedCatalogKey(seed.marca || 'Milesight', seed.modelo);
+}
+
+function templateModeloKey(t) {
+  return String(t?.modelo || '').trim().toLowerCase();
+}
+
+function isBuiltinRuntimeTemplateId(id) {
+  return String(id || '').trim().startsWith('tpl_builtin_');
+}
+
+function templateRichnessScore(t) {
+  const dec = String(t?.decoderScript || '').trim().length;
+  const dl = Array.isArray(t?.downlinks) ? t.downlinks.length : 0;
+  const builtin = isBuiltinRuntimeTemplateId(t?.id) ? 0 : 100_000;
+  return builtin + dec * 2 + dl;
+}
+
+function pickPreferredTemplateEntry(a, b, preferId) {
+  if (preferId) {
+    if (String(a?.id) === String(preferId)) return a;
+    if (String(b?.id) === String(preferId)) return b;
+  }
+  return templateRichnessScore(a) >= templateRichnessScore(b) ? a : b;
+}
+
+/** Una sola plantilla por modelo en el catálogo custom (evita duplicados WT201, etc.). */
+function dedupeCustomCatalogByModelo(list, preferId) {
+  const byModelo = new Map();
+  for (const t of list || []) {
+    if (!t) continue;
+    const k = templateModeloKey(t);
+    if (!k) continue;
+    const prev = byModelo.get(k);
+    byModelo.set(k, prev ? pickPreferredTemplateEntry(prev, t, preferId) : t);
+  }
+  return [...byModelo.values()];
 }
 
 export function templateMatchesSeedCatalog(t) {
@@ -648,23 +705,20 @@ function filterCatalogByExcludedBuiltinSeeds(list) {
 
 export function getDeviceTemplates() {
   if (serverTemplatesState.status === 'loaded') {
-    return mergeSeedsIntoTemplateList(
+    const custom = dedupeCustomCatalogByModelo(
       filterCatalogByExcludedBuiltinSeeds(serverTemplatesState.templates)
     );
+    return dedupeCustomCatalogByModelo(mergeSeedsIntoTemplateList(custom));
   }
   ensureBuiltinSeedsMerged();
-  return filterCatalogByExcludedBuiltinSeeds(loadRaw());
-}
-
-function templateModeloKey(t) {
-  return String(t?.modelo || '').trim().toLowerCase();
+  return dedupeCustomCatalogByModelo(filterCatalogByExcludedBuiltinSeeds(loadRaw()));
 }
 
 export function saveDeviceTemplate(payload) {
   const incomingId = payload.id != null && String(payload.id).trim() !== '' ? String(payload.id).trim() : null;
   const modeloNorm = String(payload.modelo || '').trim().toLowerCase();
 
-  const customList =
+  let customList =
     serverTemplatesState.status === 'loaded' ? [...serverTemplatesState.templates] : [...loadRaw()];
 
   let id = incomingId;
@@ -689,20 +743,9 @@ export function saveDeviceTemplate(payload) {
     id = `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   }
 
-  if (modeloNorm) {
-    const conflict = customList.find((t) => {
-      if (templateModeloKey(t) !== modeloNorm) return false;
-      if (String(t.id) === String(id)) return false;
-      return true;
-    });
-    if (conflict) {
-      const err = new Error('TEMPLATE_MODEL_EXISTS');
-      err.code = 'TEMPLATE_MODEL_EXISTS';
-      err.conflictModelo = conflict.modelo;
-      err.conflictMarca = conflict.marca;
-      throw err;
-    }
-  }
+  customList = customList.filter(
+    (t) => templateModeloKey(t) !== modeloNorm || String(t.id) === String(id)
+  );
 
   const otaa = normalizeOtaaTemplateFields(payload);
   validateOtaaTemplateFields(otaa);
@@ -724,7 +767,7 @@ export function saveDeviceTemplate(payload) {
   else customList.push(entry);
 
   clearExcludedBuiltinSeedKeysForTemplate(entry);
-  commitDeviceTemplatesCatalog(customList);
+  commitDeviceTemplatesCatalog(customList, undefined, id);
   return entry;
 }
 
@@ -740,20 +783,20 @@ export function deleteDeviceTemplate(idOrTemplate) {
   const customList =
     serverTemplatesState.status === 'loaded' ? [...serverTemplatesState.templates] : [...loadRaw()];
 
-  const next = customList.filter((t) => {
-    if (sid && String(t.id ?? '').trim() === sid) return false;
-    if (modeloNorm && templateModeloKey(t) === modeloNorm) return false;
-    return true;
-  });
+  const existsInCustom = Boolean(sid && customList.some((t) => String(t.id) === sid));
+  const next = existsInCustom ? customList.filter((t) => String(t.id) !== sid) : [...customList];
 
-  if (modeloNorm) {
+  const isBuiltinRuntime = isBuiltinRuntimeTemplateId(sid);
+  const shouldExcludeSeed =
+    modeloNorm &&
+    (!existsInCustom || isBuiltinRuntime || (template && templateMatchesSeedCatalog(template)));
+
+  if (shouldExcludeSeed) {
     for (const seed of SEED_DEVICE_TEMPLATES) {
       if ((seed.modelo || '').trim().toLowerCase() === modeloNorm) {
         rememberExcludedBuiltinSeedKey(seedKeyForSeedEntry(seed));
       }
     }
-  } else if (template && templateMatchesSeedCatalog(template)) {
-    rememberExcludedBuiltinSeedKey(seedCatalogKey(template.marca, template.modelo));
   }
 
   commitDeviceTemplatesCatalog(next);
