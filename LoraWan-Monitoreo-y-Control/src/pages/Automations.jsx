@@ -146,14 +146,34 @@ const AutomationsPage = () => {
                 </h3>
               </div>
               <div className="rule-actions">
-                <button className="btn-icon" onClick={() => { setEditingRule(rule); setIsModalOpen(true); }}>
+                <button
+                  type="button"
+                  className="btn-icon"
+                  title="Editar regla"
+                  aria-label="Editar regla"
+                  onClick={() => {
+                    setEditingRule(rule);
+                    setIsModalOpen(true);
+                  }}
+                >
                   <Edit2 size={16} />
                 </button>
-                <button className="btn-icon delete" onClick={() => handleDelete(String(rule.id))}>
+                <button
+                  type="button"
+                  className="btn-icon delete"
+                  title="Eliminar regla"
+                  aria-label="Eliminar regla"
+                  onClick={() => handleDelete(String(rule.id))}
+                >
                   <Trash2 size={16} />
                 </button>
-                <label className="switch">
-                  <input type="checkbox" checked={rule.active !== false} onChange={() => toggleActive(String(rule.id))} />
+                <label className="switch" title={rule.active !== false ? 'Desactivar regla' : 'Activar regla'}>
+                  <input
+                    type="checkbox"
+                    checked={rule.active !== false}
+                    onChange={() => toggleActive(String(rule.id))}
+                    aria-label={rule.active !== false ? 'Desactivar regla' : 'Activar regla'}
+                  />
                   <span className="slider round"></span>
                 </label>
               </div>

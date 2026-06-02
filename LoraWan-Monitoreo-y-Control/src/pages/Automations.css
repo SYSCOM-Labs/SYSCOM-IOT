@@ -13,7 +13,7 @@
 
 .rules-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));
   gap: 24px;
   margin-top: 24px;
 }
@@ -25,7 +25,7 @@
   border: 1px solid var(--border-color);
   transition: all 0.3s ease;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .rule-card.inactive {
@@ -34,15 +34,23 @@
 }
 
 .rule-header {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
   align-items: center;
+  min-width: 0;
 }
 
 .rule-title {
   display: flex;
   align-items: center;
   gap: 12px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.rule-title .status-dot {
+  flex-shrink: 0;
 }
 
 .rule-title h3,
@@ -52,7 +60,6 @@
   font-weight: 600;
   line-height: 1.25;
   min-width: 0;
-  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -62,13 +69,51 @@
 .rule-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: flex-end;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.automations-page .rule-actions .btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid var(--border-color, rgb(148 163 184 / 0.35));
+  background: rgb(255 255 255 / 0.65);
+  color: var(--text-primary, #0f172a);
+  flex-shrink: 0;
+}
+
+.automations-page .rule-actions .btn-icon:hover {
+  background: var(--glass-bg, rgb(255 255 255 / 0.9));
+  color: var(--text-primary, #0f172a);
+}
+
+.automations-page .rule-actions .btn-icon.delete {
+  color: var(--danger-color, #dc2626);
+  border-color: rgb(220 38 38 / 0.35);
+}
+
+.automations-page .rule-actions .btn-icon.delete:hover {
+  background: rgb(220 38 38 / 0.1);
+  color: var(--danger-color, #dc2626);
+}
+
+body.theme-dark .automations-page .rule-actions .btn-icon {
+  background: rgb(15 23 42 / 0.45);
+  border-color: rgb(148 163 184 / 0.25);
 }
 
 .rule-content {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .rule-section {
@@ -149,7 +194,8 @@
   display: inline-block;
   width: 40px;
   height: 20px;
-  margin-left: 8px;
+  margin-left: 2px;
+  flex-shrink: 0;
 }
 
 .switch input {
@@ -265,8 +311,22 @@ input:checked + .slider:before {
     padding: 16px;
   }
 
+  .rule-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+
   .rule-header .rule-card-title {
     font-size: 1rem;
+  }
+
+  .rule-actions {
+    gap: 4px;
+  }
+
+  .automations-page .rule-actions .btn-icon {
+    width: 1.85rem;
+    height: 1.85rem;
   }
 
   .rule-section {
