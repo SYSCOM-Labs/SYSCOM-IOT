@@ -162,12 +162,16 @@ import {
   layoutsEqualStable,
   mergeStoredBsdGridLayout,
   normalizeLayoutForPersistence,
-  placeNewBsdGridItem,
+  normalizeLayoutSignature,
   readStoredBsdGridLayout,
-  bsdDashboardLayoutHasOverlap,
-  relocateBsdGridItemIfOverlapping,
   filterLayoutToAllowedDashboardItems,
-  bsdGridRectsOverlap,
+  filterLayoutToVisibleDashboardItems,
+  appendBsdGridWidgetAtFirstGap,
+  resolveBsdDashboardGridLayout,
+  bsdDashboardLayoutHasOverlap,
+  ensureBsdGridLayoutGeometry,
+  normalizeNewWidgetSlotTemplate,
+  ensureBsdGridWidgetSlotAtFirstGap,
 } from './bsdDashboardLayout';
 import {
   readDownlinksFromLocalStorage,
@@ -2913,6 +2917,16 @@ export default function BudgetSensorsDashboard({
     },
     [variant, dashDeviceId, dashboardGridLayoutKey]
   );
+  const loadInitialGridLayout = (gk, vis, panelDevicesLen = 0) =>
+    resolveBsdDashboardGridLayout(
+      normalizeLayoutForPersistence(
+        clampLayoutItemsToModerateMins(
+          mergeStoredBsdGridLayout(readStoredBsdGridLayout(gk), buildDefaultBsdGridLayout(variant, panelDevicesLen, vis))
+        )
+      ),
+      vis
+    );
+
   const [gridLayout, setGridLayout] = useState(() => {
     if (variant === 'panel') {
       const pid =
@@ -2921,30 +2935,49 @@ export default function BudgetSensorsDashboard({
           : 'main';
       const vis = loadDashboardVisibility('panel', null, pid, panelOwnerSegment);
       const gk = dashboardGridLayoutStorageKey('panel', null, pid, panelOwnerSegment);
-      return compactBsdGridLayoutTopLeft(
-        normalizeLayoutForPersistence(
-          clampLayoutItemsToModerateMins(
-            mergeStoredBsdGridLayout(readStoredBsdGridLayout(gk), buildDefaultBsdGridLayout('panel', 0, vis))
-          )
-        )
-      );
+      return loadInitialGridLayout(gk, vis);
     }
     const did = variant === 'device' ? resolveDeviceDashboardStorageId(device) : null;
     const pid = undefined;
     const vis = loadDashboardVisibility(variant, did, pid);
-    return compactBsdGridLayoutTopLeft(
-      normalizeLayoutForPersistence(
-        clampLayoutItemsToModerateMins(
-          mergeStoredBsdGridLayout(
-            readStoredBsdGridLayout(dashboardGridLayoutStorageKey(variant, did, pid)),
-            buildDefaultBsdGridLayout(variant, 0, vis)
-          )
-        )
-      )
+    return loadInitialGridLayout(
+      dashboardGridLayoutStorageKey(variant, did, pid),
+      vis
     );
   });
   const gridLayoutLatestRef = useRef(gridLayout);
+  /** Layout sin solapes (fuente única para RGL y lista de slots). */
+  const resolvedGridLayout = useMemo(
+    () => resolveBsdDashboardGridLayout(gridLayout, visibilityMap),
+    [gridLayout, visibilityMap]
+  );
   gridLayoutLatestRef.current = gridLayout;
+
+  /** Fuerza remontaje de RGL cuando se repara un layout con solapes en disco/estado. */
+  const [gridLayoutRepairEpoch, setGridLayoutRepairEpoch] = useState(0);
+
+  /** Modo lectura: celdas estáticas + sin solapamiento (RGL no reubica al redimensionar). */
+  const gridLayoutForRgl = useMemo(() => {
+    let visible = filterLayoutToVisibleDashboardItems(resolvedGridLayout, visibilityMap);
+    visible = ensureBsdGridLayoutGeometry(visible);
+    if (!dashboardLayoutLocked) return visible;
+    return visible.map((it) => ({ ...it, static: true }));
+  }, [resolvedGridLayout, dashboardLayoutLocked, visibilityMap]);
+
+  const rglLayoutIdSet = useMemo(
+    () => new Set(gridLayoutForRgl.map((it) => String(it.i))),
+    [gridLayoutForRgl]
+  );
+  /** Posiciones actuales para `data-grid` en hijos directos de RGL. */
+  const gridLayoutItemByIdRef = useRef(new Map());
+  gridLayoutItemByIdRef.current = useMemo(
+    () => new Map(gridLayoutForRgl.map((it) => [String(it.i), it])),
+    [gridLayoutForRgl]
+  );
+  const gridLayoutSignature = useMemo(
+    () => normalizeLayoutSignature(gridLayoutForRgl),
+    [gridLayoutForRgl]
+  );
   /** Evita mezclar posiciones del panel/dispositivo anterior al cambiar `dashboardGridLayoutKey`. */
   const prevDashboardGridLayoutKeyRef = useRef(dashboardGridLayoutKey);
   /** Layout al inicio de un drag (intercambio pairwise con el solape al soltar). */
@@ -3018,11 +3051,7 @@ export default function BudgetSensorsDashboard({
     const filtered = filterLayoutToAllowedDashboardItems(merged, defaults);
     /** Sin reempaque global: `compactBsdGridLayoutTopLeft` aquí movía widgets solos (p. ej. al cargar lista de dispositivos del panel o al redimensionar). */
     const sizeSafe = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(filtered));
-    /**
-     * No reinyectar la plantilla por defecto cuando el filtro deja el grid vacío: eso mostraba widgets
-     * que el usuario no había colocado manualmente (p. ej. desincronía transitoria). Se conserva el resultado filtrado.
-     */
-    const nextLayout = sizeSafe;
+    const nextLayout = resolveBsdDashboardGridLayout(sizeSafe, vis);
     try {
       const disk = normalizeLayoutForPersistence(readStoredBsdGridLayout(dashboardGridLayoutKey) || []);
       if (!layoutsEqualStable(disk, nextLayout)) persistBsdGridLayoutDisk(nextLayout);
@@ -3065,6 +3094,34 @@ export default function BudgetSensorsDashboard({
     panelOwnerSegment,
   ]);
 
+  /** Persiste layout reparado (sin solapes) cuando el estado en memoria difiere del resuelto. */
+  useLayoutEffect(() => {
+    if (gridRglDraggingRef.current || gridRglResizingRef.current) return;
+    const raw = gridLayoutLatestRef.current || [];
+    const vis = visibilityMapRef.current;
+    const visibleRaw = filterLayoutToVisibleDashboardItems(raw, vis);
+    const hadOverlap = bsdDashboardLayoutHasOverlap(visibleRaw);
+    let resolved = resolveBsdDashboardGridLayout(raw, vis);
+    if (hadOverlap && layoutsEqualStable(resolved, raw) && bsdDashboardLayoutHasOverlap(visibleRaw)) {
+      resolved = resolveBsdDashboardGridLayout(
+        normalizeLayoutForPersistence([
+          ...raw.filter((it) => {
+            if (!it || it.i == null) return false;
+            const base = dashboardWidgetBaseId(String(it.i));
+            return vis[base] === false || vis[String(it.i)] === false;
+          }),
+          ...ensureBsdGridLayoutGeometry(visibleRaw),
+        ]),
+        vis
+      );
+    }
+    if (layoutsEqualStable(resolved, raw)) return;
+    gridLayoutLatestRef.current = resolved;
+    setGridLayout(resolved);
+    persistBsdGridLayoutDisk(resolved);
+    if (hadOverlap) setGridLayoutRepairEpoch((n) => n + 1);
+  }, [gridLayout, visibilityMap, dashboardGridLayoutKey, persistBsdGridLayoutDisk]);
+
   /**
    * Cuando el panel pasa a tener dispositivos y la barra superior está visible, insertar **una vez** esa fila
    * desplazando el resto hacia abajo — sin `compactBsdGridLayoutTopLeft` (no reordenar todo el tablero).
@@ -3080,9 +3137,10 @@ export default function BudgetSensorsDashboard({
     const bar = { i: DASH_WIDGET.PANEL_DEVICE_BAR, x: 0, y: 0, w: 12, h: 5, minW: 4, minH: 3 };
     const shifted = prev.map((it) => ({ ...it, y: (Math.round(Number(it.y)) || 0) + 5 }));
     const merged = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins([bar, ...shifted]));
-    gridLayoutLatestRef.current = merged;
-    setGridLayout(merged);
-    persistBsdGridLayoutDisk(merged);
+    const resolved = resolveBsdDashboardGridLayout(merged, vis);
+    gridLayoutLatestRef.current = resolved;
+    setGridLayout(resolved);
+    persistBsdGridLayoutDisk(resolved);
   }, [variant, panelDeviceCount, dashboardGridLayoutKey, persistBsdGridLayoutDisk]);
 
   /** Solo adoptar posiciones que entrega RGL mientras el usuario arrastra o redimensiona; si no, RGL+merge pueden mover celdas solas (p. ej. Switch, gráficos). */
@@ -3125,7 +3183,10 @@ export default function BudgetSensorsDashboard({
       );
       if (!normalized) return;
       const shouldPack = opts?.compact === true;
-      const packed = shouldPack ? compactBsdGridLayoutTopLeft(normalized) : normalized;
+      const visibleNorm = filterLayoutToVisibleDashboardItems(normalized, visibilityMapRef.current);
+      const packed = shouldPack
+        ? compactBsdGridLayoutTopLeft(visibleNorm)
+        : resolveBsdDashboardGridLayout(normalized, visibilityMapRef.current);
       if (layoutsEqualStable(gridLayoutLatestRef.current, packed)) return;
       gridLayoutLatestRef.current = packed;
       setGridLayout(packed);
@@ -3210,7 +3271,10 @@ export default function BudgetSensorsDashboard({
         setWidgetConfigs(loadAllWidgetConfigs());
         setVisibilityMap(loadDashboardVisibility('device', dashDeviceId));
         const gk = dashboardGridLayoutStorageKey('device', dashDeviceId, undefined, undefined);
-        const nextGrid = normalizeLayoutForPersistence(readStoredBsdGridLayout(gk));
+        const nextGrid = resolveBsdDashboardGridLayout(
+          readStoredBsdGridLayout(gk),
+          loadDashboardVisibility('device', dashDeviceId)
+        );
         gridLayoutLatestRef.current = nextGrid;
         setGridLayout(nextGrid);
         setDownlinkList(
@@ -3263,8 +3327,9 @@ export default function BudgetSensorsDashboard({
         }
         setWidgetConfigs(loadAllWidgetConfigs());
         setVisibilityMap(loadDashboardVisibility('panel', null, pid, panelOwnerSegment));
+        const panelVis = loadDashboardVisibility('panel', null, pid, panelOwnerSegment);
         const gk = dashboardGridLayoutStorageKey('panel', null, pid, panelOwnerSegment);
-        const nextGrid = normalizeLayoutForPersistence(readStoredBsdGridLayout(gk));
+        const nextGrid = resolveBsdDashboardGridLayout(readStoredBsdGridLayout(gk), panelVis);
         gridLayoutLatestRef.current = nextGrid;
         setGridLayout(nextGrid);
       } catch (e) {
@@ -3762,8 +3827,11 @@ export default function BudgetSensorsDashboard({
   }, []);
 
   const dashWidgetSlotIds = useCallback(
-    (baseId) => listDashboardWidgetSlotIds(visibilityMap, gridLayout, baseId),
-    [visibilityMap, gridLayout]
+    (baseId) =>
+      listDashboardWidgetSlotIds(visibilityMap, resolvedGridLayout, baseId).filter((id) =>
+        rglLayoutIdSet.has(String(id))
+      ),
+    [visibilityMap, resolvedGridLayout, rglLayoutIdSet]
   );
 
   const textDashSlotIds = useMemo(
@@ -5349,6 +5417,23 @@ export default function BudgetSensorsDashboard({
     return c ? { color: c } : undefined;
   };
 
+  const mergeGridSlotShell = useCallback((slotId) => {
+    const gridIt = gridLayoutItemByIdRef.current.get(String(slotId));
+    if (!gridIt) return { className: 'bsd-grid-slot' };
+    return {
+      className: 'bsd-grid-slot',
+      'data-grid': {
+        i: String(gridIt.i),
+        x: gridIt.x,
+        y: gridIt.y,
+        w: gridIt.w,
+        h: gridIt.h,
+        ...(gridIt.minW != null ? { minW: gridIt.minW } : {}),
+        ...(gridIt.minH != null ? { minH: gridIt.minH } : {}),
+      },
+    };
+  }, []);
+
   const mergeShell = useCallback(
     (wid, className) => {
       const cfg = widgetConfigs[dk(wid)];
@@ -5387,11 +5472,26 @@ export default function BudgetSensorsDashboard({
       }
       const app = appearanceWithConditionalBackground(cfg?.appearance, primaryRaw, alternateRaw);
       const st = buildBsdWidgetSurfaceStyle(app);
+      const gridIt = gridLayoutItemByIdRef.current.get(String(wid));
+      const dataGrid = gridIt
+        ? {
+            'data-grid': {
+              i: String(gridIt.i),
+              x: gridIt.x,
+              y: gridIt.y,
+              w: gridIt.w,
+              h: gridIt.h,
+              ...(gridIt.minW != null ? { minW: gridIt.minW } : {}),
+              ...(gridIt.minH != null ? { minH: gridIt.minH } : {}),
+            },
+          }
+        : {};
       return {
         className: [className, isWidgetBackgroundTransparent(app) ? 'bsd-widget-surface--clear' : '']
           .filter(Boolean)
           .join(' '),
         style: st || undefined,
+        ...dataGrid,
       };
     },
     [
@@ -5516,7 +5616,7 @@ export default function BudgetSensorsDashboard({
           (panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0,
           visNext
         ) || normalizeLayoutForPersistence(without);
-      const packed = compactBsdGridLayoutTopLeft(normalized);
+      const packed = resolveBsdDashboardGridLayout(normalized, visNext);
       gridLayoutLatestRef.current = packed;
       setGridLayout(packed);
       persistBsdGridLayoutDisk(packed);
@@ -5559,60 +5659,31 @@ export default function BudgetSensorsDashboard({
         visibilitySnapshot && typeof visibilitySnapshot === 'object' && !Array.isArray(visibilitySnapshot)
           ? visibilitySnapshot
           : visibilityMapRef.current;
-      const panelLen = variant === 'panel' ? ((panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0) : 0;
-      const defaults = buildDefaultBsdGridLayout(variant, panelLen, vis);
-      let slot = defaults.find((d) => String(d.i) === String(wid));
-      /** Solo calcular posición libre al crear celda nueva sin coordenadas de plantilla (galería / clon). */
-      let useAutoPlace = false;
-      if (!slot) {
-        const base = dashboardWidgetBaseId(String(wid));
-        const tmpl = defaults.find((d) => String(d.i) === String(base));
-        if (tmpl && MULTI_INSTANCE_DASH_WIDGETS.has(base)) {
-          slot = { ...tmpl, i: String(wid) };
-          useAutoPlace = true;
-        }
-      }
-      if (!slot) {
-        slot = buildModerateBsdGridTemplateForWidget(String(wid));
-        useAutoPlace = true;
-      }
+      const slot = normalizeNewWidgetSlotTemplate(buildModerateBsdGridTemplateForWidget(String(wid)));
       if (!slot) return;
       const cur = normalizeLayoutForPersistence(gridLayoutLatestRef.current || []);
-      if (cur.some((it) => String(it.i) === String(wid))) return;
-      let piece = useAutoPlace ? placeNewBsdGridItem(cur, slot) : { ...slot };
-      if (
-        !useAutoPlace &&
-        cur.some((it) =>
-          bsdGridRectsOverlap(
-            { x: piece.x, y: piece.y, w: piece.w, h: piece.h },
-            { x: it.x, y: it.y, w: it.w, h: it.h }
-          )
-        )
-      ) {
-        piece = placeNewBsdGridItem(cur, slot);
-      }
-      const next = normalizeLayoutForPersistence([...cur, piece]);
-      let clamped = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(next));
-      clamped = relocateBsdGridItemIfOverlapping(clamped, wid);
-      if (bsdDashboardLayoutHasOverlap(clamped)) {
-        clamped = compactBsdGridLayoutTopLeft(clamped);
-      }
-      gridLayoutLatestRef.current = clamped;
-      setGridLayout(clamped);
-      persistBsdGridLayoutDisk(clamped);
+      const resolved = resolveBsdDashboardGridLayout(
+        ensureBsdGridWidgetSlotAtFirstGap(cur, vis, slot),
+        vis
+      );
+      gridLayoutLatestRef.current = resolved;
+      setGridLayout(resolved);
+      persistBsdGridLayoutDisk(resolved);
+      setGridLayoutRepairEpoch((n) => n + 1);
     },
-    [variant, persistBsdGridLayoutDisk, panelOwnerSegment]
+    [persistBsdGridLayoutDisk]
   );
 
   const addDashWidget = useCallback(
     (wid) => {
-      setVisibilityMap((prev) => {
-        const next = { ...prev, [wid]: true };
+      const next = { ...visibilityMapRef.current, [wid]: true };
+      visibilityMapRef.current = next;
+      setVisibilityMap(() => {
         saveDashboardVisibility(variant, next, dashDeviceId, variant === 'panel' ? panelInstanceId : undefined,
         variant === 'panel' ? panelOwnerSegment : undefined);
-        queueMicrotask(() => ensureGridSlotForWidget(wid, next));
         return next;
       });
+      ensureGridSlotForWidget(wid, next);
     },
     [variant, dashDeviceId, ensureGridSlotForWidget, panelInstanceId, panelOwnerSegment]
   );
@@ -5974,7 +6045,6 @@ export default function BudgetSensorsDashboard({
       const newId = makeDashboardWidgetCloneId(baseId);
       cloneWidgetConfigBetweenKeys(dk(widStr), dk(newId), baseId);
 
-      const panelLen = variant === 'panel' ? ((panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0) : 0;
       const curVis = { ...visibilityMapRef.current, [baseId]: true };
       visibilityMapRef.current = curVis;
       setVisibilityMap(() => {
@@ -5989,25 +6059,15 @@ export default function BudgetSensorsDashboard({
       });
 
       const cur = normalizeLayoutForPersistence(gridLayoutLatestRef.current || []);
-      const srcPiece = cur.find((it) => String(it.i) === widStr);
-      const defaults = buildDefaultBsdGridLayout(variant, panelLen, curVis);
-      const tmpl =
-        srcPiece ||
-        defaults.find((d) => String(d.i) === widStr) ||
-        defaults.find((d) => String(d.i) === baseId) ||
-        buildModerateBsdGridTemplateForWidget(newId);
-      if (!tmpl) return;
-
-      const appended = placeNewBsdGridItem(cur, { ...tmpl, i: newId });
-      const next = normalizeLayoutForPersistence([...cur, appended]);
-      let clamped = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(next));
-      clamped = relocateBsdGridItemIfOverlapping(clamped, newId);
-      if (bsdDashboardLayoutHasOverlap(clamped)) {
-        clamped = compactBsdGridLayoutTopLeft(clamped);
-      }
-      gridLayoutLatestRef.current = clamped;
-      setGridLayout(clamped);
-      persistBsdGridLayoutDisk(clamped);
+      const slot = normalizeNewWidgetSlotTemplate({ ...buildModerateBsdGridTemplateForWidget(newId), i: newId });
+      const resolved = resolveBsdDashboardGridLayout(
+        appendBsdGridWidgetAtFirstGap(cur, curVis, slot),
+        curVis
+      );
+      gridLayoutLatestRef.current = resolved;
+      setGridLayout(resolved);
+      persistBsdGridLayoutDisk(resolved);
+      setGridLayoutRepairEpoch((n) => n + 1);
       setWidgetConfigs(loadAllWidgetConfigs());
       scheduleBsdServerPersistRef.current?.();
 
@@ -6052,7 +6112,6 @@ export default function BudgetSensorsDashboard({
       }
       saveWidgetConfig(dk(newId), merged);
 
-      const panelLen = variant === 'panel' ? ((panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0) : 0;
       const curVis = { ...visibilityMapRef.current, [baseId]: true };
       visibilityMapRef.current = curVis;
       setVisibilityMap(() => {
@@ -6067,24 +6126,15 @@ export default function BudgetSensorsDashboard({
       });
 
       const cur = normalizeLayoutForPersistence(gridLayoutLatestRef.current || []);
-      const defaults = buildDefaultBsdGridLayout(variant, panelLen, curVis);
-      const sameFamily = cur.filter((it) => dashboardWidgetBaseId(String(it.i)) === baseId);
-      const tmpl =
-        (sameFamily.length ? sameFamily[sameFamily.length - 1] : null) ||
-        defaults.find((d) => String(d.i) === baseId) ||
-        buildModerateBsdGridTemplateForWidget(newId);
-      if (!tmpl) return;
-
-      const appended = placeNewBsdGridItem(cur, { ...tmpl, i: newId });
-      const next = normalizeLayoutForPersistence([...cur, appended]);
-      let clamped = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(next));
-      clamped = relocateBsdGridItemIfOverlapping(clamped, newId);
-      if (bsdDashboardLayoutHasOverlap(clamped)) {
-        clamped = compactBsdGridLayoutTopLeft(clamped);
-      }
-      gridLayoutLatestRef.current = clamped;
-      setGridLayout(clamped);
-      persistBsdGridLayoutDisk(clamped);
+      const slot = normalizeNewWidgetSlotTemplate({ ...buildModerateBsdGridTemplateForWidget(newId), i: newId });
+      const resolved = resolveBsdDashboardGridLayout(
+        appendBsdGridWidgetAtFirstGap(cur, curVis, slot),
+        curVis
+      );
+      gridLayoutLatestRef.current = resolved;
+      setGridLayout(resolved);
+      persistBsdGridLayoutDisk(resolved);
+      setGridLayoutRepairEpoch((n) => n + 1);
       setWidgetConfigs(loadAllWidgetConfigs());
       scheduleBsdServerPersistRef.current?.();
 
@@ -6201,44 +6251,10 @@ export default function BudgetSensorsDashboard({
     return () => window.removeEventListener('keydown', onKey);
   }, [widgetGalleryOpen, closeWidgetGallery]);
 
-  const addDashboardWidgetAndOpenConfig = useCallback(
-    (wid) => {
-      if (!canEditDashboard) return;
-      if (MULTI_INSTANCE_DASH_WIDGETS.has(wid)) {
-        const slots = (gridLayoutLatestRef.current || [])
-          .map((it) => String(it.i))
-          .filter((id) => dashboardWidgetBaseId(id) === wid);
-        if (slots.length > 0) {
-          const first = slots[0];
-          openWidgetEditModal({
-            storageKey: dk(first),
-            sensor: buildDashboardWidgetSensor(first),
-            editScope: 'value',
-          });
-          queueMicrotask(() => {
-            closeWidgetGallery();
-          });
-          return;
-        }
-      }
-      addDashWidget(wid);
-      openWidgetEditModal({
-        storageKey: dk(wid),
-        sensor: buildDashboardWidgetSensor(wid),
-        editScope: 'value',
-      });
-      queueMicrotask(() => {
-        closeWidgetGallery();
-      });
-    },
-    [addDashWidget, buildDashboardWidgetSensor, canEditDashboard, closeWidgetGallery, dk, openWidgetEditModal]
-  );
-
   const addDashboardWidgetCloneAndOpen = useCallback(
     (baseId) => {
       if (!canEditDashboard || !MULTI_INSTANCE_DASH_WIDGETS.has(baseId)) return;
       const newId = makeDashboardWidgetCloneId(baseId);
-      const panelLen = variant === 'panel' ? ((panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0) : 0;
       const curVis = { ...visibilityMapRef.current, [baseId]: true };
       visibilityMapRef.current = curVis;
       setVisibilityMap(() => {
@@ -6247,26 +6263,18 @@ export default function BudgetSensorsDashboard({
         return curVis;
       });
       const cur = normalizeLayoutForPersistence(gridLayoutLatestRef.current || []);
-      const defaults = buildDefaultBsdGridLayout(variant, panelLen, curVis);
       const sameFamily = cur.filter((it) => dashboardWidgetBaseId(String(it.i)) === baseId);
       const srcSlot = sameFamily.length ? String(sameFamily[sameFamily.length - 1].i) : baseId;
       cloneWidgetConfigBetweenKeys(dk(srcSlot), dk(newId), baseId);
-      const tmpl =
-        (sameFamily.length ? sameFamily[sameFamily.length - 1] : null) ||
-        defaults.find((d) => String(d.i) === baseId) ||
-        buildModerateBsdGridTemplateForWidget(newId);
-      if (!tmpl) return;
-      /** Misma lógica que la galería: a la derecha en la fila o siguiente fila, sin solape (no `y: maxY`). */
-      const appended = placeNewBsdGridItem(cur, { ...tmpl, i: newId });
-      const next = normalizeLayoutForPersistence([...cur, appended]);
-      let clamped = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(next));
-      clamped = relocateBsdGridItemIfOverlapping(clamped, newId);
-      if (bsdDashboardLayoutHasOverlap(clamped)) {
-        clamped = compactBsdGridLayoutTopLeft(clamped);
-      }
-      gridLayoutLatestRef.current = clamped;
-      setGridLayout(clamped);
-      persistBsdGridLayoutDisk(clamped);
+      const slot = normalizeNewWidgetSlotTemplate({ ...buildModerateBsdGridTemplateForWidget(newId), i: newId });
+      const resolved = resolveBsdDashboardGridLayout(
+        appendBsdGridWidgetAtFirstGap(cur, curVis, slot),
+        curVis
+      );
+      gridLayoutLatestRef.current = resolved;
+      setGridLayout(resolved);
+      persistBsdGridLayoutDisk(resolved);
+      setGridLayoutRepairEpoch((n) => n + 1);
       setWidgetConfigs(loadAllWidgetConfigs());
       scheduleBsdServerPersistRef.current?.();
       openWidgetEditModal({
@@ -6281,14 +6289,41 @@ export default function BudgetSensorsDashboard({
     [
       variant,
       dashDeviceId,
-      dashboardGridLayoutKey,
       persistBsdGridLayoutDisk,
       canEditDashboard,
       closeWidgetGallery,
       dk,
       buildDashboardWidgetSensor,
       openWidgetEditModal,
+      panelInstanceId,
+      panelOwnerSegment,
     ]
+  );
+
+  const addDashboardWidgetAndOpenConfig = useCallback(
+    (wid) => {
+      if (!canEditDashboard) return;
+      if (MULTI_INSTANCE_DASH_WIDGETS.has(wid)) {
+        const slots = (gridLayoutLatestRef.current || [])
+          .map((it) => String(it.i))
+          .filter((id) => dashboardWidgetBaseId(id) === wid);
+        if (slots.length > 0) {
+          addDashboardWidgetCloneAndOpen(wid);
+          return;
+        }
+      }
+      addDashWidget(wid);
+      setGridLayoutRepairEpoch((n) => n + 1);
+      openWidgetEditModal({
+        storageKey: dk(wid),
+        sensor: buildDashboardWidgetSensor(wid),
+        editScope: 'value',
+      });
+      queueMicrotask(() => {
+        closeWidgetGallery();
+      });
+    },
+    [addDashWidget, addDashboardWidgetCloneAndOpen, buildDashboardWidgetSensor, canEditDashboard, closeWidgetGallery, dk, openWidgetEditModal]
   );
 
   const onWidgetGalleryPick = useCallback(
@@ -6455,7 +6490,7 @@ export default function BudgetSensorsDashboard({
         {(() => {
           const gridBody = flattenDashboardGridChildren(
             <>
-        {variant === 'panel' && panelDevices.length > 0 && isVis(DASH_WIDGET.PANEL_DEVICE_BAR) && (
+        {variant === 'panel' && panelDevices.length > 0 && isVis(DASH_WIDGET.PANEL_DEVICE_BAR) && rglLayoutIdSet.has(DASH_WIDGET.PANEL_DEVICE_BAR) && (
           <div key={DASH_WIDGET.PANEL_DEVICE_BAR} {...mergeShell(DASH_WIDGET.PANEL_DEVICE_BAR, 'widget bsd-panel-device-bar bsd-widget-editable')}>
             {dashWidgetChrome(DASH_WIDGET.PANEL_DEVICE_BAR, (e) => {
               e.stopPropagation();
@@ -6506,8 +6541,8 @@ export default function BudgetSensorsDashboard({
 
           {isVis(DASH_WIDGET.SWITCH) &&
             dashWidgetSlotIds(DASH_WIDGET.SWITCH).map((slotId) => (
+              <div key={slotId} {...mergeGridSlotShell(slotId)}>
               <BsdSwitchWidgetSlot
-                key={slotId}
                 slotId={slotId}
                 variant={variant}
                 device={device}
@@ -6529,12 +6564,13 @@ export default function BudgetSensorsDashboard({
                 dashWidgetChrome={dashWidgetChrome}
                 openDashWidgetEdit={openDashWidgetEdit}
               />
+              </div>
             ))}
 
           {isVis(DASH_WIDGET.DOWNLINK) &&
             dashWidgetSlotIds(DASH_WIDGET.DOWNLINK).map((slotId) => (
+              <div key={slotId} {...mergeGridSlotShell(slotId)}>
               <BsdDownlinkWidgetSlot
-                key={slotId}
                 slotId={slotId}
                 variant={variant}
                 device={device}
@@ -6554,6 +6590,7 @@ export default function BudgetSensorsDashboard({
                 dashWidgetChrome={dashWidgetChrome}
                 openDashWidgetEdit={openDashWidgetEdit}
               />
+              </div>
             ))}
 
           {isVis(DASH_WIDGET.IMAGE) &&
@@ -7036,7 +7073,7 @@ export default function BudgetSensorsDashboard({
           </div>
             ))}
 
-        {isVis(DASH_WIDGET.SENSOR_GRID) && (
+        {isVis(DASH_WIDGET.SENSOR_GRID) && rglLayoutIdSet.has(DASH_WIDGET.SENSOR_GRID) && (
         <div key={DASH_WIDGET.SENSOR_GRID} {...mergeShell(DASH_WIDGET.SENSOR_GRID, 'widget bsd-sensor-grid-shell bsd-widget-editable')}>
           {dashWidgetChrome(DASH_WIDGET.SENSOR_GRID, (e) => {
             e.stopPropagation();
@@ -7301,12 +7338,12 @@ export default function BudgetSensorsDashboard({
            * de historial no se repetía → gráfico vacío en modo lectura.
            */
           return (
-            /** Clave estable: no incluir la firma de visibilidad para no remontar RGL en cada toggle (parpadeos / widgets que «desaparecen»). */
+            /** `gridLayoutRepairEpoch`: remonta RGL solo tras reparar solapes (no en cada toggle de visibilidad). */
             <GridLayout
-              key={`bsd-dash-${dashboardGridLayoutKey}`}
+              key={`bsd-dash-${dashboardGridLayoutKey}-r${gridLayoutRepairEpoch}-s${gridLayoutSignature}`}
               className="bsd-dash-grid-layout"
               width={gridWidth}
-              layout={gridLayout}
+              layout={gridLayoutForRgl}
               cols={12}
               rowHeight={36}
               margin={[18, 18]}
@@ -7321,9 +7358,8 @@ export default function BudgetSensorsDashboard({
               draggableCancel=".bsd-widget-actions,.bsd-widget-duplicate-btn,.bsd-widget-edit-btn,.bsd-widget-remove-btn,.sensor-card__duplicate,.bsd-widget-menu-summary,.bsd-widget-menu-panel,.bsd-widget-gallery-overlay,.bsd-widget-gallery-modal,.bsd-widget-gallery-card,.bsd-widget-gallery-filters,.bsd-widget-gallery-search,input,textarea,select,option,button,.bsd-switch-3d,.bsd-downlink-btn,.bsd-emergency-body,.sensor-card,.alert-item,.year-btn,.bsd-stream-preset,canvas,.bsd-map-iframe,.leaflet-container,.leaflet-pane,.bsd-map-leaflet,.bsd-tracking-map-leaflet,.bsd-map-layer-menu,.bsd-map-layer-menu__trigger,.bsd-map-layer-menu__list,.bsd-map-layer-menu__opt,.bsd-panel-device-bar-inner label,.bsd-file-label"
               compactType={null}
               preventCollision
-              /** En modo lectura: sin empujes automáticos al redimensionar el contenedor (RGL + solapamiento prohibido movían celdas solas). */
-              allowOverlap={dashboardLayoutLocked}
-              useCSSTransforms={false}
+              allowOverlap={false}
+              useCSSTransforms
             >
               {gridBody}
             </GridLayout>
@@ -7393,17 +7429,20 @@ export default function BudgetSensorsDashboard({
                 });
                 const layout = normalizeLayoutForPersistence([...(gridLayoutLatestRef.current || [])]);
                 const idx = layout.findIndex((it) => String(it.i) === String(oldWid));
+                let normalized;
                 if (idx >= 0) {
                   layout[idx] = { ...layout[idx], i: newWid };
+                  normalized = resolveBsdDashboardGridLayout(
+                    clampLayoutItemsToModerateMins(layout),
+                    visNext
+                  );
                 } else {
-                  const panelLen = variant === 'panel' ? ((panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0) : 0;
-                  const defaults = buildDefaultBsdGridLayout(variant, panelLen, visNext);
-                  const slot =
-                    defaults.find((d) => String(d.i) === String(newWid)) ||
-                    buildModerateBsdGridTemplateForWidget(newWid);
-                  layout.push({ ...slot });
+                  normalized = appendBsdGridWidgetAtFirstGap(
+                    layout,
+                    visNext,
+                    buildModerateBsdGridTemplateForWidget(newWid)
+                  );
                 }
-                const normalized = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(layout));
                 gridLayoutLatestRef.current = normalized;
                 setGridLayout(normalized);
                 persistBsdGridLayoutDisk(normalized);
@@ -7427,7 +7466,6 @@ export default function BudgetSensorsDashboard({
             if (saveWid === DASH_WIDGET.BAR_CHART) {
               setBarAutoRefreshEpoch((n) => n + 1);
             }
-            flushDashboardGridLayoutToStorage();
           }}
           onClose={() => setEditModalCtx(null)}
         />

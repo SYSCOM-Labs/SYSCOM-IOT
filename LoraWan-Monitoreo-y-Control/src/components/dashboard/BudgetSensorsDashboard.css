@@ -231,6 +231,28 @@ body.theme-dark .bsd-panel-widgets-canvas {
   container-name: bsd-widget;
 }
 
+.bsd-dash-grid-layout .react-grid-item > .bsd-grid-slot {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.bsd-dash-grid-layout .react-grid-item > .bsd-grid-slot > .widget {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
+  height: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
 .bsd-dash-grid-layout .react-grid-item {
   display: flex;
   flex-direction: column;

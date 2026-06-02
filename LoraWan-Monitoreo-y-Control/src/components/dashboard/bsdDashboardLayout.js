@@ -172,6 +172,8 @@ export function buildModerateBsdGridTemplateForWidget(gridId) {
       return slot({ w: 6, h: 9, minW: 4, minH: 6 });
     case DASH_WIDGET.SWITCH:
       return slot({ w: 3, h: 9, minW: 3, minH: 5 });
+    case DASH_WIDGET.DOWNLINK:
+      return slot({ w: 6, h: 10, minW: 3, minH: 4 });
     case DASH_WIDGET.PANEL_DEVICE_BAR:
       return slot({ w: 12, h: 5, minW: 4, minH: 3 });
     case DASH_WIDGET.MAP:
@@ -229,6 +231,71 @@ export function clampLayoutItemsToModerateMins(layout) {
 }
 
 /**
+ * Recorta celdas exageradas (p. ej. switch w=12) al tamaño moderado de plantilla.
+ * No reduce tamaños ya razonables (p. ej. gráfico w=8 con plantilla w=6).
+ *
+ * @param {BsdGridItem[] | null | undefined} layout
+ * @returns {BsdGridItem[]}
+ */
+export function clampLayoutItemsToModerateTemplates(layout) {
+  if (!Array.isArray(layout) || layout.length === 0) return [];
+  return layout.map((it) => {
+    if (!it || it.i == null) return it;
+    const id = String(it.i);
+    if (!isKnownDashboardGridId(id)) return it;
+    const tmpl = buildModerateBsdGridTemplateForWidget(id);
+    const tw = Math.min(12, Math.max(1, Math.round(Number(tmpl.w)) || 3));
+    const th = Math.max(1, Math.round(Number(tmpl.h)) || 9);
+    const minW =
+      tmpl.minW != null && Number.isFinite(Number(tmpl.minW)) ? Math.round(Number(tmpl.minW)) : 2;
+    const minH =
+      tmpl.minH != null && Number.isFinite(Number(tmpl.minH)) ? Math.round(Number(tmpl.minH)) : 4;
+    const curW = Math.round(Number(it.w));
+    const curH = Math.round(Number(it.h));
+    const capW =
+      Number.isFinite(curW) && curW > tw && (curW >= 12 || curW > tw * 2);
+    const capH =
+      Number.isFinite(curH) && curH > th && (curH > th * 2);
+    const w = Math.min(
+      12,
+      Math.max(minW, capW ? tw : Number.isFinite(curW) && curW > 0 ? curW : tw)
+    );
+    const h = Math.max(minH, capH ? th : Number.isFinite(curH) && curH > 0 ? curH : th);
+    const out = {
+      ...it,
+      i: id,
+      x: Math.max(0, Math.round(Number(it.x)) || 0),
+      y: Math.max(0, Math.round(Number(it.y)) || 0),
+      w,
+      h,
+    };
+    if (tmpl.minW != null) out.minW = tmpl.minW;
+    if (tmpl.minH != null) out.minH = tmpl.minH;
+    return out;
+  });
+}
+
+/**
+ * Tamaño y mínimos moderados al insertar desde la galería (ignora w/h heredados).
+ *
+ * @param {BsdGridItem} slotTemplate
+ * @returns {BsdGridItem}
+ */
+export function normalizeNewWidgetSlotTemplate(slotTemplate) {
+  const id = String(slotTemplate.i);
+  const tmpl = buildModerateBsdGridTemplateForWidget(id);
+  return {
+    i: id,
+    x: 0,
+    y: 0,
+    w: tmpl.w,
+    h: tmpl.h,
+    ...(tmpl.minW != null ? { minW: tmpl.minW } : {}),
+    ...(tmpl.minH != null ? { minH: tmpl.minH } : {}),
+  };
+}
+
+/**
  * Inserta una celda nueva sin solaparse con las existentes.
  * Orden de búsqueda: **por filas**, en cada fila de **izquierda a derecha**; la primera fila es la superior (y=0),
  * luego y=1, etc., de modo que se ocupa el ancho disponible antes de pasar a la fila inferior (lectura occidental).
@@ -278,6 +345,81 @@ export function placeNewBsdGridItem(layout, slotTemplate) {
   }
   const maxBottom = Math.max(0, ...items.map((it) => (Math.round(Number(it.y)) || 0) + (Math.round(Number(it.h)) || 0)));
   return { ...base, x: 0, y: maxBottom };
+}
+
+/**
+ * Celdas visibles en el tablero (excluye widgets con visibilidad false en el mapa).
+ *
+ * @param {BsdGridItem[] | null | undefined} layout
+ * @param {Record<string, unknown>} visibilityMap
+ * @returns {BsdGridItem[]}
+ */
+export function filterLayoutToVisibleDashboardItems(layout, visibilityMap) {
+  if (!Array.isArray(layout)) return [];
+  const vis = visibilityMap && typeof visibilityMap === 'object' ? visibilityMap : {};
+  return normalizeLayoutForPersistence(
+    layout.filter((it) => {
+      if (!it || it.i == null) return false;
+      const base = dashboardWidgetBaseId(String(it.i));
+      return vis[base] !== false && vis[String(it.i)] !== false;
+    })
+  );
+}
+
+/** @param {BsdGridItem[]} items */
+function clampBsdGridLayoutBounds(items) {
+  return items.map((it) => {
+    const w = Math.min(12, Math.max(1, Math.round(Number(it.w)) || 1));
+    const h = Math.max(1, Math.round(Number(it.h)) || 1);
+    const x = Math.max(0, Math.min(Math.round(Number(it.x)) || 0, 12 - w));
+    const y = Math.max(0, Math.round(Number(it.y)) || 0);
+    return { ...it, w, h, x, y };
+  });
+}
+
+/**
+ * Corrige solapes moviendo solo las celdas que chocan; conserva huecos y posiciones válidas.
+ *
+ * @param {BsdGridItem[] | null | undefined} layout
+ * @returns {BsdGridItem[]}
+ */
+export function repairBsdGridLayoutOverlapsOnly(layout) {
+  const items = normalizeLayoutForPersistence(layout || []);
+  if (items.length < 2) return items;
+
+  const toRect = (it) => ({
+    x: Math.round(Number(it.x)) || 0,
+    y: Math.round(Number(it.y)) || 0,
+    w: Math.round(Number(it.w)) || 1,
+    h: Math.round(Number(it.h)) || 1,
+  });
+
+  const sorted = [...items].sort((a, b) => {
+    const dy = (Number(a.y) || 0) - (Number(b.y) || 0);
+    if (dy !== 0) return dy;
+    const dx = (Number(a.x) || 0) - (Number(b.x) || 0);
+    if (dx !== 0) return dx;
+    return String(a.i).localeCompare(String(b.i));
+  });
+
+  /** @type {BsdGridItem[]} */
+  const placed = [];
+  for (const it of sorted) {
+    let cur = { ...it };
+    let rs = toRect(cur);
+    if (placed.some((o) => bsdGridRectsOverlap(rs, toRect(o)))) {
+      const moved = placeNewBsdGridItem(placed, {
+        i: String(cur.i),
+        w: rs.w,
+        h: rs.h,
+        ...(cur.minW != null && Number.isFinite(Number(cur.minW)) ? { minW: Math.round(Number(cur.minW)) } : {}),
+        ...(cur.minH != null && Number.isFinite(Number(cur.minH)) ? { minH: Math.round(Number(cur.minH)) } : {}),
+      });
+      cur = { ...cur, x: moved.x, y: moved.y, w: moved.w, h: moved.h };
+    }
+    placed.push(cur);
+  }
+  return normalizeLayoutForPersistence(placed);
 }
 
 /**
@@ -586,6 +728,25 @@ export function bsdDashboardLayoutHasOverlap(layout) {
 }
 
 /**
+ * Tamaños mínimos moderados, columnas dentro de 12 y sin solapamientos.
+ * Solo reubica celdas que chocan; no cierra huecos del usuario.
+ *
+ * @param {BsdGridItem[] | null | undefined} layout
+ * @returns {BsdGridItem[]}
+ */
+export function ensureBsdGridLayoutGeometry(layout) {
+  let items = normalizeLayoutForPersistence(
+    clampLayoutItemsToModerateMins(clampLayoutItemsToModerateTemplates(layout || []))
+  );
+  if (!items.length) return items;
+  items = clampBsdGridLayoutBounds(items);
+  for (let pass = 0; pass < 6 && items.length >= 2 && bsdAnyPairOverlaps(items); pass += 1) {
+    items = repairBsdGridLayoutOverlapsOnly(items);
+  }
+  return normalizeLayoutForPersistence(items);
+}
+
+/**
  * Si el tile `itemId` se solapa con otro (p. ej. tras `clampLayoutItemsToModerateMins`), lo mueve a la primera
  * celda libre con la misma lógica que la galería (`placeNewBsdGridItem`).
  *
@@ -595,7 +756,9 @@ export function bsdDashboardLayoutHasOverlap(layout) {
  */
 export function relocateBsdGridItemIfOverlapping(layout, itemId) {
   const id = String(itemId);
-  let items = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(layout || []));
+  let items = normalizeLayoutForPersistence(
+    clampLayoutItemsToModerateMins(clampLayoutItemsToModerateTemplates(layout || []))
+  );
   const toRect = (it) => ({
     x: Math.round(Number(it.x)) || 0,
     y: Math.round(Number(it.y)) || 0,
@@ -605,8 +768,10 @@ export function relocateBsdGridItemIfOverlapping(layout, itemId) {
   for (let pass = 0; pass < 3; pass += 1) {
     const self = items.find((it) => String(it.i) === id);
     if (!self) return items;
+    const tmpl = normalizeNewWidgetSlotTemplate(self);
+    const sizedSelf = { ...self, w: tmpl.w, h: tmpl.h, ...(tmpl.minW != null ? { minW: tmpl.minW } : {}), ...(tmpl.minH != null ? { minH: tmpl.minH } : {}) };
     const rest = items.filter((it) => String(it.i) !== id);
-    const rs = toRect(self);
+    const rs = toRect(sizedSelf);
     const overlaps = rest.some((o) => bsdGridRectsOverlap(rs, toRect(o)));
     if (!overlaps) return items;
     const moved = placeNewBsdGridItem(rest, {
@@ -617,10 +782,100 @@ export function relocateBsdGridItemIfOverlapping(layout, itemId) {
       ...(self.minH != null && Number.isFinite(Number(self.minH)) ? { minH: Math.round(Number(self.minH)) } : {}),
     });
     items = normalizeLayoutForPersistence(
-      clampLayoutItemsToModerateMins([...rest, { ...self, x: moved.x, y: moved.y, w: moved.w, h: moved.h }])
+      clampLayoutItemsToModerateMins([...rest, { ...sizedSelf, x: moved.x, y: moved.y, w: moved.w, h: moved.h }])
     );
   }
   return items;
+}
+
+/** @param {BsdGridItem[]} items */
+function dedupeBsdGridLayoutById(items) {
+  const byId = new Map();
+  for (const it of items || []) {
+    if (!it || it.i == null) continue;
+    byId.set(String(it.i), it);
+  }
+  return normalizeLayoutForPersistence([...byId.values()]);
+}
+
+/**
+ * Layout listo para RGL / disco: visible sin solapes, ocultos conservados, tamaños acotados.
+ *
+ * @param {BsdGridItem[] | null | undefined} layout
+ * @param {Record<string, unknown>} visibilityMap
+ * @returns {BsdGridItem[]}
+ */
+export function resolveBsdDashboardGridLayout(layout, visibilityMap) {
+  const full = dedupeBsdGridLayoutById(normalizeLayoutForPersistence(layout || []));
+  const vis = visibilityMap && typeof visibilityMap === 'object' ? visibilityMap : {};
+  const hidden = full.filter((it) => {
+    if (!it || it.i == null) return false;
+    const base = dashboardWidgetBaseId(String(it.i));
+    return vis[base] === false || vis[String(it.i)] === false;
+  });
+  const visible = filterLayoutToVisibleDashboardItems(full, vis);
+  let resolvedVisible = ensureBsdGridLayoutGeometry(visible);
+  if (bsdDashboardLayoutHasOverlap(resolvedVisible)) {
+    for (let pass = 0; pass < 4 && bsdDashboardLayoutHasOverlap(resolvedVisible); pass += 1) {
+      resolvedVisible = repairBsdGridLayoutOverlapsOnly(resolvedVisible);
+    }
+  }
+  if (bsdDashboardLayoutHasOverlap(resolvedVisible)) {
+    resolvedVisible = compactBsdGridLayoutTopLeft(resolvedVisible);
+  }
+  return normalizeLayoutForPersistence([...hidden, ...resolvedVisible]);
+}
+
+/**
+ * Layout visible para calcular huecos al agregar widgets: sin reempaque global (conserva espacios vacíos).
+ *
+ * @param {BsdGridItem[] | null | undefined} layout
+ * @param {Record<string, unknown>} visibilityMap
+ * @returns {BsdGridItem[]}
+ */
+export function layoutOccupancyForNewWidgetPlacement(layout, visibilityMap) {
+  const full = dedupeBsdGridLayoutById(normalizeLayoutForPersistence(layout || []));
+  return ensureBsdGridLayoutGeometry(filterLayoutToVisibleDashboardItems(full, visibilityMap));
+}
+
+/**
+ * Inserta o reubica un widget en la primera celda libre (tamaño moderado).
+ * Si ya existía en el layout con posición/tamaño incorrectos, lo recoloca.
+ *
+ * @param {BsdGridItem[] | null | undefined} layout
+ * @param {Record<string, unknown>} visibilityMap
+ * @param {BsdGridItem} slotTemplate
+ * @returns {BsdGridItem[]}
+ */
+export function ensureBsdGridWidgetSlotAtFirstGap(layout, visibilityMap, slotTemplate) {
+  const id = String(slotTemplate.i);
+  const slot = normalizeNewWidgetSlotTemplate(slotTemplate);
+  const full = normalizeLayoutForPersistence(layout || []);
+  const vis = visibilityMap && typeof visibilityMap === 'object' ? visibilityMap : {};
+  const hidden = full.filter((it) => {
+    if (!it || it.i == null) return false;
+    const base = dashboardWidgetBaseId(String(it.i));
+    return vis[base] === false || vis[String(it.i)] === false;
+  });
+  let occupancy = layoutOccupancyForNewWidgetPlacement(full, visibilityMap);
+  occupancy = occupancy.filter((it) => String(it.i) !== id);
+  const piece = placeNewBsdGridItem(occupancy, slot);
+  let visibleNext = normalizeLayoutForPersistence([...occupancy, piece]);
+  visibleNext = relocateBsdGridItemIfOverlapping(visibleNext, id);
+  visibleNext = ensureBsdGridLayoutGeometry(visibleNext);
+  return normalizeLayoutForPersistence([...hidden, ...visibleNext]);
+}
+
+/**
+ * Inserta un widget en la primera celda libre del tablero visible (sin solapes previos).
+ *
+ * @param {BsdGridItem[] | null | undefined} layout layout en memoria / disco
+ * @param {Record<string, unknown>} visibilityMap
+ * @param {BsdGridItem} slotTemplate incluye `i`, `w`, `h`
+ * @returns {BsdGridItem[]}
+ */
+export function appendBsdGridWidgetAtFirstGap(layout, visibilityMap, slotTemplate) {
+  return ensureBsdGridWidgetSlotAtFirstGap(layout, visibilityMap, slotTemplate);
 }
 
 /**
@@ -760,7 +1015,7 @@ export function computeBsdDashboardNormalizedLayout(next, prev, variant, panelDe
     const raw = normalizeLayoutForPersistence((next || []).filter((it) => it && it.i != null));
     const clamped = normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(raw));
     const filtered = filterLayoutToAllowedDashboardItems(clamped, []);
-    return filtered.length ? filtered : null;
+    return filtered.length ? resolveBsdDashboardGridLayout(filtered, visibilityMap) : null;
   }
   const defaultIds = new Set(defaults.map((d) => String(d.i)));
   const allowed = new Set(defaultIds);
@@ -788,5 +1043,8 @@ export function computeBsdDashboardNormalizedLayout(next, prev, variant, panelDe
    */
   const reconciled = normalizeLayoutForPersistence(mergeStoredBsdGridLayout(merged, defaults));
   const filtered = filterLayoutToAllowedDashboardItems(reconciled, defaults);
-  return normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(filtered));
+  return resolveBsdDashboardGridLayout(
+    normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(filtered)),
+    visibilityMap
+  );
 }

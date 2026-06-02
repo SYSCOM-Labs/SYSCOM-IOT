@@ -138,7 +138,7 @@ export function listDashboardWidgetSlotIds(visibilityMap, gridLayout, baseId) {
   const ids = (Array.isArray(gridLayout) ? gridLayout : [])
     .map((it) => String(it.i))
     .filter((id) => dashboardWidgetBaseId(id) === b);
-  return ids.length > 0 ? ids : [b];
+  return ids;
 }
 
 /**

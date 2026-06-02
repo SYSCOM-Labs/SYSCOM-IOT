@@ -24,6 +24,17 @@ const {
 } = require(path.join(__dirname, 'lib', 'vs133-telemetry-aliases.js'));
 const navPerm = require('./navPermissions');
 
+/** JSON PULL_RESP de Join-Accept OTAA (`lorawan-lns-engine` marca `_syscomLnsKind`). */
+function pullRespJsonIsJoinAccept(raw) {
+  if (raw == null || String(raw).trim() === '') return false;
+  try {
+    const o = JSON.parse(String(raw));
+    return Boolean(o && o._syscomLnsKind === 'join_accept');
+  } catch {
+    return false;
+  }
+}
+
 const DATA_DIR = path.join(__dirname, 'data');
 const DEFAULT_SQLITE = path.join(DATA_DIR, 'syscom.db');
 const LEGACY_JSON = path.join(__dirname, 'db.json');
@@ -968,6 +979,12 @@ class Store {
       lnsDlSent: this.db.prepare('UPDATE lorawan_lns_downlink SET status = ? WHERE id = ?'),
       lnsDlAwaitTxAck: this.db.prepare(`UPDATE lorawan_lns_downlink SET status = 'await_tx_ack' WHERE id = ?`),
       lnsDlDeleteById: this.db.prepare('DELETE FROM lorawan_lns_downlink WHERE id = ?'),
+      lnsDlCancelPendingJoinForDev: this.db.prepare(`
+        DELETE FROM lorawan_lns_downlink
+        WHERE user_id = ? AND status = 'pending'
+        AND lower(replace(replace(replace(tx_dev_eui,':',''),'-',''),' ','')) = ?
+        AND (priority >= 255 OR (join_session_json IS NOT NULL AND trim(join_session_json) != ''))
+      `),
       lnsTxInflightInsert: this.db.prepare(`
         INSERT INTO lorawan_lns_tx_inflight (gateway_eui, token_h, token_l, downlink_id, created_at)
         VALUES (?, ?, ?, ?, ?)
@@ -2684,6 +2701,16 @@ class Store {
    * @param {object | null} [txMeta] Si está definido (downlink de aplicación con SYSCOM_LNS_TX_ACK), no confirmar FCnt hasta TX_ACK.
    * @param {{ devEui: string, newFcnt: number, prevFcnt: number, retriesLeft?: number }} txMeta
    */
+  /** Descarta Join-Accept pendientes del mismo DevEUI (rejoin con claves nuevas; evita TX de JA obsoleto). */
+  lnsCancelPendingJoinAcceptsForDev(userId, devEuiNorm16) {
+    const deui = String(devEuiNorm16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (deui.length !== 16) return 0;
+    const info = this.st.lnsDlCancelPendingJoinForDev.run(String(userId), deui);
+    return Number(info.changes || 0);
+  }
+
   lnsEnqueuePullResp(userId, gatewayEuiNorm16, pullRespObj, notBeforeMs, priority, txMeta) {
     const gwKey = normalizeLnsGatewayEuiKey(gatewayEuiNorm16);
     const nb = notBeforeMs != null ? Number(notBeforeMs) : 0;
@@ -2998,11 +3025,23 @@ class Store {
     const rawClassGap = parseInt(String(process.env.SYSCOM_LNS_CLASS_C_TX_GAP_MS || '2200').trim(), 10);
     const classCGapMs = Number.isFinite(rawClassGap) ? Math.max(0, rawClassGap) : 2200;
     let delayMs = baseRetryMs + timingExtraMs;
+    const joinSessionRaw = row.join_session_json != null ? String(row.join_session_json).trim() : '';
+    let isJoinAcceptDl = Boolean(joinSessionRaw);
+    if (!isJoinAcceptDl && row.pull_resp_json) {
+      try {
+        isJoinAcceptDl = pullRespJsonIsJoinAccept(row.pull_resp_json);
+      } catch {
+        /* ignore */
+      }
+    }
+    if (!isJoinAcceptDl && Number(row.priority) === 255 && row.tx_new_fcnt == null) {
+      isJoinAcceptDl = true;
+    }
     /**
-     * TOO_LATE: reintento antes del hueco clase C → el GW suele rechazar otra vez.
-     * TOO_EARLY (imme): concentrador aún no listo (p. ej. tras RX/TX); mismo espaciado evita ráfagas ~750 ms.
+     * TOO_LATE / TOO_EARLY en downlinks app: hueco clase C.
+     * Join-Accept OTAA: reintento corto (tmst se recalcula al enviar; no aplicar cola clase C).
      */
-    if (!ok && (isTooLate || isTooEarly)) {
+    if (!ok && (isTooLate || isTooEarly) && !isJoinAcceptDl) {
       delayMs = Math.max(delayMs, classCGapMs + baseRetryMs);
     }
 

@@ -2211,37 +2211,6 @@ export default function WidgetEditModal({
         </div>
 
         <div className="widget-edit-modal-scroll">
-        <div className="widget-edit-preview-wrap">
-          <div
-            className="widget-edit-preview widget-edit-preview--chrome-pass"
-            role="region"
-            aria-label="Vista previa del widget"
-          >
-            <ModalLivePreviewBlock
-              sensor={sensor}
-                draft={draft}
-              showSensorGridPreview={showSensorGridPreview}
-              previewDashWidgetId={previewDashWidgetId}
-              previewBaseDashId={previewBaseDashId}
-              previewVisualKey={previewVisualKey}
-                indicatorSelectValue={indicatorSelectValue}
-              previewMergedLiveProps={previewMergedLiveProps}
-              previewValue={previewValue}
-              previewShellSurfaceStyle={previewShellSurfaceStyle}
-              previewShellClear={previewShellClear}
-              previewRangeAccent={previewRangeAccent}
-              previewTelemetryDisplayLabel={previewTelemetryDisplayLabel}
-              previewSensorSubtitle={previewSensorSubtitle}
-              modalTextWidgetUi={modalTextWidgetUi}
-              modalVeletaWidgetUi={modalVeletaWidgetUi}
-              effectiveAvailableDataFields={effectiveAvailableDataFields}
-                downlinkSelectState={downlinkSelectState}
-              previewLiveDeviceModel={previewLiveDeviceModel}
-              previewTelemetryHints={previewTelemetryHints}
-            />
-          </div>
-        </div>
-
         <div
           className={`widget-edit-tabs-row${showPanelDevicePicker && panelToolbarTabs ? ' widget-edit-tabs-row--panel-device' : ''}`}
         >

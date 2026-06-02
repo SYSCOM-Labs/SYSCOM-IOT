@@ -65,6 +65,54 @@ export function clearPrimedDeviceSharedPresets() {
 }
 
 /**
+ * Fusiona catálogos por `id`. `overlay` gana sobre `primary` en ids compartidos;
+ * ids solo presentes en `overlay` se conservan (p. ej. importaciones aún no publicadas).
+ */
+function mergeCatalogTemplatesById(primary, overlay) {
+  const byId = new Map();
+  for (const t of primary || []) {
+    if (!t || t.id == null || String(t.id).trim() === '') continue;
+    byId.set(String(t.id).trim(), { ...t });
+  }
+  for (const t of overlay || []) {
+    if (!t || t.id == null || String(t.id).trim() === '') continue;
+    byId.set(String(t.id).trim(), { ...t });
+  }
+  return [...byId.values()];
+}
+
+function resolveDefaultTemplateIdFromDoc(doc) {
+  if (doc?.defaultTemplateId != null && String(doc.defaultTemplateId).trim()) {
+    return String(doc.defaultTemplateId).trim();
+  }
+  if (typeof window === 'undefined') return null;
+  try {
+    const v = localStorage.getItem(DEFAULT_TEMPLATE_ID_KEY);
+    return v && String(v).trim() ? String(v).trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Actualiza catálogo en memoria y localStorage (sin semillas integradas). */
+function commitDeviceTemplatesCatalog(list, defaultTemplateId = undefined) {
+  const templates = Array.isArray(list) ? list.map((t) => (t && typeof t === 'object' ? { ...t } : {})) : [];
+  const def =
+    defaultTemplateId === undefined
+      ? getDefaultTemplateId()
+      : defaultTemplateId == null || String(defaultTemplateId).trim() === ''
+        ? null
+        : String(defaultTemplateId).trim();
+  serverTemplatesState = {
+    status: 'loaded',
+    templates,
+    defaultTemplateId: def,
+    updatedAt: serverTemplatesState.updatedAt,
+  };
+  persistList(templates);
+}
+
+/**
  * @param {object} doc respuesta GET /api/device-templates
  */
 export function applyServerDeviceTemplatesCatalog(doc) {
@@ -72,19 +120,38 @@ export function applyServerDeviceTemplatesCatalog(doc) {
   serverTemplatesState = {
     status: 'loaded',
     templates: templates.map((t) => (t && typeof t === 'object' ? { ...t } : {})),
-    defaultTemplateId:
-      doc?.defaultTemplateId != null && String(doc.defaultTemplateId).trim()
-        ? String(doc.defaultTemplateId).trim()
-        : null,
+    defaultTemplateId: resolveDefaultTemplateIdFromDoc(doc),
     updatedAt: doc?.updatedAt != null ? String(doc.updatedAt) : null,
   };
 }
 
-export async function hydrateDeviceTemplatesCatalogFromServer() {
+/**
+ * @param {{ syncLocalExtrasToServer?: boolean }} [opts]
+ *   Si `syncLocalExtrasToServer`, publica al servidor plantillas que solo existían en localStorage.
+ */
+export async function hydrateDeviceTemplatesCatalogFromServer(opts = {}) {
   const { fetchDeviceTemplatesCatalog } = await import('./api.js');
   const doc = await fetchDeviceTemplatesCatalog();
-  applyServerDeviceTemplatesCatalog(doc);
-  return doc;
+  const serverTemplates = Array.isArray(doc?.templates) ? doc.templates : [];
+  const localTemplates = loadRaw();
+  const serverIds = new Set(
+    serverTemplates.map((t) => (t?.id != null ? String(t.id).trim() : '')).filter(Boolean)
+  );
+  const localOnlyCount = localTemplates.filter(
+    (t) => t?.id != null && String(t.id).trim() && !serverIds.has(String(t.id).trim())
+  ).length;
+  const merged = mergeCatalogTemplatesById(serverTemplates, localTemplates);
+  applyServerDeviceTemplatesCatalog({
+    ...doc,
+    templates: merged,
+    defaultTemplateId: resolveDefaultTemplateIdFromDoc(doc),
+  });
+  persistList(merged);
+
+  if (opts.syncLocalExtrasToServer && localOnlyCount > 0) {
+    await flushDeviceTemplatesCatalogToServer();
+  }
+  return { ...doc, templates: merged };
 }
 
 export async function publishLocalCustomTemplatesIfServerEmpty(isSuperAdmin) {
@@ -111,13 +178,15 @@ export async function publishLocalCustomTemplatesIfServerEmpty(isSuperAdmin) {
 }
 
 export async function flushDeviceTemplatesCatalogToServer() {
-  if (serverTemplatesState.status !== 'loaded') return;
+  const templates =
+    serverTemplatesState.status === 'loaded'
+      ? [...serverTemplatesState.templates]
+      : [...loadRaw()];
+  const defaultTemplateId = getDefaultTemplateId();
   const { putDeviceTemplatesCatalog } = await import('./api.js');
-  const saved = await putDeviceTemplatesCatalog({
-    templates: serverTemplatesState.templates,
-    defaultTemplateId: serverTemplatesState.defaultTemplateId,
-  });
+  const saved = await putDeviceTemplatesCatalog({ templates, defaultTemplateId });
   applyServerDeviceTemplatesCatalog(saved);
+  persistList(Array.isArray(saved?.templates) ? saved.templates : templates);
 }
 
 function mergeSeedsIntoTemplateList(customList) {
@@ -976,9 +1045,6 @@ export function mergeDeviceTemplatesFromImport(parsed) {
     affectedTemplateIds.push(id);
   });
 
-  if (serverTemplatesState.status === 'loaded') {
-    serverTemplatesState = { ...serverTemplatesState, templates: list };
-  }
-  persistList(list);
+  commitDeviceTemplatesCatalog(list);
   return { added, replaced, skipped, affectedTemplateIds: [...new Set(affectedTemplateIds)] };
 }

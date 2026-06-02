@@ -1071,14 +1071,20 @@ function createLorawanLnsEngine(ctx) {
     };
 
     const pullObj = buildTxpk(phy, rxpk, { imme: false, rxDelaySec, band: gwBand });
+    /** Marca OTAA (todos los modelos/clases); evita tratar Join-Accept como downlink clase C en refresh/reintentos. */
+    pullObj._syscomLnsKind = 'join_accept';
     const joinTs = Date.now();
     const radioJoin = radioMetaFromRxpk(rxpk);
     const explicitJoinDelay = joinPullQueueNotBeforeMs();
-    /** Misma cola de espaciado que clase C: evita TOO_EARLY/TOO_LATE al encolar Join-Accept tras un `imme` del apagador. */
+    /** Join-Accept OTAA: envío inmediato en cola PULL (tmst = JR+RxDelay). No usar hueco clase C. */
     const joinQueueNotBefore =
-      (explicitJoinDelay > 0
-        ? joinTs + explicitJoinDelay
-        : scheduleClassCNotBeforeMs(ownerUserId, gatewayEuiNorm, joinTs)) + joinExtraTxGapMs();
+      explicitJoinDelay > 0 ? joinTs + explicitJoinDelay : joinTs;
+    if (typeof store.lnsCancelPendingJoinAcceptsForDev === 'function') {
+      const dropped = store.lnsCancelPendingJoinAcceptsForDev(ownerUserId, devEui);
+      if (dropped > 0) {
+        console.log('[LNS] Join-Accept pendientes descartados (rejoin):', dropped, 'dev_eui', devEui);
+      }
+    }
     const joinTelemetryProps = {
       devEUI: devEui,
       lorawan_event: 'join_accept_sent',
@@ -1774,25 +1780,55 @@ function createLorawanLnsEngine(ctx) {
     };
   }
 
-  /**
-   * Recalcula `tmst`/`imme` al enviar PULL_RESP (el `not_before_ms` de clase C retrasa la TX y deja tmst obsoleto).
-   * @param {{ userId: string, json: string, txDevEui?: string }} row
-   */
-  function refreshPullRespJsonBeforeSend(row) {
-    if (String(process.env.SYSCOM_LNS_PULL_TMST_REFRESH || '1').trim() === '0') {
-      return row.json;
-    }
-    const devEui = row.txDevEui ? String(row.txDevEui).replace(/[^0-9a-fA-F]/g, '').toLowerCase() : '';
-    if (devEui.length !== 16 || !row.json) return row.json;
-    let pullObj;
+  /** Join-Accept OTAA (cualquier modelo / clase A|B|C): ventana RX1/RX2 del JR, nunca downlink clase C `imme`. */
+  function parseJoinAcceptUpsertFromRow(row) {
+    const js = row && row.joinSessionJson != null ? String(row.joinSessionJson).trim() : '';
+    if (!js) return null;
     try {
-      pullObj = JSON.parse(row.json);
+      const jp = JSON.parse(js);
+      return jp && jp.upsert ? jp.upsert : null;
     } catch {
-      return row.json;
+      return null;
     }
-    const tx = pullObj && pullObj.txpk;
-    if (!tx || typeof tx !== 'object') return row.json;
+  }
 
+  function isJoinAcceptPullJson(pullObj) {
+    return Boolean(pullObj && pullObj._syscomLnsKind === 'join_accept');
+  }
+
+  function isJoinAcceptPullRow(row) {
+    if (!row) return false;
+    if (row.joinSessionJson != null && String(row.joinSessionJson).trim()) return true;
+    if (row.json) {
+      try {
+        const o = JSON.parse(row.json);
+        if (isJoinAcceptPullJson(o)) return true;
+      } catch {
+        /* ignore */
+      }
+    }
+    return Number(row.priority) === 255 && row.txNewFcnt == null && Boolean(row.txDevEui);
+  }
+
+  function sessionLikeFromJoinUpsert(upsert, fallbackUserId) {
+    if (!upsert) return null;
+    return {
+      userId: upsert.userId || fallbackUserId,
+      devEui: upsert.devEui,
+      devAddr: upsert.devAddr,
+      lastGatewayEui: upsert.lastGatewayEui,
+      lastRxTmst: upsert.lastRxTmst,
+      lastRxFreq: upsert.lastRxFreq,
+      lastRxDatr: upsert.lastRxDatr,
+      lastRxCodr: upsert.lastRxCodr,
+      lastRxRfch: upsert.lastRxRfch,
+      deviceClass: upsert.deviceClass || 'A',
+      rxDelaySec: upsert.rxDelaySec != null ? upsert.rxDelaySec : 1,
+      lastUplinkWallMs: upsert.lastUplinkWallMs,
+    };
+  }
+
+  function resolveSessionForPullRefresh(row, devEui, joinAccept) {
     let sessionUserId = String(row.userId || '').trim();
     let session = store.lnsGetSessionByDevEui(sessionUserId, devEui);
     if (!session) {
@@ -1810,18 +1846,68 @@ function createLorawanLnsEngine(ctx) {
         /* ignore */
       }
     }
-    if (!session) return row.json;
+    if (!session && joinAccept) {
+      session = sessionLikeFromJoinUpsert(parseJoinAcceptUpsertFromRow(row), sessionUserId);
+    }
+    return { session, sessionUserId };
+  }
 
-    const ud =
-      store.getUserDeviceByDevEuiNorm(sessionUserId, devEui) ||
-      (typeof store.getAnyUserDeviceByDevEuiNorm === 'function'
-        ? store.getAnyUserDeviceByDevEuiNorm(devEui)
-        : null);
-    const cls = resolveDownlinkDeviceClassForLns(store, sessionUserId, devEui, {
-      sessionClass: session.deviceClass,
-      deviceId: ud?.deviceId || devEui,
-      productModel: ud?.productModel,
-    });
+  function applyJoinAcceptTxpkSchedule(tx, session, tmstBase, rxpkStub, isUs) {
+    const r2 = rx2Defaults(isUs);
+    const omitCodr500 =
+      String(process.env.SYSCOM_LNS_TXPK_OMIT_CODR_BW500 || '').trim() === '1' &&
+      String(r2.datr || '').includes('BW500');
+    const rxDelaySec =
+      session.rxDelaySec != null ? Math.max(1, Math.min(15, Number(session.rxDelaySec))) : isUs ? 5 : 1;
+    const win = classARxWindowMode();
+    const prevTmst = tx.tmst != null ? Number(tx.tmst) : null;
+    tx.imme = false;
+    if (tmstBase > 0) {
+      if (win === 'RX2') {
+        const afterRx1Sec = getRx2AfterRx1Sec();
+        const secOffset = rxDelaySec + afterRx1Sec;
+        tx.tmst = (tmstBase + secOffset * 1_000_000) >>> 0;
+        tx.freq = r2.freq;
+        tx.datr = r2.datr;
+      } else {
+        tx.tmst = (tmstBase + classARx1DelayUs(rxDelaySec)) >>> 0;
+        if (isUs) {
+          tx.freq = getUs915Rx1Freq(Number(rxpkStub.freq));
+          tx.datr = getUs915Rx1Datr(rxpkStub.datr);
+        } else {
+          tx.freq = Number(rxpkStub.freq);
+          tx.datr = String(rxpkStub.datr || r2.datr);
+        }
+      }
+      if (!omitCodr500) tx.codr = r2.codr;
+    } else if (Number.isFinite(prevTmst) && prevTmst > 0) {
+      delete tx.imme;
+      tx.tmst = prevTmst >>> 0;
+    }
+  }
+
+  /**
+   * Recalcula `tmst`/`imme` al enviar PULL_RESP (el `not_before_ms` de clase C retrasa la TX y deja tmst obsoleto).
+   * @param {{ userId: string, json: string, txDevEui?: string, joinSessionJson?: string, priority?: number, txNewFcnt?: number|null }} row
+   */
+  function refreshPullRespJsonBeforeSend(row) {
+    if (String(process.env.SYSCOM_LNS_PULL_TMST_REFRESH || '1').trim() === '0') {
+      return row.json;
+    }
+    const devEui = row.txDevEui ? String(row.txDevEui).replace(/[^0-9a-fA-F]/g, '').toLowerCase() : '';
+    if (devEui.length !== 16 || !row.json) return row.json;
+    let pullObj;
+    try {
+      pullObj = JSON.parse(row.json);
+    } catch {
+      return row.json;
+    }
+    const tx = pullObj && pullObj.txpk;
+    if (!tx || typeof tx !== 'object') return row.json;
+
+    const joinAccept = isJoinAcceptPullRow(row) || isJoinAcceptPullJson(pullObj);
+    const { session, sessionUserId } = resolveSessionForPullRefresh(row, devEui, joinAccept);
+    if (!session) return row.json;
 
     const gwEui = session.lastGatewayEui
       ? resolveQueueGatewayEui(sessionUserId, session.lastGatewayEui)
@@ -1846,14 +1932,42 @@ function createLorawanLnsEngine(ctx) {
       String(process.env.SYSCOM_LNS_TXPK_OMIT_CODR_BW500 || '').trim() === '1' &&
       String(r2.datr || '').includes('BW500');
 
+    const prevTmst = tx.tmst;
+    const prevImme = Boolean(tx.imme);
+
+    if (joinAccept) {
+      applyJoinAcceptTxpkSchedule(tx, session, tmstBase, rxpkStub, isUs);
+      if (String(process.env.SYSCOM_LNS_LOG_DOWNLINK_SCHEDULE || '').trim() === '1') {
+        const changed = prevTmst !== tx.tmst || prevImme !== Boolean(tx.imme);
+        if (changed) {
+          console.log('[LNS] txpk Join-Accept refrescado (RX1/RX2 OTAA; independiente de clase del nodo)', {
+            devEui,
+            deviceClass: session.deviceClass,
+            imme: Boolean(tx.imme),
+            tmst: tx.tmst != null ? tx.tmst : null,
+          });
+        }
+      }
+      return JSON.stringify(pullObj);
+    }
+
+    const ud =
+      store.getUserDeviceByDevEuiNorm(sessionUserId, devEui) ||
+      (typeof store.getAnyUserDeviceByDevEuiNorm === 'function'
+        ? store.getAnyUserDeviceByDevEuiNorm(devEui)
+        : null);
+    const cls = resolveDownlinkDeviceClassForLns(store, sessionUserId, devEui, {
+      sessionClass: session.deviceClass,
+      deviceId: ud?.deviceId || devEui,
+      productModel: ud?.productModel,
+    });
+
     const lastWall = gwEui
       ? gwLastUplinkWallMs(sessionUserId, gwEui, session.lastUplinkWallMs)
       : session.lastUplinkWallMs;
     const maxAge = envInt('SYSCOM_LNS_PULL_TMST_REFRESH_MAX_AGE_MS', 12000);
     const tmstStale = lastWall == null || Date.now() - Number(lastWall) > maxAge;
     const hasTmst = tmstBase > 0;
-    const prevTmst = tx.tmst;
-    const prevImme = Boolean(tx.imme);
 
     const gwForceImme =
       cls === 'C' &&

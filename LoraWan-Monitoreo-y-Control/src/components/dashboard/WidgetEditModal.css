@@ -54,7 +54,7 @@
   flex-shrink: 0;
 }
 
-/** Vista previa + pestañas + formulario: un solo scroll dentro del modal (cabecera y pie fijos). */
+/** Pestañas + formulario: scroll dentro del modal (cabecera y pie fijos). */
 .widget-edit-modal-scroll {
   flex: 1 1 auto;
   min-height: 0;
@@ -567,7 +567,7 @@ body:not(.theme-dark) .widget-edit-preview-dash-note {
   align-items: flex-end;
   justify-content: flex-start;
   gap: 12px 16px;
-  padding: 0 24px;
+  padding: 16px 24px 0;
   border-bottom: 1px solid rgba(99, 102, 241, 0.2);
   flex-shrink: 0;
 }

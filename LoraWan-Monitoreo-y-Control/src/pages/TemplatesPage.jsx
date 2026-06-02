@@ -77,8 +77,8 @@ const TemplatesPage = () => {
     let cancelled = false;
     (async () => {
       try {
-        await hydrateDeviceTemplatesCatalogFromServer();
-        if (!cancelled) await publishLocalCustomTemplatesIfServerEmpty(true);
+        await hydrateDeviceTemplatesCatalogFromServer({ syncLocalExtrasToServer: isSuperAdmin });
+        if (!cancelled) await publishLocalCustomTemplatesIfServerEmpty(isSuperAdmin);
       } catch (e) {
         if (!cancelled) console.warn('[TemplatesPage] catálogo servidor:', e?.message || e);
       }
@@ -87,7 +87,7 @@ const TemplatesPage = () => {
     return () => {
       cancelled = true;
     };
-  }, [refresh]);
+  }, [refresh, isSuperAdmin]);
 
   const openNew = () => {
     setDecoderSnapshot('');
@@ -354,10 +354,15 @@ const TemplatesPage = () => {
           const parsed = JSON.parse(text);
           const { added, replaced, skipped, affectedTemplateIds } = mergeDeviceTemplatesFromImport(parsed);
           refresh();
+          let catalogSaved = false;
+          let catalogSaveError = '';
           try {
             await flushDeviceTemplatesCatalogToServer();
+            catalogSaved = true;
           } catch (fe) {
-            console.warn('[TemplatesPage] publicar tras importar:', fe?.message || fe);
+            catalogSaveError =
+              fe?.response?.data?.error || fe?.message || 'No se pudo guardar el catálogo en el servidor.';
+            console.warn('[TemplatesPage] publicar tras importar:', catalogSaveError);
           }
           let syncedDevices = 0;
           const syncErrors = [];
@@ -377,7 +382,9 @@ const TemplatesPage = () => {
             }
           }
           const lines = [
-            `Importación lista: ${added} nuevas, ${replaced} actualizadas por id.`,
+            catalogSaved
+              ? `Importación guardada permanentemente: ${added} nuevas, ${replaced} actualizadas por id.`
+              : `Importación aplicada en este navegador (${added} nuevas, ${replaced} actualizadas), pero no se guardó en el servidor: ${catalogSaveError}`,
             ...(syncedDevices > 0
               ? [`Dispositivos vinculados actualizados en servidor / downlinks locales: ${syncedDevices}.`]
               : []),
@@ -388,7 +395,7 @@ const TemplatesPage = () => {
             open: true,
             title: 'Importación de plantillas',
             message: lines.join('\n'),
-            variant: 'info',
+            variant: catalogSaved ? 'info' : 'warning',
             wide: true,
             confirmLabel: 'Aceptar',
           });

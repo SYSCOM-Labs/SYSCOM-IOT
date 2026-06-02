@@ -645,7 +645,7 @@ function applyStaleOfflineFromTelemetryRow(row, telemetryRow) {
 
 /**
  * Estado de conexión para el listado: usa el último paquete en aire (raw) y la edad del último uplink de app.
- * Evita marcar ONLINE al fusionar telemetría vieja cuando el nodo solo envía joins (WT201 clase C).
+ * Evita marcar ONLINE al fusionar telemetría vieja cuando el nodo solo envía joins OTAA.
  * @param {object} row Fila del listado
  * @param {object} telemetryRow Telemetría mostrada (puede ser fusionada)
  * @param {object|null} [rawLatestRow] Última fila en BD sin fusionar
