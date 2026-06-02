@@ -87,6 +87,9 @@ CLAUDE.md
 .windsurfrules
 .continue/
 
+# Archivos .xgs
+*.xgs
+
 # Certificados / claves privadas
 *.pem
 *.crt
