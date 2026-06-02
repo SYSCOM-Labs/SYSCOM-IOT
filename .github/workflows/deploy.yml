@@ -1,0 +1,85 @@
+name: Deploy a producción (Lightsail)
+
+# Auto-deploy: cada push a main reconstruye el frontend en el runner,
+# sube el código + dist/ por rsync al servidor y reinicia el servicio systemd.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'LoraWan-Monitoreo-y-Control/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch: {}   # permite lanzarlo a mano desde la pestaña Actions
+
+# Evita que dos deploys corran a la vez (pero no cancela uno en curso)
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: LoraWan-Monitoreo-y-Control
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: LoraWan-Monitoreo-y-Control/package-lock.json
+
+      - name: Instalar dependencias (incluye dev para compilar)
+        run: npm ci
+
+      - name: Compilar frontend (vite build -> dist/)
+        run: npm run build
+
+      - name: Preparar llave SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Subir código + dist al servidor (rsync)
+        run: |
+          rsync -az --delete \
+            --exclude 'node_modules/' \
+            --exclude '.git/' \
+            --exclude '.env' --exclude '.env.*' \
+            --exclude 'server/data/' \
+            --exclude '*.db' --exclude '*.db-shm' --exclude '*.db-wal' \
+            --exclude 'server/db.json' \
+            --exclude 'tmp/' \
+            --rsync-path="sudo rsync" \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
+            ./ "$DEPLOY_USER@$DEPLOY_HOST:/opt/syscom-iot/app/"
+
+      - name: Instalar deps de runtime y reiniciar servicio
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+          sudo chown -R syscom:syscom /opt/syscom-iot/app
+          cd /opt/syscom-iot/app
+          sudo -u syscom -H npm ci --omit=dev
+          sudo systemctl restart syscom-iot
+          sleep 3
+          if systemctl is-active --quiet syscom-iot; then
+            echo "✅ syscom-iot activo"
+          else
+            echo "❌ syscom-iot no arrancó; últimas líneas de log:"
+            journalctl -u syscom-iot -n 40 --no-pager
+            exit 1
+          fi
+          REMOTE
