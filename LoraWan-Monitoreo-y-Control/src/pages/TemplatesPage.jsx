@@ -20,6 +20,7 @@ import {
   hydrateDeviceTemplatesCatalogFromServer,
   publishLocalCustomTemplatesIfServerEmpty,
   flushDeviceTemplatesCatalogToServer,
+  templateMatchesSeedCatalog,
 } from '../services/deviceTemplates';
 import { saveDeviceDecodeConfig } from '../services/api';
 import { adaptDecoderScriptForSyscom } from '../utils/adaptDecoderScript';
@@ -56,6 +57,7 @@ const TemplatesPage = () => {
   const importInputRef = useRef(null);
   const [templates, setTemplates] = useState(() => getDeviceTemplates());
   const [editorOpen, setEditorOpen] = useState(false);
+  const [editingTemplate, setEditingTemplate] = useState(null);
   const [form, setForm] = useState(emptyForm);
   /** Contenido decoder “congelado” al abrir o tras «Ajustar»; si el textarea difiere, hay que ajustar antes de guardar. */
   const [decoderSnapshot, setDecoderSnapshot] = useState('');
@@ -90,6 +92,7 @@ const TemplatesPage = () => {
   }, [refresh, isSuperAdmin]);
 
   const openNew = () => {
+    setEditingTemplate(null);
     setDecoderSnapshot('');
     setForm(emptyForm());
     setDecoderAdjustAck(true);
@@ -98,6 +101,7 @@ const TemplatesPage = () => {
 
   const openEdit = (t) => {
     const dec = t.decoderScript || '';
+    setEditingTemplate(t);
     setDecoderSnapshot(dec);
     setForm({
       id: t.id,
@@ -268,13 +272,14 @@ const TemplatesPage = () => {
       }
       setTemplatesNoticeModal({
         open: true,
-        title: 'Plantilla guardada',
+        title: form.id ? 'Plantilla actualizada' : 'Plantilla guardada',
         message: parts.join('\n\n'),
         variant: 'info',
         wide: true,
         confirmLabel: 'Aceptar',
       });
       setEditorOpen(false);
+      setEditingTemplate(null);
       setForm(emptyForm());
       setDecoderAdjustAck(true);
     } catch (err) {
@@ -383,8 +388,9 @@ const TemplatesPage = () => {
           }
           const lines = [
             catalogSaved
-              ? `Importación guardada permanentemente: ${added} nuevas, ${replaced} actualizadas por id.`
-              : `Importación aplicada en este navegador (${added} nuevas, ${replaced} actualizadas), pero no se guardó en el servidor: ${catalogSaveError}`,
+              ? `Importación guardada permanentemente: ${added} modelos nuevos, ${replaced} modelos existentes reemplazados por el archivo.`
+              : `Importación aplicada en este navegador (${added} nuevos, ${replaced} reemplazados por modelo), pero no se guardó en el servidor: ${catalogSaveError}`,
+            'Las plantillas manuales cuyo modelo no venía en el archivo se conservaron.',
             ...(syncedDevices > 0
               ? [`Dispositivos vinculados actualizados en servidor / downlinks locales: ${syncedDevices}.`]
               : []),
@@ -435,6 +441,14 @@ const TemplatesPage = () => {
     Boolean(String(form.decoderScript || '').trim()) &&
     form.decoderScript !== decoderSnapshot &&
     !decoderAdjustAck;
+
+  const isEditing = Boolean(form.id);
+  const editingBuiltinSeed = editingTemplate && templateMatchesSeedCatalog(editingTemplate);
+
+  const handleTemplateRowClick = (t, e) => {
+    if (e.target.closest('button, a, input, label')) return;
+    openEdit(t);
+  };
 
   if (!isSuperAdmin) {
     return (
@@ -517,7 +531,12 @@ const TemplatesPage = () => {
             </thead>
             <tbody>
               {sorted.map((t) => (
-                <tr key={t.id}>
+                <tr
+                  key={t.id}
+                  className="templates-table-row templates-table-row--clickable"
+                  onClick={(e) => handleTemplateRowClick(t, e)}
+                  title="Clic para editar la plantilla"
+                >
                   <td>{t.marca || '—'}</td>
                   <td>
                     <strong>{t.modelo || '—'}</strong>
@@ -570,8 +589,14 @@ const TemplatesPage = () => {
                   <td className="templates-actions-col device-actions-col">
                     <div className="actions">
                       <div className="device-row-actions-icons" role="group" aria-label="Acciones de plantilla">
-                        <button type="button" className="device-action-pill" title="Editar" onClick={() => openEdit(t)}>
-                          <Pencil size={18} strokeWidth={2} />
+                        <button
+                          type="button"
+                          className="btn btn-secondary templates-row-edit-btn"
+                          title="Editar downlinks, clase, puerto y decoder"
+                          onClick={() => openEdit(t)}
+                        >
+                          <Pencil size={16} strokeWidth={2} aria-hidden />
+                          Editar
                         </button>
                         <button type="button" className="device-action-pill device-action-pill--danger" title="Eliminar" onClick={() => handleDelete(t)}>
                           <Trash2 size={18} strokeWidth={2} />
@@ -588,15 +613,44 @@ const TemplatesPage = () => {
       </div>
 
       {editorOpen && (
-        <div className="modal-overlay um-modal-overlay" role="presentation" onClick={() => setEditorOpen(false)}>
+        <div
+          className="modal-overlay um-modal-overlay"
+          role="presentation"
+          onClick={() => {
+            setEditorOpen(false);
+            setEditingTemplate(null);
+          }}
+        >
           <div className="modal-content glass um-modal-shell templates-editor-modal" role="dialog" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h2>{form.id ? 'Editar plantilla' : 'Nueva plantilla'}</h2>
-              <button type="button" className="btn-icon um-modal-close" onClick={() => setEditorOpen(false)} aria-label="Cerrar">
+              <div className="templates-editor-modal-head">
+                <h2>{isEditing ? 'Editar plantilla' : 'Nueva plantilla'}</h2>
+                {isEditing ? (
+                  <p className="templates-editor-modal-sub">
+                    Modifique downlinks, clase LoRaWAN, puerto o payload decoder. Los cambios se publican en el catálogo y
+                    se propagan a dispositivos vinculados.
+                  </p>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="btn-icon um-modal-close"
+                onClick={() => {
+                  setEditorOpen(false);
+                  setEditingTemplate(null);
+                }}
+                aria-label="Cerrar"
+              >
                 <X size={20} />
               </button>
             </div>
             <form onSubmit={handleSave} className="templates-editor-form">
+              {editingBuiltinSeed ? (
+                <p className="templates-editor-seed-hint glass" role="status">
+                  Plantilla integrada del sistema: al guardar se creará una versión personalizada en el catálogo (mismo
+                  modelo) con sus cambios.
+                </p>
+              ) : null}
               <div className="device-create-grid">
                 <label className="device-modal-field templates-editor-label">
                   <span className="device-modal-label-text">
@@ -755,7 +809,14 @@ const TemplatesPage = () => {
               </div>
 
               <div className="modal-footer">
-                <button type="button" className="btn btn-secondary" onClick={() => setEditorOpen(false)}>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setEditorOpen(false);
+                    setEditingTemplate(null);
+                  }}
+                >
                   Cancelar
                 </button>
                 <button
@@ -772,7 +833,9 @@ const TemplatesPage = () => {
                 >
                   {templateSyncBusy
                     ? templateSyncLabel || 'Sincronizando…'
-                    : 'Guardar plantilla'}
+                    : isEditing
+                      ? 'Guardar cambios'
+                      : 'Crear plantilla'}
                 </button>
               </div>
             </form>

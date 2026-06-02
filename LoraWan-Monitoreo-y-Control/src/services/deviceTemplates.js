@@ -620,14 +620,43 @@ export function getDeviceTemplates() {
   return loadRaw();
 }
 
+function templateModeloKey(t) {
+  return String(t?.modelo || '').trim().toLowerCase();
+}
+
 export function saveDeviceTemplate(payload) {
   const incomingId = payload.id != null && String(payload.id).trim() !== '' ? String(payload.id).trim() : null;
   const modeloNorm = String(payload.modelo || '').trim().toLowerCase();
+
+  const customList =
+    serverTemplatesState.status === 'loaded' ? [...serverTemplatesState.templates] : [...loadRaw()];
+
+  let id = incomingId;
+  let customIdx = id ? customList.findIndex((t) => String(t.id) === String(id)) : -1;
+
+  if (customIdx < 0 && modeloNorm) {
+    const byModelo = customList.find((t) => templateModeloKey(t) === modeloNorm);
+    if (byModelo) {
+      id = String(byModelo.id);
+      customIdx = customList.findIndex((t) => String(t.id) === String(id));
+    }
+  }
+
+  if (customIdx < 0 && incomingId) {
+    const edited = getDeviceTemplates().find((t) => String(t.id) === String(incomingId));
+    if (edited && templateMatchesSeedCatalog(edited)) {
+      id = `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    }
+  }
+
+  if (!id) {
+    id = `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+  }
+
   if (modeloNorm) {
-    const list = getDeviceTemplates();
-    const conflict = list.find((t) => {
-      if ((t.modelo || '').trim().toLowerCase() !== modeloNorm) return false;
-      if (incomingId && String(t.id || '').trim() === incomingId) return false;
+    const conflict = customList.find((t) => {
+      if (templateModeloKey(t) !== modeloNorm) return false;
+      if (String(t.id) === String(id)) return false;
       return true;
     });
     if (conflict) {
@@ -638,9 +667,7 @@ export function saveDeviceTemplate(payload) {
       throw err;
     }
   }
-  const id =
-    incomingId ||
-    `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+
   const otaa = normalizeOtaaTemplateFields(payload);
   validateOtaaTemplateFields(otaa);
   const entry = {
@@ -655,23 +682,12 @@ export function saveDeviceTemplate(payload) {
     otaaAppKey: otaa.otaaAppKey,
     telemetryLabels: normalizeTelemetryLabelHints(payload.telemetryLabels),
   };
-  if (serverTemplatesState.status === 'loaded') {
-    const list = [...serverTemplatesState.templates];
-    const idx = list.findIndex((t) => String(t.id) === String(entry.id));
-    if (idx >= 0) list[idx] = entry;
-    else list.push(entry);
-    serverTemplatesState = { ...serverTemplatesState, templates: list };
-    persistList(list);
-  } else {
-    const list = loadRaw();
-    const idx = list.findIndex((t) => t.id === id);
-    if (idx >= 0) {
-      list[idx] = entry;
-    } else {
-      list.push(entry);
-    }
-    persistList(list);
-  }
+
+  customIdx = customList.findIndex((t) => String(t.id) === String(entry.id));
+  if (customIdx >= 0) customList[customIdx] = entry;
+  else customList.push(entry);
+
+  commitDeviceTemplatesCatalog(customList);
   return entry;
 }
 
@@ -968,8 +984,9 @@ export function buildDeviceTemplatesExportDocument() {
 
 /**
  * Fusiona plantillas desde un JSON exportado u otro array compatible.
- * - Misma `id` que ya existe: se sustituye la fila.
- * - `id` ausente o vacío: se genera una nueva y se añade.
+ * - Mismo **modelo** (sin distinguir mayúsculas) que ya existe: se sustituye por la del archivo (conserva el `id` del catálogo).
+ * - Modelo nuevo: se añade al catálogo.
+ * - Plantillas manuales cuyo modelo no aparece en el archivo: se conservan.
  * @returns {{ added: number, replaced: number, skipped: string[], affectedTemplateIds: string[] }}
  */
 export function mergeDeviceTemplatesFromImport(parsed) {
@@ -991,7 +1008,6 @@ export function mergeDeviceTemplatesFromImport(parsed) {
     customBase = [...loadRaw()];
   }
   const list = [...customBase];
-  const byId = new Map(list.map((t) => [t.id, t]));
   let added = 0;
   let replaced = 0;
   const skipped = [];
@@ -1015,9 +1031,17 @@ export function mergeDeviceTemplatesFromImport(parsed) {
       skipped.push(`Fila ${i + 1} (${modelo}): credenciales OTAA inválidas; se importaron sin AppKey/App EUI.`);
     }
 
+    const modeloNorm = modelo.toLowerCase();
+    const existingByModelo = list.find((t) => templateModeloKey(t) === modeloNorm);
+
     const fileId = row.id != null && String(row.id).trim() ? String(row.id).trim() : '';
-    const id =
-      fileId || `tpl_import_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 9)}`;
+    let id = existingByModelo?.id != null && String(existingByModelo.id).trim()
+      ? String(existingByModelo.id).trim()
+      : fileId || `tpl_import_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 9)}`;
+
+    if (!existingByModelo && fileId && list.some((t) => String(t.id) === fileId)) {
+      id = `tpl_import_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 9)}`;
+    }
 
     const ch = String(row.channel != null ? row.channel : '').trim();
     const entry = {
@@ -1033,13 +1057,12 @@ export function mergeDeviceTemplatesFromImport(parsed) {
       telemetryLabels: normalizeTelemetryLabelHints(row.telemetryLabels),
     };
 
-    if (byId.has(id)) {
-      const idx = list.findIndex((x) => x.id === id);
+    if (existingByModelo) {
+      const idx = list.findIndex((t) => String(t.id) === String(existingByModelo.id));
       if (idx >= 0) list[idx] = entry;
       replaced += 1;
     } else {
       list.push(entry);
-      byId.set(id, entry);
       added += 1;
     }
     affectedTemplateIds.push(id);
