@@ -198,6 +198,7 @@ const HistoryPage = () => {
   const [pendingSaveConfig, setPendingSaveConfig] = useState(null);
   const [showApplyTemplateModal, setShowApplyTemplateModal] = useState(false);
   const [pendingApplyTemplate, setPendingApplyTemplate] = useState(null);
+  const [appliedTemplateId, setAppliedTemplateId] = useState(null);
   const [pdfExportBusy, setPdfExportBusy] = useState(false);
 
   const [editingTemplateMeta, setEditingTemplateMeta] = useState(null);
@@ -305,6 +306,7 @@ const HistoryPage = () => {
   }, [selectedDeviceIds, loadPropertiesForDevice]);
 
   const toggleDevice = (deviceId) => {
+    setAppliedTemplateId(null);
     const id = String(deviceId);
     setSelectedDeviceIds((prev) => {
       const next = new Set(prev);
@@ -323,6 +325,7 @@ const HistoryPage = () => {
   };
 
   const selectAllDevices = () => {
+    setAppliedTemplateId(null);
     setSelectedDeviceIds((prev) => {
       const next = new Set(prev);
       filteredDevices.forEach((d) => next.add(String(d.deviceId)));
@@ -331,11 +334,13 @@ const HistoryPage = () => {
   };
 
   const clearDeviceSelection = () => {
+    setAppliedTemplateId(null);
     setSelectedDeviceIds(new Set());
     setDeviceVariableMap({});
   };
 
   const setDeviceVariable = (deviceId, propKey) => {
+    setAppliedTemplateId(null);
     const id = String(deviceId);
     setDeviceVariableMap((prev) => ({ ...prev, [id]: propKey }));
   };
@@ -407,6 +412,7 @@ const HistoryPage = () => {
     setDeviceVariableMap(vars);
     setReportRows([]);
     setError(null);
+    setAppliedTemplateId(template.id || null);
     [...ids].forEach((id) => loadPropertiesForDevice(id));
   };
 
@@ -674,7 +680,7 @@ const HistoryPage = () => {
       const dataCount = countReportDataRows(rows);
       if (dataCount === 0) {
         setError(t('reports.empty'));
-      } else {
+      } else if (!appliedTemplateId) {
         const cfg = {
           dateFrom,
           dateTo,
