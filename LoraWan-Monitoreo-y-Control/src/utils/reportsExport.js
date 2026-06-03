@@ -1,7 +1,7 @@
 import { jsPDF } from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
 
-/** dd/mm/aaaa */
+/** dd/mm/aaaa HH:mm:ss */
 export function formatReportDate(ms) {
   const n = Number(ms);
   if (!Number.isFinite(n)) return '—';
@@ -9,7 +9,10 @@ export function formatReportDate(ms) {
   const dd = String(d.getDate()).padStart(2, '0');
   const mm = String(d.getMonth() + 1).padStart(2, '0');
   const yyyy = d.getFullYear();
-  return `${dd}/${mm}/${yyyy}`;
+  const hh = String(d.getHours()).padStart(2, '0');
+  const min = String(d.getMinutes()).padStart(2, '0');
+  const ss = String(d.getSeconds()).padStart(2, '0');
+  return `${dd}/${mm}/${yyyy} ${hh}:${min}:${ss}`;
 }
 
 export function formatReportValue(v) {
@@ -106,7 +109,7 @@ function buildReportPdfDoc(rows, meta = {}) {
     }
     return [
       pdfCellText(r.deviceLabel, 80),
-      pdfCellText(r.date, 24),
+      pdfCellText(r.date, 22),
       pdfCellText(r.value, 80),
     ];
   });
@@ -121,7 +124,7 @@ function buildReportPdfDoc(rows, meta = {}) {
     alternateRowStyles: { fillColor: [248, 250, 252] },
     columnStyles: {
       0: { cellWidth: orientation === 'landscape' ? 120 : 78 },
-      1: { cellWidth: 28, halign: 'center' },
+      1: { cellWidth: 36, halign: 'center' },
       2: { cellWidth: orientation === 'landscape' ? 120 : 72 },
     },
     didParseCell(data) {

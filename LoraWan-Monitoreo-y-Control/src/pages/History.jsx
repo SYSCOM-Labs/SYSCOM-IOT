@@ -823,13 +823,23 @@ const HistoryPage = () => {
                 <label>
                   <Calendar size={14} /> {t('reports.date_from')}
                 </label>
-                <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="glass" />
+                <input
+                  type="date"
+                  value={dateFrom}
+                  onChange={(e) => setDateFrom(e.target.value)}
+                  className="glass reports-date-input"
+                />
               </div>
               <div className="filter-group">
                 <label>
                   <Calendar size={14} /> {t('reports.date_to')}
                 </label>
-                <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="glass" />
+                <input
+                  type="date"
+                  value={dateTo}
+                  onChange={(e) => setDateTo(e.target.value)}
+                  className="glass reports-date-input"
+                />
               </div>
             </div>
 
