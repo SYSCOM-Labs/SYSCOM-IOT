@@ -26,21 +26,37 @@ export function formatReportValue(v) {
   return String(v);
 }
 
+/** Orden alfabético con números naturales (Sec 2 antes de Sec 10). */
+export function compareReportDeviceLabels(a, b) {
+  return String(a || '').localeCompare(String(b || ''), undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+}
+
 function csvEscape(cell) {
   const s = cell == null ? '' : String(cell);
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
   return s;
 }
 
+function isSeparatorRow(r) {
+  return r && r.type === 'separator';
+}
+
 /**
- * @param {{ deviceLabel: string, date: string, value: string }[]} rows
+ * @param {Array<{ type?: string, deviceLabel?: string, date?: string, value?: string, variableLabel?: string }>} rows
  */
 export function downloadReportCsv(rows, filenameBase = 'reporte_syscom') {
   const header = ['Dispositivo', 'Fecha', 'Valor'];
-  const lines = [
-    header.map(csvEscape).join(','),
-    ...rows.map((r) => [r.deviceLabel, r.date, r.value].map(csvEscape).join(',')),
-  ];
+  const bodyLines = rows.map((r) => {
+    if (isSeparatorRow(r)) {
+      const label = [r.deviceLabel, r.variableLabel].filter(Boolean).join(' · ');
+      return [`── ${label} ──`, '', ''].map(csvEscape).join(',');
+    }
+    return [r.deviceLabel, r.date, r.value].map(csvEscape).join(',');
+  });
+  const lines = [header.map(csvEscape).join(','), ...bodyLines];
   const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -50,9 +66,12 @@ export function downloadReportCsv(rows, filenameBase = 'reporte_syscom') {
   URL.revokeObjectURL(url);
 }
 
+const PDF_SEP_FILL = [59, 130, 246];
+const PDF_SEP_TEXT = [255, 255, 255];
+
 /**
- * @param {{ deviceLabel: string, date: string, value: string }[]} rows
- * @param {{ title?: string, variableLabel?: string, rangeLabel?: string }} meta
+ * @param {Array<{ type?: string, deviceLabel?: string, date?: string, value?: string, variableLabel?: string }>} rows
+ * @param {{ title?: string, rangeLabel?: string }} meta
  */
 export function downloadReportPdf(rows, meta = {}, filenameBase = 'reporte_syscom') {
   const doc = new jsPDF({ orientation: rows.length > 40 ? 'landscape' : 'portrait' });
@@ -60,21 +79,49 @@ export function downloadReportPdf(rows, meta = {}, filenameBase = 'reporte_sysco
   doc.text(meta.title || 'Reporte de telemetría', 14, 16);
   doc.setFontSize(9);
   let y = 22;
-  if (meta.variableLabel) {
-    doc.text(`Variable: ${meta.variableLabel}`, 14, y);
-    y += 5;
-  }
   if (meta.rangeLabel) {
     doc.text(`Periodo: ${meta.rangeLabel}`, 14, y);
     y += 5;
   }
+
+  const tableBody = rows.map((r) => {
+    if (isSeparatorRow(r)) {
+      const label = [r.deviceLabel, r.variableLabel].filter(Boolean).join(' · ');
+      return [
+        {
+          content: `── ${label} ──`,
+          colSpan: 3,
+          styles: {
+            fillColor: PDF_SEP_FILL,
+            textColor: PDF_SEP_TEXT,
+            fontStyle: 'bold',
+            halign: 'center',
+          },
+        },
+      ];
+    }
+    return [r.deviceLabel, r.date, r.value];
+  });
+
   doc.autoTable({
     startY: y + 2,
     head: [['Dispositivo', 'Fecha', 'Valor']],
-    body: rows.map((r) => [r.deviceLabel, r.date, r.value]),
+    body: tableBody,
     theme: 'striped',
-    headStyles: { fillColor: [59, 130, 246] },
+    headStyles: { fillColor: PDF_SEP_FILL },
     styles: { fontSize: 8 },
+    didParseCell(data) {
+      const row = rows[data.row.index];
+      if (row && isSeparatorRow(row) && !data.cell.colSpan) {
+        data.cell.styles.fillColor = PDF_SEP_FILL;
+        data.cell.styles.textColor = PDF_SEP_TEXT;
+      }
+    },
   });
   doc.save(`${filenameBase}.pdf`);
+}
+
+/** Filas de datos (sin separadores) para contadores. */
+export function countReportDataRows(rows) {
+  return rows.filter((r) => !isSeparatorRow(r)).length;
 }

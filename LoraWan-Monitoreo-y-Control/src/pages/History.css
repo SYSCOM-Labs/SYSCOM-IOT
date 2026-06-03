@@ -253,6 +253,14 @@ body.theme-dark .history-page .btn-secondary:hover:not(:disabled) {
   color: var(--text-secondary);
 }
 
+.reports-device-search {
+  width: 100%;
+  max-width: none;
+  flex: none;
+  margin-bottom: 12px;
+  min-height: 44px;
+}
+
 .reports-device-list {
   max-height: 320px;
   overflow-y: auto;
@@ -286,8 +294,23 @@ body.theme-dark .history-page .btn-secondary:hover:not(:disabled) {
   accent-color: var(--accent-blue, #3b82f6);
 }
 
+.reports-device-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .reports-device-name {
   font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reports-device-model {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -301,6 +324,86 @@ body.theme-dark .history-page .btn-secondary:hover:not(:disabled) {
 
 .reports-section--filters .filter-group {
   margin-bottom: 16px;
+}
+
+.reports-per-device-vars {
+  margin-bottom: 16px;
+}
+
+.reports-per-device-vars__heading {
+  display: block;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 10px;
+}
+
+.reports-device-var-list {
+  max-height: 280px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+}
+
+.reports-device-var-row {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: rgb(99 102 241 / 0.04);
+}
+
+.reports-device-var-row__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.reports-device-var-row__name {
+  font-weight: 600;
+  font-size: 0.88rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reports-device-var-row__spin {
+  flex-shrink: 0;
+  color: var(--accent-blue, #3b82f6);
+}
+
+.reports-device-var-row__select {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-size: 0.88rem;
+}
+
+.reports-table-separator td {
+  background: linear-gradient(90deg, rgb(59 130 246 / 0.92), rgb(99 102 241 / 0.88)) !important;
+  color: #fff !important;
+  text-align: center;
+  font-weight: 600;
+  font-size: 0.82rem;
+  padding: 10px 12px !important;
+  border: none !important;
+}
+
+.reports-table-separator__label em {
+  font-style: normal;
+  opacity: 0.92;
+  font-weight: 500;
+}
+
+body.theme-dark .reports-device-var-row {
+  background: rgb(99 102 241 / 0.12);
 }
 
 .reports-date-row {

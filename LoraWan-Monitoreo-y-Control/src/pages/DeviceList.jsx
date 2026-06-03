@@ -125,30 +125,7 @@ function computeSensorFormValidation(form) {
   return { ok: errors.length === 0, errors, devHex, appEui, appKey };
 }
 
-/** Coincidencia por modelo, DevEUI/sn/deviceId, nombre, etiqueta (insensible a mayúsculas y espacios en hex). */
-function deviceMatchesListSearch(device, query) {
-  const raw = String(query || '').trim().toLowerCase();
-  if (!raw) return true;
-  const parts = [
-    device.deviceId,
-    device.sn,
-    device.name,
-    device.model,
-    device.productModel,
-    device.deviceType,
-    device.devEUI,
-    device.devEui,
-    device.tag,
-  ]
-    .filter((x) => x != null && String(x).trim() !== '')
-    .map((x) => String(x).toLowerCase());
-  const blob = parts.join(' | ');
-  if (blob.includes(raw)) return true;
-  const needleHex = raw.replace(/[^0-9a-f]/g, '');
-  if (needleHex.length < 3) return false;
-  const blobHex = parts.join('').replace(/[^0-9a-f]/g, '');
-  return blobHex.includes(needleHex);
-}
+import { deviceMatchesListSearch } from '../utils/deviceListSearch';
 
 function licenseExpiryDisplay(device) {
   if (!device.licenseExpiresAt) return { text: '—', className: '' };
