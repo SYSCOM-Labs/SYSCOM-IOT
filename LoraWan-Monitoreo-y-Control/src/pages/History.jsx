@@ -15,6 +15,7 @@ import {
   Bookmark,
   Trash2,
   Play,
+  Pencil,
   X,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
@@ -199,13 +200,28 @@ const HistoryPage = () => {
   const [pendingApplyTemplate, setPendingApplyTemplate] = useState(null);
   const [pdfExportBusy, setPdfExportBusy] = useState(false);
 
+  const [editingTemplateMeta, setEditingTemplateMeta] = useState(null);
+  const [editTemplateName, setEditTemplateName] = useState('');
+  const [editTemplateDevices, setEditTemplateDevices] = useState([]);
+  const [editDeviceSearchQuery, setEditDeviceSearchQuery] = useState('');
+  const [editDevicePropertiesMap, setEditDevicePropertiesMap] = useState({});
+  const [editLoadingPropsFor, setEditLoadingPropsFor] = useState(() => new Set());
+  const [editTemplateSaving, setEditTemplateSaving] = useState(false);
+
   const propsLoadSeqRef = useRef({});
   const loadingPropsRef = useRef(new Set());
   const devicePropertiesRef = useRef({});
+  const editPropsLoadSeqRef = useRef({});
+  const editLoadingPropsRef = useRef(new Set());
+  const editDevicePropertiesRef = useRef({});
 
   useEffect(() => {
     devicePropertiesRef.current = devicePropertiesMap;
   }, [devicePropertiesMap]);
+
+  useEffect(() => {
+    editDevicePropertiesRef.current = editDevicePropertiesMap;
+  }, [editDevicePropertiesMap]);
 
   useEffect(() => {
     const loadDevices = async () => {
@@ -420,6 +436,173 @@ const HistoryPage = () => {
       alert(e?.response?.data?.error || e?.message || t('reports.template_delete_error'));
     }
   };
+
+  const loadEditPropertiesForDevice = useCallback(
+    async (deviceId) => {
+      const id = String(deviceId);
+      if (!token || editDevicePropertiesRef.current[id] || editLoadingPropsRef.current.has(id)) return;
+
+      editLoadingPropsRef.current.add(id);
+      editPropsLoadSeqRef.current[id] = (editPropsLoadSeqRef.current[id] || 0) + 1;
+      const seq = editPropsLoadSeqRef.current[id];
+
+      setEditLoadingPropsFor((prev) => new Set(prev).add(id));
+      try {
+        const list = await discoverPropertiesForDevice(id, credentials, token);
+        if (editPropsLoadSeqRef.current[id] !== seq) return;
+        setEditDevicePropertiesMap((prev) => (prev[id] ? prev : { ...prev, [id]: list }));
+        setEditTemplateDevices((prev) =>
+          prev.map((entry) => {
+            if (entry.deviceId !== id || entry.variableKey) return entry;
+            const firstKey = list[0]?.propertyKey || '';
+            return {
+              ...entry,
+              variableKey: firstKey,
+              variableLabel: list[0]?.name || firstKey,
+            };
+          })
+        );
+      } finally {
+        editLoadingPropsRef.current.delete(id);
+        setEditLoadingPropsFor((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      }
+    },
+    [token, credentials]
+  );
+
+  const openEditTemplate = (tpl) => {
+    if (!tpl) return;
+    const deviceEntries = [...(tpl.devices || [])].map((d) => ({
+      deviceId: String(d.deviceId),
+      deviceLabel: d.deviceLabel || String(d.deviceId),
+      variableKey: d.variableKey || '',
+      variableLabel: d.variableLabel || '',
+    }));
+    setEditTemplateName(tpl.name || '');
+    setEditTemplateDevices(deviceEntries);
+    setEditDeviceSearchQuery('');
+    setEditDevicePropertiesMap({});
+    setEditingTemplateMeta({ id: tpl.id, dateFrom: tpl.dateFrom, dateTo: tpl.dateTo });
+    deviceEntries.forEach((d) => loadEditPropertiesForDevice(d.deviceId));
+  };
+
+  const resetEditTemplate = () => {
+    setEditingTemplateMeta(null);
+    setEditTemplateName('');
+    setEditTemplateDevices([]);
+    setEditDeviceSearchQuery('');
+    setEditDevicePropertiesMap({});
+  };
+
+  const closeEditTemplate = () => {
+    if (editTemplateSaving) return;
+    resetEditTemplate();
+  };
+
+  const removeDeviceFromEditTemplate = (deviceId) => {
+    const id = String(deviceId);
+    setEditTemplateDevices((prev) => prev.filter((d) => d.deviceId !== id));
+  };
+
+  const addDeviceToEditTemplate = (device) => {
+    const id = String(device.deviceId);
+    if (editTemplateDevices.some((d) => d.deviceId === id)) return;
+    setEditTemplateDevices((prev) => [
+      ...prev,
+      {
+        deviceId: id,
+        deviceLabel: deviceLabel(device),
+        variableKey: '',
+        variableLabel: '',
+      },
+    ]);
+    loadEditPropertiesForDevice(id);
+  };
+
+  const setEditDeviceVariable = (deviceId, propKey) => {
+    const id = String(deviceId);
+    const list = editDevicePropertiesMap[id] || [];
+    const found = list.find((p) => p.propertyKey === propKey);
+    setEditTemplateDevices((prev) =>
+      prev.map((d) =>
+        d.deviceId === id
+          ? { ...d, variableKey: propKey, variableLabel: found?.name || propKey }
+          : d
+      )
+    );
+  };
+
+  const editVariableLabelForDevice = (deviceId, propKey) => {
+    const id = String(deviceId);
+    const list = editDevicePropertiesMap[id] || [];
+    const found = list.find((p) => p.propertyKey === propKey);
+    return found?.name || propKey || '—';
+  };
+
+  const handleSaveEditTemplate = async () => {
+    if (!editingTemplateMeta) return;
+    const name = String(editTemplateName || '').trim();
+    if (!name) {
+      alert(t('reports.template_name_required'));
+      return;
+    }
+    if (editTemplateDevices.length === 0) {
+      alert(t('reports.template_edit_need_device'));
+      return;
+    }
+    if (!editTemplateDevices.every((d) => d.variableKey)) {
+      alert(t('reports.template_edit_need_variable'));
+      return;
+    }
+
+    setEditTemplateSaving(true);
+    try {
+      const saved = await saveReportTemplate({
+        id: editingTemplateMeta.id,
+        name,
+        dateFrom: editingTemplateMeta.dateFrom,
+        dateTo: editingTemplateMeta.dateTo,
+        devices: editTemplateDevices.map((d) => ({
+          deviceId: d.deviceId,
+          deviceLabel: d.deviceLabel,
+          variableKey: d.variableKey,
+          variableLabel: editVariableLabelForDevice(d.deviceId, d.variableKey) || d.variableLabel,
+        })),
+      });
+      setSavedTemplates((prev) => {
+        const rest = prev.filter((x) => x.id !== saved.id);
+        return [saved, ...rest];
+      });
+      resetEditTemplate();
+    } catch (e) {
+      alert(e?.response?.data?.error || e?.message || t('reports.template_save_error'));
+    } finally {
+      setEditTemplateSaving(false);
+    }
+  };
+
+  const editSortedTemplateDevices = useMemo(
+    () =>
+      [...editTemplateDevices].sort((a, b) =>
+        compareReportDeviceLabels(a.deviceLabel, b.deviceLabel)
+      ),
+    [editTemplateDevices]
+  );
+
+  const editAvailableDevices = useMemo(() => {
+    const inTemplate = new Set(editTemplateDevices.map((d) => d.deviceId));
+    return sortDevicesForReport(
+      devices.filter(
+        (d) =>
+          !inTemplate.has(String(d.deviceId)) &&
+          deviceMatchesListSearch(d, editDeviceSearchQuery)
+      )
+    );
+  }, [devices, editTemplateDevices, editDeviceSearchQuery]);
 
   const allDevicesHaveVariable = selectedDevices.every((d) => {
     const id = String(d.deviceId);
@@ -823,6 +1006,14 @@ const HistoryPage = () => {
                   </button>
                   <button
                     type="button"
+                    className="btn btn-secondary reports-template-edit-btn"
+                    onClick={() => openEditTemplate(tpl)}
+                    title={t('reports.template_edit')}
+                  >
+                    <Pencil size={14} />
+                  </button>
+                  <button
+                    type="button"
                     className="btn btn-secondary reports-template-delete-btn"
                     onClick={() => handleDeleteTemplate(tpl.id)}
                     title={t('reports.template_delete')}
@@ -892,6 +1083,150 @@ const HistoryPage = () => {
               >
                 {saveTemplateBusy ? <Loader size={16} className="spin" /> : <Bookmark size={16} />}
                 {t('reports.save_modal_confirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingTemplateMeta && (
+        <div
+          className="modal-overlay reports-edit-template-overlay"
+          role="presentation"
+          onClick={() => !editTemplateSaving && closeEditTemplate()}
+        >
+          <div
+            className="modal-content glass reports-edit-template-modal"
+            role="dialog"
+            aria-labelledby="reports-edit-template-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h2 id="reports-edit-template-title">{t('reports.template_edit_title')}</h2>
+              <button
+                type="button"
+                className="reports-save-modal__close"
+                onClick={() => !editTemplateSaving && closeEditTemplate()}
+                aria-label={t('reports.template_edit_cancel')}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="modal-body reports-edit-template-modal__body">
+              <p className="reports-edit-template-modal__hint">{t('reports.template_edit_hint')}</p>
+              <label className="filter-group" htmlFor="report-template-edit-name">
+                {t('reports.template_name_label')}
+                <input
+                  id="report-template-edit-name"
+                  type="text"
+                  className="glass"
+                  value={editTemplateName}
+                  onChange={(e) => setEditTemplateName(e.target.value)}
+                  placeholder={t('reports.template_name_placeholder')}
+                  maxLength={200}
+                  autoFocus
+                />
+              </label>
+
+              <div className="reports-edit-template-devices">
+                <h4 className="reports-edit-template-devices__title">
+                  {t('reports.template_edit_devices_section')}
+                </h4>
+                {editSortedTemplateDevices.length === 0 ? (
+                  <p className="reports-muted">{t('reports.template_edit_no_devices')}</p>
+                ) : (
+                  <div className="reports-edit-template-devices__list">
+                    {editSortedTemplateDevices.map((entry) => {
+                      const props = editDevicePropertiesMap[entry.deviceId] || [];
+                      const loadingDev = editLoadingPropsFor.has(entry.deviceId);
+                      return (
+                        <div key={entry.deviceId} className="reports-edit-template-device-row">
+                          <div className="reports-edit-template-device-row__head">
+                            <span className="reports-edit-template-device-row__name">{entry.deviceLabel}</span>
+                            {loadingDev && <Loader size={14} className="spin" />}
+                            <button
+                              type="button"
+                              className="reports-edit-template-device-row__remove"
+                              onClick={() => removeDeviceFromEditTemplate(entry.deviceId)}
+                              title={t('reports.template_edit_remove_device')}
+                              aria-label={t('reports.template_edit_remove_device')}
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                          <select
+                            value={entry.variableKey || ''}
+                            onChange={(e) => setEditDeviceVariable(entry.deviceId, e.target.value)}
+                            className="glass reports-device-var-row__select"
+                            disabled={loadingDev || props.length === 0}
+                          >
+                            {props.length === 0 ? (
+                              <option value="">{t('reports.no_variables')}</option>
+                            ) : (
+                              props.map((p) => (
+                                <option key={p.propertyKey} value={p.propertyKey}>
+                                  {p.name}
+                                </option>
+                              ))
+                            )}
+                          </select>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="reports-edit-template-add">
+                <h4 className="reports-edit-template-add__title">{t('reports.template_edit_add_device')}</h4>
+                <label className="device-list-search-shimmer reports-edit-template-add__search">
+                  <Search size={16} className="device-list-search-shimmer__icon" strokeWidth={2} aria-hidden />
+                  <input
+                    type="search"
+                    className="device-list-search-shimmer__input"
+                    placeholder={t('reports.device_search_placeholder')}
+                    value={editDeviceSearchQuery}
+                    onChange={(e) => setEditDeviceSearchQuery(e.target.value)}
+                    aria-label={t('reports.device_search_aria')}
+                    autoComplete="off"
+                  />
+                </label>
+                <div className="reports-edit-template-add__list">
+                  {editAvailableDevices.length === 0 ? (
+                    <p className="reports-muted">{t('reports.template_edit_no_available')}</p>
+                  ) : (
+                    editAvailableDevices.map((d) => (
+                      <button
+                        key={String(d.deviceId)}
+                        type="button"
+                        className="reports-edit-template-add__item"
+                        onClick={() => addDeviceToEditTemplate(d)}
+                      >
+                        <span className="reports-edit-template-add__item-name">{deviceLabel(d)}</span>
+                        <span className="reports-edit-template-add__item-id">{deviceDevEuiDisplay(d)}</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={editTemplateSaving}
+                onClick={closeEditTemplate}
+              >
+                {t('reports.template_edit_cancel')}
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary device-create-top-btn"
+                disabled={editTemplateSaving}
+                onClick={() => void handleSaveEditTemplate()}
+              >
+                {editTemplateSaving ? <Loader size={16} className="spin" /> : <Bookmark size={16} />}
+                {t('reports.template_edit_save')}
               </button>
             </div>
           </div>
