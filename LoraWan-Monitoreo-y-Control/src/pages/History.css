@@ -503,9 +503,29 @@ body.theme-dark .reports-device-var-row {
 }
 
 .reports-download-pdf-btn.is-busy {
-  opacity: 0.92;
+  opacity: 0.88;
   cursor: wait;
+  position: relative;
+}
+
+.reports-download-pdf-btn.is-busy::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: 0 0 0 2px rgb(59 130 246 / 0.35);
   pointer-events: none;
+  animation: reports-pdf-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes reports-pdf-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .reports-download-pdf-btn__spinner {

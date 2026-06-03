@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { flushSync } from 'react-dom';
 import {
   Calendar,
   Download,
@@ -510,11 +511,11 @@ const HistoryPage = () => {
   const dataRowCount = countReportDataRows(reportRows);
   const previewRows = reportRows.slice(0, 600);
 
-  const handleDownloadPdf = async () => {
+  const handleDownloadPdf = () => {
     if (pdfExportBusy || dataRowCount === 0) return;
-    setPdfExportBusy(true);
+    flushSync(() => setPdfExportBusy(true));
     try {
-      await downloadReportPdf(reportRows, exportMeta, filenameBase);
+      downloadReportPdf(reportRows, exportMeta, filenameBase);
     } catch (e) {
       console.error('[Reports] PDF:', e);
       alert(e?.message || t('reports.pdf_error'));
@@ -699,7 +700,7 @@ const HistoryPage = () => {
               <button
                 type="button"
                 className={`btn btn-primary device-create-top-btn reports-download-pdf-btn${pdfExportBusy ? ' is-busy' : ''}`}
-                onClick={() => void handleDownloadPdf()}
+                onClick={handleDownloadPdf}
                 disabled={pdfExportBusy}
                 aria-busy={pdfExportBusy}
               >

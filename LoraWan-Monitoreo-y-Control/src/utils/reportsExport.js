@@ -1,4 +1,4 @@
-import jsPDF from 'jspdf';
+import { jsPDF } from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
 
 /** dd/mm/aaaa */
@@ -49,40 +49,9 @@ function pdfCellText(value, maxLen = 120) {
   return s.length > maxLen ? `${s.slice(0, maxLen - 1)}…` : s;
 }
 
-function runAutoTable(doc, options) {
-  if (typeof doc.autoTable === 'function') {
-    doc.autoTable(options);
-    return;
-  }
-  autoTable(doc, options);
-}
-
-function yieldToBrowser() {
-  return new Promise((resolve) => {
-    requestAnimationFrame(() => setTimeout(resolve, 0));
-  });
-}
-
-/**
- * @param {Array<{ type?: string, deviceLabel?: string, date?: string, value?: string, variableLabel?: string }>} rows
- */
-export function downloadReportCsv(rows, filenameBase = 'reporte_syscom') {
-  const header = ['Dispositivo', 'Fecha', 'Valor'];
-  const bodyLines = rows.map((r) => {
-    if (isSeparatorRow(r)) {
-      const label = [r.deviceLabel, r.variableLabel].filter(Boolean).join(' · ');
-      return [`── ${label} ──`, '', ''].map(csvEscape).join(',');
-    }
-    return [r.deviceLabel, r.date, r.value].map(csvEscape).join(',');
-  });
-  const lines = [header.map(csvEscape).join(','), ...bodyLines];
-  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `${filenameBase}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+function separatorLabel(r) {
+  const label = [r.deviceLabel, r.variableLabel].filter(Boolean).join(' · ');
+  return `── ${label} ──`;
 }
 
 const PDF_SEP_FILL = [59, 130, 246];
@@ -92,15 +61,24 @@ const SEP_CELL_STYLES = {
   textColor: PDF_SEP_TEXT,
   fontStyle: 'bold',
   halign: 'center',
+  valign: 'middle',
 };
 
-/**
- * @param {Array<{ type?: string, deviceLabel?: string, date?: string, value?: string, variableLabel?: string }>} rows
- * @param {{ title?: string, rangeLabel?: string }} meta
- */
-export async function downloadReportPdf(rows, meta = {}, filenameBase = 'reporte_syscom') {
-  await yieldToBrowser();
+/** Descarga blob en el mismo turno del clic (evita bloqueo del navegador). */
+function triggerBlobDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.rel = 'noopener';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
 
+function buildReportPdfDoc(rows, meta = {}) {
   const dataRows = rows.filter((r) => !isSeparatorRow(r));
   const orientation = dataRows.length > 35 ? 'landscape' : 'portrait';
   const doc = new jsPDF({ orientation, unit: 'mm', format: 'a4' });
@@ -114,15 +92,16 @@ export async function downloadReportPdf(rows, meta = {}, filenameBase = 'reporte
     y += 5;
   }
 
-  /** Filas uniformes de 3 celdas (evita fallos de colspan en jspdf-autotable 5). */
-  const tableBody = rows.map((r) => {
+  const separatorBodyIndexes = new Set();
+  const tableBody = rows.map((r, idx) => {
     if (isSeparatorRow(r)) {
-      const label = [r.deviceLabel, r.variableLabel].filter(Boolean).join(' · ');
-      const text = `── ${label} ──`;
+      separatorBodyIndexes.add(idx);
       return [
-        { content: text, styles: { ...SEP_CELL_STYLES, halign: 'left' } },
-        { content: '', styles: SEP_CELL_STYLES },
-        { content: '', styles: SEP_CELL_STYLES },
+        {
+          content: separatorLabel(r),
+          colSpan: 3,
+          styles: SEP_CELL_STYLES,
+        },
       ];
     }
     return [
@@ -132,24 +111,61 @@ export async function downloadReportPdf(rows, meta = {}, filenameBase = 'reporte
     ];
   });
 
-  await yieldToBrowser();
-
-  runAutoTable(doc, {
+  autoTable(doc, {
     startY: y + 2,
     head: [['Dispositivo', 'Fecha', 'Valor']],
     body: tableBody,
-    theme: 'striped',
-    headStyles: { fillColor: PDF_SEP_FILL },
-    styles: { fontSize: 8, overflow: 'linebreak' },
+    theme: 'grid',
+    headStyles: { fillColor: PDF_SEP_FILL, textColor: PDF_SEP_TEXT },
+    styles: { fontSize: 8, overflow: 'linebreak', cellPadding: 2.5 },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
     columnStyles: {
-      0: { cellWidth: orientation === 'landscape' ? 110 : 75 },
-      1: { cellWidth: 28 },
-      2: { cellWidth: 'auto' },
+      0: { cellWidth: orientation === 'landscape' ? 120 : 78 },
+      1: { cellWidth: 28, halign: 'center' },
+      2: { cellWidth: orientation === 'landscape' ? 120 : 72 },
+    },
+    didParseCell(data) {
+      if (data.section !== 'body') return;
+      if (!separatorBodyIndexes.has(data.row.index)) return;
+      data.cell.styles.fillColor = PDF_SEP_FILL;
+      data.cell.styles.textColor = PDF_SEP_TEXT;
+      data.cell.styles.fontStyle = 'bold';
+      data.cell.styles.halign = 'center';
     },
   });
 
-  await yieldToBrowser();
-  doc.save(`${filenameBase}.pdf`);
+  return doc;
+}
+
+/**
+ * @param {Array<{ type?: string, deviceLabel?: string, date?: string, value?: string, variableLabel?: string }>} rows
+ */
+export function downloadReportCsv(rows, filenameBase = 'reporte_syscom') {
+  const header = ['Dispositivo', 'Fecha', 'Valor'];
+  const bodyLines = rows.map((r) => {
+    if (isSeparatorRow(r)) {
+      const text = separatorLabel(r);
+      return [text, text, text].map(csvEscape).join(',');
+    }
+    return [r.deviceLabel, r.date, r.value].map(csvEscape).join(',');
+  });
+  const lines = [header.map(csvEscape).join(','), ...bodyLines];
+  const blob = new Blob(['\uFEFF' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+  triggerBlobDownload(blob, `${filenameBase}.csv`);
+}
+
+/**
+ * Generación síncrona: debe invocarse directamente desde el clic del usuario.
+ * @param {Array<{ type?: string, deviceLabel?: string, date?: string, value?: string, variableLabel?: string }>} rows
+ * @param {{ title?: string, rangeLabel?: string }} meta
+ */
+export function downloadReportPdf(rows, meta = {}, filenameBase = 'reporte_syscom') {
+  if (!Array.isArray(rows) || rows.length === 0) {
+    throw new Error('No hay filas para exportar');
+  }
+  const doc = buildReportPdfDoc(rows, meta);
+  const blob = doc.output('blob');
+  triggerBlobDownload(blob, `${filenameBase}.pdf`);
 }
 
 /** Filas de datos (sin separadores) para contadores. */
