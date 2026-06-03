@@ -5,7 +5,7 @@ import { useLanguage } from '../context/LanguageContext';
 import {
   LayoutDashboard,
   Tablet,
-  History,
+  FileSpreadsheet,
   Zap,
   Settings,
   LogOut,
@@ -35,7 +35,7 @@ const Sidebar = ({ activePage, onNavigate, isOpen, onToggle }) => {
     { id: 'Devices', icon: <Tablet size={20} />, label: t('nav.devices') },
     { id: 'Gateway', icon: <RadioTower size={20} />, label: t('nav.gateway') },
     { id: 'Automations', icon: <Zap size={20} />, label: t('nav.automations') },
-    { id: 'History', icon: <History size={20} />, label: t('nav.history') },
+    { id: 'History', icon: <FileSpreadsheet size={20} />, label: t('nav.history') },
     { id: 'SpecialReport', icon: <Calculator size={20} />, label: t('nav.special_report') },
     { id: 'Users', icon: <Users size={20} />, label: 'Usuarios' },
     { id: 'Templates', icon: <Layers size={20} />, label: 'Plantillas', superAdminOnly: true },

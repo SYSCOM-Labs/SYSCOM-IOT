@@ -4,7 +4,7 @@ export const NAV_MODULE_DEFS = [
   { id: 'Devices', label: 'Dispositivos' },
   { id: 'Gateway', label: 'Gateway' },
   { id: 'Automations', label: 'Automatización' },
-  { id: 'History', label: 'Historial' },
+  { id: 'History', label: 'Reportes' },
   { id: 'SpecialReport', label: 'Reporte especial' },
   { id: 'Users', label: 'Usuarios' },
   { id: 'Templates', label: 'Plantillas' },

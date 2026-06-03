@@ -30,7 +30,7 @@ const PAGE_HEADINGS = {
     subtitle: 'Sensores, métricas y telemetría en tiempo casi real',
   },
   Devices: { title: 'Dispositivos', subtitle: 'Listado, estado y acciones por equipo' },
-  History: { title: 'Historial', subtitle: 'Series temporales y exportación' },
+  History: { title: 'Reportes', subtitle: 'Dispositivos, variables y exportación CSV/PDF' },
   SpecialReport: { title: 'Reporte especial', subtitle: 'Cálculos y documentos' },
   Automations: { title: 'Automatización', subtitle: 'Reglas, condiciones y acciones' },
   Settings: { title: 'Ajustes', subtitle: 'Cuenta, ingesta HTTP y apariencia' },
