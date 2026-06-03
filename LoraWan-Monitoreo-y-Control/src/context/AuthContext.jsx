@@ -5,6 +5,7 @@ import {
   getMe,
   isTokenValid,
   getLocalUser,
+  getAuthToken,
   checkSetup,
   completeFirstPassword as submitFirstPassword,
   refreshSession,
@@ -51,7 +52,7 @@ export const AuthProvider = ({ children }) => {
         return;
       }
 
-      if (!isTokenValid() && localStorage.getItem('local_token')) {
+      if (!isTokenValid() && getAuthToken()) {
         try {
           await refreshSession();
         } catch {
@@ -59,7 +60,7 @@ export const AuthProvider = ({ children }) => {
         }
       }
       if (isTokenValid()) {
-        const stored = localStorage.getItem('local_token');
+        const stored = getAuthToken();
         setToken(stored);
         const localUser = getLocalUser();
         setUser(localUser);
@@ -94,7 +95,7 @@ export const AuthProvider = ({ children }) => {
     return () => window.removeEventListener('syscom-token-refreshed', onRefreshed);
   }, []);
 
-  /** Renovación periódica para pantallas 24/7 (el JWT sigue siendo el control de acceso; el servidor LNS no depende de esto). */
+  /** Renovación periódica mientras la pestaña sigue abierta (JWT en sessionStorage; al cerrar pestaña hay que volver a iniciar sesión). */
   useEffect(() => {
     if (!token) return undefined;
     const tick = async () => {

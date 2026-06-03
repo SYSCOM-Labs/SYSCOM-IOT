@@ -8,8 +8,40 @@ const API = getApiBase();
 /** Origen del servidor (sin /api) para mostrar URLs de ingesta al gateway. */
 export const getServerOrigin = () => getPublicServerOrigin();
 
-const getToken = () => localStorage.getItem('local_token');
-const setToken = (t) => localStorage.setItem('local_token', t);
+/** JWT de sesión web: solo `sessionStorage` (se borra al cerrar pestaña/navegador). */
+const TOKEN_KEY = 'local_token';
+
+const authStorage = () => {
+  if (typeof window === 'undefined') return null;
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+};
+
+/** Elimina tokens heredados en localStorage (sesión persistente antigua). */
+function purgeLegacyPersistentToken() {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+purgeLegacyPersistentToken();
+
+const getToken = () => authStorage()?.getItem(TOKEN_KEY) ?? null;
+const setToken = (t) => {
+  const s = authStorage();
+  if (s && t) s.setItem(TOKEN_KEY, t);
+};
+const removeToken = () => {
+  authStorage()?.removeItem(TOKEN_KEY);
+};
+
+/** Token JWT almacenado en la pestaña actual (para axios y SSE). */
+export const getAuthToken = () => getToken();
 
 /**
  * Segmento payload del JWT (base64url). `jsonwebtoken` en el servidor usa URL-safe;
@@ -42,7 +74,6 @@ export function applySessionToken(t) {
     /* SSR */
   }
 }
-const removeToken = () => localStorage.removeItem('local_token');
 
 const headers = () => ({
   'Content-Type': 'application/json',
@@ -113,6 +144,7 @@ export const checkEmailRegistered = async (email) => {
 
 export const localLogout = () => {
   removeToken();
+  purgeLegacyPersistentToken();
   clearPrimedDeviceSharedPresets();
 };
 

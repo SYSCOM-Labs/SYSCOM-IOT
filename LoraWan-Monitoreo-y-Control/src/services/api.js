@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { getApiBase } from '../config/apiBase';
-import { refreshSession } from './localAuth';
+import { refreshSession, getAuthToken } from './localAuth';
 import { normalizeTemplateLorawanClass } from './deviceTemplates';
 
 const SERVER_API = getApiBase();
@@ -29,13 +29,13 @@ if (typeof window !== 'undefined' && !window.__SYSCOM_AXIOS_AUTH_RETRY__) {
         return Promise.reject(error);
       }
       cfg.__retry401 = true;
-      cfg.headers = { ...(cfg.headers || {}), Authorization: `Bearer ${localStorage.getItem('local_token')}` };
+      cfg.headers = { ...(cfg.headers || {}), Authorization: `Bearer ${getAuthToken()}` };
       return axios(cfg);
     }
   );
 }
 
-const localToken = () => localStorage.getItem('local_token');
+const localToken = () => getAuthToken();
 
 const authHeaders = () => ({
   Authorization: `Bearer ${localToken()}`,
