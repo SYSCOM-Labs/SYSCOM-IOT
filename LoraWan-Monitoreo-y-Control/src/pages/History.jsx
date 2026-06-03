@@ -195,6 +195,8 @@ const HistoryPage = () => {
   const [saveTemplateName, setSaveTemplateName] = useState('');
   const [saveTemplateBusy, setSaveTemplateBusy] = useState(false);
   const [pendingSaveConfig, setPendingSaveConfig] = useState(null);
+  const [showApplyTemplateModal, setShowApplyTemplateModal] = useState(false);
+  const [pendingApplyTemplate, setPendingApplyTemplate] = useState(null);
   const [pdfExportBusy, setPdfExportBusy] = useState(false);
 
   const propsLoadSeqRef = useRef({});
@@ -376,10 +378,8 @@ const HistoryPage = () => {
     }
   };
 
-  const handleApplyTemplate = (template) => {
+  const applyTemplateConfig = (template) => {
     if (!template) return;
-    if (template.dateFrom) setDateFrom(template.dateFrom);
-    if (template.dateTo) setDateTo(template.dateTo);
     const ids = new Set();
     const vars = {};
     (template.devices || []).forEach((entry) => {
@@ -392,6 +392,23 @@ const HistoryPage = () => {
     setReportRows([]);
     setError(null);
     [...ids].forEach((id) => loadPropertiesForDevice(id));
+  };
+
+  const openApplyTemplateModal = (template) => {
+    if (!template) return;
+    setPendingApplyTemplate(template);
+    setShowApplyTemplateModal(true);
+  };
+
+  const closeApplyTemplateModal = () => {
+    const template = pendingApplyTemplate;
+    setShowApplyTemplateModal(false);
+    setPendingApplyTemplate(null);
+    if (template) applyTemplateConfig(template);
+  };
+
+  const handleApplyTemplate = (template) => {
+    openApplyTemplateModal(template);
   };
 
   const handleDeleteTemplate = async (templateId) => {
@@ -875,6 +892,42 @@ const HistoryPage = () => {
               >
                 {saveTemplateBusy ? <Loader size={16} className="spin" /> : <Bookmark size={16} />}
                 {t('reports.save_modal_confirm')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showApplyTemplateModal && (
+        <div
+          className="modal-overlay reports-apply-template-overlay"
+          role="presentation"
+          onClick={closeApplyTemplateModal}
+        >
+          <div
+            className="modal-content glass reports-apply-template-modal"
+            role="alertdialog"
+            aria-labelledby="reports-apply-template-title"
+            aria-describedby="reports-apply-template-desc"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="reports-apply-template-modal__icon" aria-hidden>
+              <Calendar size={28} />
+            </div>
+            <h2 id="reports-apply-template-title">{t('reports.template_apply_modal_title')}</h2>
+            <p id="reports-apply-template-desc" className="reports-apply-template-modal__text">
+              {t('reports.template_apply_modal_message')}
+            </p>
+            {pendingApplyTemplate?.name ? (
+              <p className="reports-apply-template-modal__template-name">{pendingApplyTemplate.name}</p>
+            ) : null}
+            <div className="modal-footer reports-apply-template-modal__footer">
+              <button
+                type="button"
+                className="btn btn-primary device-create-top-btn reports-apply-template-modal__ok"
+                onClick={closeApplyTemplateModal}
+              >
+                {t('reports.template_apply_modal_ok')}
               </button>
             </div>
           </div>

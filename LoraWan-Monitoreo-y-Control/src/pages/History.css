@@ -682,3 +682,60 @@ body.theme-dark .reports-device-var-row {
 body.theme-dark .reports-template-card {
   background: linear-gradient(160deg, rgb(28 28 42 / 0.98), rgb(59 130 246 / 0.1));
 }
+
+.reports-apply-template-overlay {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.reports-apply-template-modal {
+  max-width: 420px;
+  width: min(420px, calc(100vw - 32px));
+  margin: auto;
+  padding: 28px 28px 22px;
+  text-align: center;
+  border-radius: 16px;
+}
+
+.reports-apply-template-modal__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 14px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, rgb(59 130 246 / 0.15), rgb(99 102 241 / 0.22));
+  color: rgb(59 130 246);
+}
+
+.reports-apply-template-modal h2 {
+  margin: 0 0 12px;
+  font-size: 1.15rem;
+}
+
+.reports-apply-template-modal__text {
+  margin: 0 0 10px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  font-size: 0.95rem;
+}
+
+.reports-apply-template-modal__template-name {
+  margin: 0 0 18px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: rgb(59 130 246);
+}
+
+.reports-apply-template-modal__footer {
+  justify-content: center;
+  border-top: none;
+  padding-top: 4px;
+}
+
+.reports-apply-template-modal__ok {
+  min-width: 160px;
+}
