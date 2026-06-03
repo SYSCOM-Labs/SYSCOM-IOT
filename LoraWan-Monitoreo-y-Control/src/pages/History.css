@@ -502,6 +502,16 @@ body.theme-dark .reports-device-var-row {
   gap: 10px;
 }
 
+.reports-download-pdf-btn.is-busy {
+  opacity: 0.92;
+  cursor: wait;
+  pointer-events: none;
+}
+
+.reports-download-pdf-btn__spinner {
+  flex-shrink: 0;
+}
+
 .reports-result-meta {
   margin: 0 0 16px;
   font-size: 0.85rem;

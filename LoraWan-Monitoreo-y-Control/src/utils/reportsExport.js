@@ -1,5 +1,5 @@
 import jsPDF from 'jspdf';
-import 'jspdf-autotable';
+import { autoTable } from 'jspdf-autotable';
 
 /** dd/mm/aaaa */
 export function formatReportDate(ms) {
@@ -44,6 +44,25 @@ function isSeparatorRow(r) {
   return r && r.type === 'separator';
 }
 
+function pdfCellText(value, maxLen = 120) {
+  const s = value == null ? '' : String(value);
+  return s.length > maxLen ? `${s.slice(0, maxLen - 1)}…` : s;
+}
+
+function runAutoTable(doc, options) {
+  if (typeof doc.autoTable === 'function') {
+    doc.autoTable(options);
+    return;
+  }
+  autoTable(doc, options);
+}
+
+function yieldToBrowser() {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => setTimeout(resolve, 0));
+  });
+}
+
 /**
  * @param {Array<{ type?: string, deviceLabel?: string, date?: string, value?: string, variableLabel?: string }>} rows
  */
@@ -68,56 +87,68 @@ export function downloadReportCsv(rows, filenameBase = 'reporte_syscom') {
 
 const PDF_SEP_FILL = [59, 130, 246];
 const PDF_SEP_TEXT = [255, 255, 255];
+const SEP_CELL_STYLES = {
+  fillColor: PDF_SEP_FILL,
+  textColor: PDF_SEP_TEXT,
+  fontStyle: 'bold',
+  halign: 'center',
+};
 
 /**
  * @param {Array<{ type?: string, deviceLabel?: string, date?: string, value?: string, variableLabel?: string }>} rows
  * @param {{ title?: string, rangeLabel?: string }} meta
  */
-export function downloadReportPdf(rows, meta = {}, filenameBase = 'reporte_syscom') {
-  const doc = new jsPDF({ orientation: rows.length > 40 ? 'landscape' : 'portrait' });
+export async function downloadReportPdf(rows, meta = {}, filenameBase = 'reporte_syscom') {
+  await yieldToBrowser();
+
+  const dataRows = rows.filter((r) => !isSeparatorRow(r));
+  const orientation = dataRows.length > 35 ? 'landscape' : 'portrait';
+  const doc = new jsPDF({ orientation, unit: 'mm', format: 'a4' });
+
   doc.setFontSize(14);
-  doc.text(meta.title || 'Reporte de telemetría', 14, 16);
+  doc.text(pdfCellText(meta.title || 'Reporte de telemetría', 80), 14, 16);
   doc.setFontSize(9);
   let y = 22;
   if (meta.rangeLabel) {
-    doc.text(`Periodo: ${meta.rangeLabel}`, 14, y);
+    doc.text(`Periodo: ${pdfCellText(meta.rangeLabel, 100)}`, 14, y);
     y += 5;
   }
 
+  /** Filas uniformes de 3 celdas (evita fallos de colspan en jspdf-autotable 5). */
   const tableBody = rows.map((r) => {
     if (isSeparatorRow(r)) {
       const label = [r.deviceLabel, r.variableLabel].filter(Boolean).join(' · ');
+      const text = `── ${label} ──`;
       return [
-        {
-          content: `── ${label} ──`,
-          colSpan: 3,
-          styles: {
-            fillColor: PDF_SEP_FILL,
-            textColor: PDF_SEP_TEXT,
-            fontStyle: 'bold',
-            halign: 'center',
-          },
-        },
+        { content: text, styles: { ...SEP_CELL_STYLES, halign: 'left' } },
+        { content: '', styles: SEP_CELL_STYLES },
+        { content: '', styles: SEP_CELL_STYLES },
       ];
     }
-    return [r.deviceLabel, r.date, r.value];
+    return [
+      pdfCellText(r.deviceLabel, 80),
+      pdfCellText(r.date, 24),
+      pdfCellText(r.value, 80),
+    ];
   });
 
-  doc.autoTable({
+  await yieldToBrowser();
+
+  runAutoTable(doc, {
     startY: y + 2,
     head: [['Dispositivo', 'Fecha', 'Valor']],
     body: tableBody,
     theme: 'striped',
     headStyles: { fillColor: PDF_SEP_FILL },
-    styles: { fontSize: 8 },
-    didParseCell(data) {
-      const row = rows[data.row.index];
-      if (row && isSeparatorRow(row) && !data.cell.colSpan) {
-        data.cell.styles.fillColor = PDF_SEP_FILL;
-        data.cell.styles.textColor = PDF_SEP_TEXT;
-      }
+    styles: { fontSize: 8, overflow: 'linebreak' },
+    columnStyles: {
+      0: { cellWidth: orientation === 'landscape' ? 110 : 75 },
+      1: { cellWidth: 28 },
+      2: { cellWidth: 'auto' },
     },
   });
+
+  await yieldToBrowser();
   doc.save(`${filenameBase}.pdf`);
 }
 

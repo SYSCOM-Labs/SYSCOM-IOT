@@ -194,6 +194,7 @@ const HistoryPage = () => {
   const [saveTemplateName, setSaveTemplateName] = useState('');
   const [saveTemplateBusy, setSaveTemplateBusy] = useState(false);
   const [pendingSaveConfig, setPendingSaveConfig] = useState(null);
+  const [pdfExportBusy, setPdfExportBusy] = useState(false);
 
   const propsLoadSeqRef = useRef({});
   const loadingPropsRef = useRef(new Set());
@@ -509,6 +510,19 @@ const HistoryPage = () => {
   const dataRowCount = countReportDataRows(reportRows);
   const previewRows = reportRows.slice(0, 600);
 
+  const handleDownloadPdf = async () => {
+    if (pdfExportBusy || dataRowCount === 0) return;
+    setPdfExportBusy(true);
+    try {
+      await downloadReportPdf(reportRows, exportMeta, filenameBase);
+    } catch (e) {
+      console.error('[Reports] PDF:', e);
+      alert(e?.message || t('reports.pdf_error'));
+    } finally {
+      setPdfExportBusy(false);
+    }
+  };
+
   return (
     <div className="history-page reports-page device-list-page device-list-page--premium premium-shell">
       <div className="page-header device-page-header device-list-hero">
@@ -684,10 +698,17 @@ const HistoryPage = () => {
               </button>
               <button
                 type="button"
-                className="btn btn-primary device-create-top-btn"
-                onClick={() => downloadReportPdf(reportRows, exportMeta, filenameBase)}
+                className={`btn btn-primary device-create-top-btn reports-download-pdf-btn${pdfExportBusy ? ' is-busy' : ''}`}
+                onClick={() => void handleDownloadPdf()}
+                disabled={pdfExportBusy}
+                aria-busy={pdfExportBusy}
               >
-                <Download size={16} /> {t('reports.download_pdf')}
+                {pdfExportBusy ? (
+                  <Loader size={16} className="spin reports-download-pdf-btn__spinner" />
+                ) : (
+                  <Download size={16} />
+                )}
+                {pdfExportBusy ? t('reports.download_pdf_busy') : t('reports.download_pdf')}
               </button>
             </div>
           </div>
