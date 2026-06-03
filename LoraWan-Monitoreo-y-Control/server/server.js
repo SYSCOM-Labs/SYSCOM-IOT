@@ -240,9 +240,13 @@ app.use(
             baseUri: ["'self'"],
             scriptSrc: ["'self'"],
             // React/Vite inyectan estilos en línea; 'unsafe-inline' solo para estilos.
-            styleSrc: ["'self'", "'unsafe-inline'"],
+            // Google Fonts: el CSS se sirve desde fonts.googleapis.com (@import en index.css).
+            styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
             imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
-            fontSrc: ["'self'", 'data:'],
+            // Archivos de fuente de Google Fonts (referenciados por el CSS anterior).
+            fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
+            // Audio de alertas (automationToastSound) generado en cliente como blob:.
+            mediaSrc: ["'self'", 'data:', 'blob:'],
             // API + SSE en el mismo origen; ws/wss por si se usan herramientas dev.
             connectSrc: ["'self'", 'ws:', 'wss:'],
             objectSrc: ["'none'"],
