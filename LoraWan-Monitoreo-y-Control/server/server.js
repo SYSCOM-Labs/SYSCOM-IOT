@@ -2102,6 +2102,35 @@ function superAdminOrLegacySecret(req, res, next) {
   return authMiddleware(req, res, () => superAdminOnlyMiddleware(req, res, next));
 }
 
+/** Estado del motor en servidor (LNS, automatizaciones): no requiere JWT. */
+app.get('/api/health/platform', (_req, res) => {
+  const lnsMac = process.env.SYSCOM_LNS_MAC !== '0';
+  let lnsEngine = false;
+  try {
+    lnsEngine = lnsMac && Boolean(getLnsEngine());
+  } catch {
+    lnsEngine = false;
+  }
+  res.json({
+    ok: true,
+    uptimeSec: Math.floor(process.uptime()),
+    sessionRequired: false,
+    services: {
+      lnsMac,
+      lnsEngine,
+      lnsUdpPort: LNS_UDP_PORT || 0,
+      lnsUdpActive: Boolean(LNS_UDP_PORT),
+      automationServer: String(process.env.SYSCOM_SERVER_AUTOMATIONS || '1').trim() !== '0',
+      automationSchedule: String(process.env.SYSCOM_SERVER_AUTOMATION_SCHEDULE || '1').trim() !== '0',
+      mqttIngest: Boolean(
+        String(process.env.MQTT_BROKER_URL || '').trim() &&
+          String(process.env.SYSCOM_MQTT_INGEST_URL || '').trim()
+      ),
+    },
+    hint: 'LNS, SQLite y automatizaciones por horario siguen activos sin usuarios conectados a la web.',
+  });
+});
+
 // ── Ingesta HTTP (tipo Datacake: URL única por espacio de trabajo) ──
 app.post('/api/ingest/:userId/:ingestToken', ingestRateLimit, handleIngestRequest);
 app.post('/api/lorawan/uplink/:userId/:ingestToken', ingestRateLimit, handleLorawanUplinkRequest);
@@ -4916,6 +4945,10 @@ const server = app.listen(PORT, '0.0.0.0', () => {
     const eng = getLnsEngine();
     if (eng) {
       console.log('[LNS] Motor MAC LoRaWAN activo (Join OTAA, uplinks cifrados, downlinks).');
+      console.log(
+        '[Syscom] 24/7: LNS, SQLite y automatizaciones por horario NO dependen de sesión web ni de SSE.'
+      );
+      console.log('[Syscom] Salud del motor: GET /api/health/platform');
       const txAckOff = String(process.env.SYSCOM_LNS_TX_ACK || '').trim() === '0';
       const appTxAckExplicitOff = String(process.env.SYSCOM_LNS_APP_DOWNLINK_TX_ACK || '').trim() === '0';
       const appTxAckExplicitOn = ['1', 'true', 'on', 'yes'].includes(
@@ -4948,6 +4981,9 @@ const server = app.listen(PORT, '0.0.0.0', () => {
   } catch (e) {
     console.error('[LNS] Error al inicializar motor MAC:', e.message);
   }
+  console.log(
+    '[Syscom] Producción: use `npm run production` en un host siempre encendido; cerrar sesión web no detiene el motor, pero cerrar la terminal sí.'
+  );
 
   if (LNS_UDP_PORT) {
     const { startSemtechUdpLns } = require('./semtech-udp-lns');

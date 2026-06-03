@@ -464,6 +464,9 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
       const entering = inside && !prev;
       const leaving = !inside && prev;
       if (entering || leaving) {
+        console.info(
+          `[automation] Horario ${entering ? 'INICIO' : 'FIN'} regla="${rule.name || rid}" usuario=${userId}`
+        );
         for (let i = 0; i < (rule.actions || []).length; i++) {
           const action = rule.actions[i];
           const phase = scheduleRunPhase(action);

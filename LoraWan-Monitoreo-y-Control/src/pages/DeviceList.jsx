@@ -55,7 +55,7 @@ import {
   isDeviceVisuallyOnline,
 } from '../utils/deviceConnectionStatus';
 import { pushAppActivityLog } from '../utils/appActivityLog';
-import { SYSCOM_REALTIME_TELEMETRY } from '../constants/realtimeEvents';
+import { SYSCOM_REALTIME_TELEMETRY, SYSCOM_SSE_CONNECTED } from '../constants/realtimeEvents';
 import { collectDeviceBsdBundle, deviceBsdBundleIsEmpty } from '../utils/deviceBsdPreferencesBundle';
 import { hexDigitsBorderClass, requiredTrimBorderClass } from '../utils/formFieldBorderClasses';
 import {
@@ -356,6 +356,29 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
   useEffect(() => {
     loadDevices();
   }, []);
+
+  /** Tras login o reconexión SSE: sincronizar estado desde el servidor (no depende del navegador previo). */
+  useEffect(() => {
+    if (!token) return undefined;
+    loadDevices({ silent: true });
+    const onSseConnected = () => loadDevices({ silent: true });
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadDevices({ silent: true });
+    };
+    window.addEventListener(SYSCOM_SSE_CONNECTED, onSseConnected);
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.removeEventListener(SYSCOM_SSE_CONNECTED, onSseConnected);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [token]);
+
+  /** Refresco periódico del listado desde la API (LNS/automatizaciones siguen en el servidor sin sesión web). */
+  useEffect(() => {
+    if (!token) return undefined;
+    const id = window.setInterval(() => loadDevices({ silent: true }), 30000);
+    return () => window.clearInterval(id);
+  }, [token]);
 
   /** Mantener «Datos» al día con la fila del listado mientras el modal está abierto. */
   useEffect(() => {

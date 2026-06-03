@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { getEventsStreamUrl } from '../config/apiBase';
-import { SYSCOM_REALTIME_LNS, SYSCOM_REALTIME_TELEMETRY } from '../constants/realtimeEvents';
+import { SYSCOM_REALTIME_LNS, SYSCOM_REALTIME_TELEMETRY, SYSCOM_SSE_CONNECTED } from '../constants/realtimeEvents';
 import { pushAppActivityLog } from '../utils/appActivityLog';
 import { scheduleClientEmailWebhookAutomations } from '../services/automationService';
 import sseContract from '../../shared/realtime-sse-contract.json';
@@ -55,6 +55,7 @@ export default function SyscomRealtimeBridge() {
       es.addEventListener('open', () => {
         retryMsRef.current = 2000;
         pushAppActivityLog({ level: 'success', tag: 'SSE', message: 'Canal tiempo real conectado' });
+        window.dispatchEvent(new CustomEvent(SYSCOM_SSE_CONNECTED));
       });
 
       es.addEventListener(sseContract.sseTelemetry, (e) => {

@@ -154,21 +154,23 @@ npm run start:prod
 
 (con `JWT_SECRET` y el resto en `.env` o exportadas en el entorno).
 
-**PowerShell (Windows) — ejemplo de sesión con variables en línea:**
+**PowerShell (Windows) — sesión de producción en consola (no 24/7):**
 
 ```powershell
 $env:NODE_ENV = 'production'
 $env:JWT_SECRET = 'cadena-larga-aleatoria'
-$env:SYSCOM_CORS_ORIGINS = 'https://iot.ejemplo.com'
+$env:SYSCOM_CORS_ORIGINS = 'http://127.0.0.1:3001'
 $env:SYSCOM_SQLITE_PATH = 'C:\datos\syscom-iot\data.sqlite'
-npm start
+npm run production
 ```
+
+Para **24/7 en Windows** (LNS y automatizaciones sin terminal abierta): [docs/DEPLOY-WINDOWS.md](./docs/DEPLOY-WINDOWS.md) (tarea programada o servicio NSSM). **No use `npm start` en producción**: es modo desarrollo y se detiene al cerrar la terminal.
+
+Comprobar motor sin sesión web: `node scripts/health-platform.mjs` o `GET /api/health/platform`.
 
 Si el front se construye para **otro host** que el de la API, definid `VITE_API_BASE` en el momento del build (debe terminar en `/api`); detalle en comentarios de `src/config/apiBase.js` y `.env.example`.
 
-Despliegue en **AWS EC2** (systemd, Nginx, SQLite, UDP): [docs/DEPLOY-AWS-EC2.md](./docs/DEPLOY-AWS-EC2.md). **Render** u otros PaaS HTTP: [docs/DEPLOY-RENDER.md](./docs/DEPLOY-RENDER.md). Unidad **systemd** de ejemplo: [deploy/ec2/README.md](./deploy/ec2/README.md).
-
-## Variables de entorno clave
+Despliegue en **AWS EC2** (systemd, Nginx, SQLite, UDP): [docs/DEPLOY-AWS-EC2.md](./docs/DEPLOY-AWS-EC2.md). **Windows 24/7**: [docs/DEPLOY-WINDOWS.md](./docs/DEPLOY-WINDOWS.md). **Render** u otros PaaS HTTP: [docs/DEPLOY-RENDER.md](./docs/DEPLOY-RENDER.md). Unidad **systemd** de ejemplo: [deploy/ec2/README.md](./deploy/ec2/README.md).
 
 Obligatoriedad referida a **entorno de producción** típico (`NODE_ENV=production`). El listado exhaustivo está en [`.env.example`](./.env.example).
 
@@ -198,6 +200,7 @@ Definidos en `package.json` (no hay otros gestores versionados en el repo).
 | `npm run dev` | Solo Vite dev (HMR). |
 | `npm run build` | Compilación de producción del frontend a `dist/`. |
 | `npm run production` | `build` + `start:prod` (un solo flujo para compilar y servir en modo producción). |
+| `node scripts/health-platform.mjs` | Comprueba `/api/health/platform` (LNS y automatizaciones sin JWT). |
 | `npm run preview` | Previsualiza el build con el servidor estático de Vite. |
 | `npm run lint` | ESLint sobre el proyecto. |
 | `npm test` | Tests del servidor con el test runner de Node (`server/test/selfhosted.test.cjs`). |
