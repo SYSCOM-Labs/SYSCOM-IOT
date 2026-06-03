@@ -216,6 +216,20 @@ const app = express();
  * siguen activas).
  */
 const cspDisabled = String(process.env.SYSCOM_CSP_DISABLE || '').trim() === '1';
+/**
+ * ¿El deployment sirve realmente por HTTPS? Solo entonces tiene sentido emitir
+ * `upgrade-insecure-requests`. En HTTP plano (p. ej. EC2 por IP sin TLS) esa
+ * directiva —que helmet añade por defecto— hace que el navegador intente cargar
+ * `https://<host>/` y lo bloquee ("Unsafe attempt to load URL ..."), rompiendo el SPA.
+ * Por defecto OFF para no romper HTTP; se activa con SYSCOM_HTTPS=1 (TLS terminado en
+ * un reverse proxy) o automáticamente si la API sirve HTTPS directo (SYSCOM_TLS_KEY+CERT).
+ */
+const tlsDirectlyConfigured =
+  !!String(process.env.SYSCOM_TLS_KEY || '').trim() &&
+  !!String(process.env.SYSCOM_TLS_CERT || '').trim();
+const httpsEnabled =
+  tlsDirectlyConfigured ||
+  /^(1|true)$/i.test(String(process.env.SYSCOM_HTTPS || '').trim());
 app.use(
   helmet({
     contentSecurityPolicy: cspDisabled
@@ -234,6 +248,8 @@ app.use(
             objectSrc: ["'none'"],
             frameAncestors: ["'self'"],
             formAction: ["'self'"],
+            // null = desactivar explícitamente la directiva por defecto de helmet.
+            upgradeInsecureRequests: httpsEnabled ? [] : null,
           },
         },
     // El SPA puede embeberse en visores/kioscos del mismo origen; no forzar COEP.
@@ -4957,8 +4973,31 @@ if (fs.existsSync(distPath)) {
   console.log('⚠️ Sin dist/ ni public/. Ejecute "npm run build" en la raíz del proyecto.');
 }
 
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ Syscom IoT API en http://0.0.0.0:${PORT}`);
+/**
+ * Construye el listener de la API. Si SYSCOM_TLS_KEY y SYSCOM_TLS_CERT apuntan a
+ * archivos válidos, se sirve por **HTTPS** (p. ej. cert autofirmado para EC2 por IP;
+ * ver `npm run tls:selfsigned`). Si no, HTTP plano. La terminación TLS también puede
+ * delegarse a un reverse proxy: en ese caso deje HTTP aquí y ponga SYSCOM_HTTPS=1.
+ */
+function createApiServer(requestListener) {
+  const keyPath = String(process.env.SYSCOM_TLS_KEY || '').trim();
+  const certPath = String(process.env.SYSCOM_TLS_CERT || '').trim();
+  if (keyPath && certPath) {
+    try {
+      const tlsOptions = { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
+      return { server: require('https').createServer(tlsOptions, requestListener), scheme: 'https' };
+    } catch (e) {
+      console.error(`❌ TLS: no se pudo leer SYSCOM_TLS_KEY/SYSCOM_TLS_CERT (${e.message}).`);
+      console.error('   Genere el certificado con: npm run tls:selfsigned');
+      process.exit(1);
+    }
+  }
+  return { server: require('http').createServer(requestListener), scheme: 'http' };
+}
+
+const { server, scheme: API_SCHEME } = createApiServer(app);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`✅ Syscom IoT API en ${API_SCHEME}://0.0.0.0:${PORT}`);
   console.log(
     `[Auth] JWT sesión: expiresIn=${JWT_EXPIRES_IN} (SYSCOM_JWT_EXPIRES). Renovación POST /api/auth/refresh con gracia ${Math.round(JWT_REFRESH_GRACE_MS / 86400000)} d (SYSCOM_JWT_REFRESH_GRACE_MS).`
   );
