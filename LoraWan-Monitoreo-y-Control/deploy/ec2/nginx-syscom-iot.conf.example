@@ -1,20 +1,52 @@
-# Ejemplo Nginx: proxy hacia Syscom IoT (Node en 127.0.0.1:3001).
-# Copiar a /etc/nginx/conf.d/syscom-iot.conf, cambiar server_name y (opcional) certificados TLS.
+# Ejemplo Nginx: proxy hacia Syscom IoT (Node en 127.0.0.1:3001) CON TLS.
+# Copiar a /etc/nginx/conf.d/syscom-iot.conf, cambiar server_name y rutas de certificado.
 #
 # sudo nginx -t && sudo systemctl reload nginx
 #
-# Tras certbot --nginx suele crearse el bloque :443 automáticamente; mantened las mismas
-# location /api/events/stream, /api/ y / para SSE y SPA.
+# TLS recomendado con certbot:
+#   sudo certbot --nginx -d iot.ejemplo.com
+# (SEC-07) Producción debe servirse por HTTPS: el JWT y los tokens de ingesta
+# viajan en cabeceras/URLs y en HTTP plano son interceptables.
 
 upstream syscom_iot_node {
     server 127.0.0.1:3001;
     keepalive 32;
 }
 
+# 80 → 443: redirección permanente a HTTPS (deje pasar el reto ACME de certbot).
 server {
     listen 80;
     listen [::]:80;
     server_name iot.ejemplo.com;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name iot.ejemplo.com;
+
+    # Certificados (certbot los genera/renueva en estas rutas).
+    ssl_certificate     /etc/letsencrypt/live/iot.ejemplo.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/iot.ejemplo.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+
+    # (SEC-04/SEC-07) Cabeceras de seguridad en el borde. La app ya añade helmet;
+    # estas refuerzan en el proxy y aplican aunque se sirva contenido estático.
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 
     location /api/events/stream {
         proxy_pass http://syscom_iot_node;

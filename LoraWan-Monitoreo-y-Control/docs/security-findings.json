@@ -1,0 +1,156 @@
+[
+  {
+    "id": "AUTH-01",
+    "title": "JWT forjable con secreto dev por defecto",
+    "severity": "ALTA",
+    "status": "OK",
+    "evidence": "token forjado rechazado (401)"
+  },
+  {
+    "id": "AUTH-02",
+    "title": "Refresh de token caducado",
+    "severity": "INFO",
+    "status": "OK",
+    "evidence": "token expirado 24h → 401 (secreto dev aleatorio tras SEC-02 → no forjable)"
+  },
+  {
+    "id": "AUTH-02b",
+    "title": "Refresh rechaza más allá de la ventana de gracia",
+    "severity": "INFO",
+    "status": "OK",
+    "evidence": "token expirado 8d → 401 (esperado 401)"
+  },
+  {
+    "id": "AUTH-03",
+    "title": "JWT alg=none rechazado",
+    "severity": "BAJA",
+    "status": "OK",
+    "evidence": "→ 401 (jsonwebtoken exige HS256 con secreto)"
+  },
+  {
+    "id": "AUTH-04",
+    "title": "Rate limit en /api/auth/login",
+    "severity": "INFO",
+    "status": "OK",
+    "evidence": "429 tras 9 intentos (límite=10)"
+  },
+  {
+    "id": "AUTH-05",
+    "title": "Política de contraseña rechaza débiles",
+    "severity": "INFO",
+    "status": "OK",
+    "evidence": "crear usuario con password '123' → 400"
+  },
+  {
+    "id": "AUTH-06",
+    "title": "/api/reset-password exige superadmin (sin secreto legacy)",
+    "severity": "INFO",
+    "status": "OK",
+    "evidence": "sin token → 401"
+  },
+  {
+    "id": "AUTH-07",
+    "title": "POST /api/setup bloqueado tras inicializar",
+    "severity": "INFO",
+    "status": "OK",
+    "evidence": "segundo setup → 409"
+  },
+  {
+    "id": "AUTHZ-01",
+    "title": "Endpoints protegidos exigen token",
+    "severity": "INFO",
+    "status": "OK",
+    "evidence": "6 endpoints → 401 sin token"
+  },
+  {
+    "id": "AUTHZ-02",
+    "title": "Usuario normal no puede crear usuarios/superadmin",
+    "severity": "INFO",
+    "status": "OK",
+    "evidence": "POST /api/users como user → 403"
+  },
+  {
+    "id": "AUTHZ-03",
+    "title": "Usuario normal no puede crear user-devices (superadmin only)",
+    "severity": "INFO",
+    "status": "OK",
+    "evidence": "POST /api/user-devices como user → 403"
+  },
+  {
+    "id": "AUTHZ-04",
+    "title": "Aislamiento horizontal de dispositivos (IDOR)",
+    "severity": "ALTA",
+    "status": "OK",
+    "evidence": "bob no accede a dispositivos de alice (403/404)"
+  },
+  {
+    "id": "INJ-01",
+    "title": "SQLi en campos de texto (parametrización)",
+    "severity": "BAJA",
+    "status": "OK",
+    "evidence": "payloads SQLi no rompen ni alteran la BD (db.prepare parametrizado)"
+  },
+  {
+    "id": "INJ-02",
+    "title": "Payload XSS se almacena sin sanitizar (riesgo en cliente)",
+    "severity": "MEDIA",
+    "status": "OK",
+    "evidence": "no se reflejó"
+  },
+  {
+    "id": "INJ-03",
+    "title": "Validación de payload de downlink",
+    "severity": "INFO",
+    "status": "OK",
+    "evidence": "downlink hex inválido → 501 (501=LNS deshabilitado en prueba)"
+  },
+  {
+    "id": "INJ-04",
+    "title": "Límite de tamaño de body en JSON",
+    "severity": "INFO",
+    "status": "OK",
+    "evidence": "body 2MB en /api/auth/login → 413"
+  },
+  {
+    "id": "INGEST-01",
+    "title": "Token de ingesta inválido rechazado",
+    "severity": "INFO",
+    "status": "OK",
+    "evidence": "token erróneo → 401"
+  },
+  {
+    "id": "INGEST-02",
+    "title": "Anti-replay por frame counter (fCnt)",
+    "severity": "MEDIA",
+    "status": "OK",
+    "evidence": "replay de fCnt=200 (tras 201) rechazado: history se mantuvo en 3 (guard SEC-05)"
+  },
+  {
+    "id": "HDR-01",
+    "title": "Cabeceras de seguridad (helmet)",
+    "severity": "MEDIA",
+    "status": "OK",
+    "evidence": "todas presentes"
+  },
+  {
+    "id": "CORS-01",
+    "title": "CORS refleja cualquier Origin (dev: *)",
+    "severity": "INFO",
+    "status": "INFO",
+    "evidence": "Access-Control-Allow-Origin con Origin atacante = * — en prod sin SYSCOM_CORS_ORIGINS también refleja (server.js:183-187)"
+  },
+  {
+    "id": "PROD-01",
+    "title": "Producción bloquea arranque sin JWT_SECRET",
+    "severity": "INFO",
+    "status": "OK",
+    "evidence": "proceso terminó (exit 1) sin JWT_SECRET"
+  },
+  {
+    "id": "CORS-02",
+    "title": "Producción sin SYSCOM_CORS_ORIGINS aborta el arranque",
+    "severity": "MEDIA",
+    "status": "OK",
+    "evidence": "prod sin lista CORS → exit 1 (no refleja Origin)"
+  }
+]
