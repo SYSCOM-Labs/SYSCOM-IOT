@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const fs = require('fs');
@@ -132,7 +133,22 @@ if (IS_PRODUCTION && !process.env.JWT_SECRET) {
   );
   process.exit(1);
 }
-const JWT_SECRET = process.env.JWT_SECRET || 'syscom-iot-dev-insecure-jwt-secret-change-me';
+/**
+ * SEC-02: nunca usar un secreto público constante. En producción el gate de
+ * arriba ya aborta si falta JWT_SECRET. Fuera de producción, si no se define,
+ * se genera uno ALEATORIO por arranque (las sesiones no sobreviven a reinicios,
+ * pero no existe un secreto conocido que permita forjar tokens).
+ */
+const JWT_SECRET =
+  process.env.JWT_SECRET ||
+  (() => {
+    const ephemeral = crypto.randomBytes(32).toString('hex');
+    console.warn(
+      '[syscom-iot] JWT_SECRET no definido (modo desarrollo): se usa un secreto aleatorio por arranque; ' +
+        'las sesiones no persisten entre reinicios. Defina JWT_SECRET (p. ej. openssl rand -hex 32) para persistirlas.'
+    );
+    return ephemeral;
+  })();
 
 /**
  * Firma de JWT dedicados a integraciones (p. ej. plataforma estilo Datacake → downlink sin sesión web).
@@ -149,10 +165,10 @@ function resolveJwtExpiresIn() {
 }
 const JWT_EXPIRES_IN = resolveJwtExpiresIn();
 
-/** Tras expirar el JWT, POST /api/auth/refresh aún renueva si no pasó este margen (ms). Defecto 30 días. */
+/** Tras expirar el JWT, POST /api/auth/refresh aún renueva si no pasó este margen (ms). Defecto 7 días (SEC-10). */
 const JWT_REFRESH_GRACE_MS = Math.max(
   0,
-  Number.parseInt(String(process.env.SYSCOM_JWT_REFRESH_GRACE_MS || '').trim(), 10) || 30 * 24 * 60 * 60 * 1000
+  Number.parseInt(String(process.env.SYSCOM_JWT_REFRESH_GRACE_MS || '').trim(), 10) || 7 * 24 * 60 * 60 * 1000
 );
 /**
  * Compatibilidad opcional para endpoints de mantenimiento heredados.
@@ -181,15 +197,70 @@ function buildCorsOptions() {
     };
   }
   if (IS_PRODUCTION) {
-    console.warn(
-      '[syscom-iot] SYSCOM_CORS_ORIGINS no definido: reflejando Origin (cualquier sitio puede usar la API desde navegador). Defina SYSCOM_CORS_ORIGINS=https://su-dominio.com'
+    // SEC-03: no reflejar cualquier Origin en producción. Abortar como con JWT_SECRET.
+    console.error(
+      '[syscom-iot] En NODE_ENV=production debe definir SYSCOM_CORS_ORIGINS (lista separada por comas, p. ej. https://su-dominio.com) o "*" explícito si realmente desea API pública. Abortando para no reflejar cualquier Origin.'
     );
-    return { origin: true };
+    process.exit(1);
   }
   return { origin: '*' };
 }
 
 const app = express();
+
+/**
+ * SEC-04: cabeceras de seguridad HTTP (helmet). HSTS, X-Content-Type-Options,
+ * X-Frame-Options, Referrer-Policy y CSP. La CSP se afina para un SPA servido
+ * desde el mismo origen; si rompe algún recurso del frontend, ajústela o
+ * desactívela con SYSCOM_CSP_DISABLE=1 mientras se depura (las demás cabeceras
+ * siguen activas).
+ */
+const cspDisabled = String(process.env.SYSCOM_CSP_DISABLE || '').trim() === '1';
+/**
+ * ¿El deployment sirve realmente por HTTPS? Solo entonces tiene sentido emitir
+ * `upgrade-insecure-requests`. En HTTP plano (p. ej. EC2 por IP sin TLS) esa
+ * directiva —que helmet añade por defecto— hace que el navegador intente cargar
+ * `https://<host>/` y lo bloquee ("Unsafe attempt to load URL ..."), rompiendo el SPA.
+ * Por defecto OFF para no romper HTTP; se activa con SYSCOM_HTTPS=1 (TLS terminado en
+ * un reverse proxy) o automáticamente si la API sirve HTTPS directo (SYSCOM_TLS_KEY+CERT).
+ */
+const tlsDirectlyConfigured =
+  !!String(process.env.SYSCOM_TLS_KEY || '').trim() &&
+  !!String(process.env.SYSCOM_TLS_CERT || '').trim();
+const httpsEnabled =
+  tlsDirectlyConfigured ||
+  /^(1|true)$/i.test(String(process.env.SYSCOM_HTTPS || '').trim());
+app.use(
+  helmet({
+    contentSecurityPolicy: cspDisabled
+      ? false
+      : {
+          directives: {
+            defaultSrc: ["'self'"],
+            baseUri: ["'self'"],
+            scriptSrc: ["'self'"],
+            // React/Vite inyectan estilos en línea; 'unsafe-inline' solo para estilos.
+            // Google Fonts: el CSS se sirve desde fonts.googleapis.com (@import en index.css).
+            styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+            imgSrc: ["'self'", 'data:', 'blob:', 'https:'],
+            // Archivos de fuente de Google Fonts (referenciados por el CSS anterior).
+            fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
+            // Audio de alertas (automationToastSound) generado en cliente como blob:.
+            mediaSrc: ["'self'", 'data:', 'blob:'],
+            // API + SSE en el mismo origen; ws/wss por si se usan herramientas dev.
+            connectSrc: ["'self'", 'ws:', 'wss:'],
+            objectSrc: ["'none'"],
+            frameAncestors: ["'self'"],
+            formAction: ["'self'"],
+            // null = desactivar explícitamente la directiva por defecto de helmet.
+            upgradeInsecureRequests: httpsEnabled ? [] : null,
+          },
+        },
+    // El SPA puede embeberse en visores/kioscos del mismo origen; no forzar COEP.
+    crossOriginEmbedderPolicy: false,
+  })
+);
+
 /** Detrás de nginx/Traefik: `SYSCOM_TRUST_PROXY=1` para que `req.ip` y rate-limit usen X-Forwarded-For. */
 if (IS_PRODUCTION) {
   const tp = String(process.env.SYSCOM_TRUST_PROXY || '').trim();
@@ -1234,6 +1305,49 @@ function extractIngestProperties(data) {
   return { rawDeviceId, deviceName, properties };
 }
 
+/**
+ * SEC-05: protección anti-replay por frame counter (fCnt) en la ingesta.
+ * Estado en memoria por (userId, deviceId) con el último fCnt aceptado.
+ * Se rechaza un uplink cuyo fCnt no avanza respecto al último visto, salvo:
+ *   - rejoin (fCnt muy bajo: 0..2) → contador reiniciado por el nodo,
+ *   - rollover (caída mayor que medio rango de 16 bits) → 65535→0.
+ * Desactivable con SYSCOM_INGEST_FCNT_REPLAY_GUARD=0. No afecta uplinks sin fCnt.
+ */
+const lastUplinkFcntByDevice = new Map();
+const FCNT_REPLAY_GUARD_ON = String(process.env.SYSCOM_INGEST_FCNT_REPLAY_GUARD || '1').trim() !== '0';
+const FCNT_ROLLOVER_GAP = 32768; // medio rango de un contador de 16 bits
+
+function isReplayByFcnt(userId, deviceId, fcnt) {
+  if (!FCNT_REPLAY_GUARD_ON) return false;
+  if (fcnt == null || !Number.isFinite(fcnt)) return false; // sin fCnt no aplicamos
+  const key = `${userId}:${deviceId}`;
+  const prev = lastUplinkFcntByDevice.get(key);
+  if (prev == null) {
+    lastUplinkFcntByDevice.set(key, fcnt);
+    return false;
+  }
+  if (fcnt > prev) {
+    lastUplinkFcntByDevice.set(key, fcnt);
+    return false; // avance normal
+  }
+  // fcnt <= prev: posible replay/reordenado, salvo rejoin o rollover.
+  const rejoin = fcnt <= 2; // nodo reinició el contador (join/rejoin)
+  const rollover = prev - fcnt > FCNT_ROLLOVER_GAP; // 65535 → 0
+  if (rejoin || rollover) {
+    lastUplinkFcntByDevice.set(key, fcnt);
+    return false;
+  }
+  // Limpieza acotada del Map para no crecer sin límite.
+  if (lastUplinkFcntByDevice.size > 5000) {
+    let i = 0;
+    for (const k of lastUplinkFcntByDevice.keys()) {
+      lastUplinkFcntByDevice.delete(k);
+      if (++i >= 1000) break;
+    }
+  }
+  return true; // replay: fCnt no avanzó y no es rejoin/rollover
+}
+
 function saveIngestEntry(userId, data) {
   const { rawDeviceId, deviceName, properties: baseProps } = extractIngestProperties(data);
 
@@ -1274,6 +1388,12 @@ function saveIngestEntry(userId, data) {
       return { ok: true, saved: false, message: 'Dispositivo no registrado en la cuenta' };
     }
     canonicalDeviceId = String(registered.deviceId);
+  }
+
+  // SEC-05: descartar uplinks reenviados (fCnt que no avanza) salvo rejoin/rollover.
+  if (isReplayByFcnt(userId, canonicalDeviceId, Number(data.fCnt))) {
+    metrics.inc('telemetry_replay_skipped');
+    return { ok: true, saved: false, reason: 'replay_fcnt', deviceId: canonicalDeviceId };
   }
 
   const properties = { ...baseProps };
@@ -4857,8 +4977,31 @@ if (fs.existsSync(distPath)) {
   console.log('⚠️ Sin dist/ ni public/. Ejecute "npm run build" en la raíz del proyecto.');
 }
 
-const server = app.listen(PORT, '0.0.0.0', () => {
-  console.log(`✅ Syscom IoT API en http://0.0.0.0:${PORT}`);
+/**
+ * Construye el listener de la API. Si SYSCOM_TLS_KEY y SYSCOM_TLS_CERT apuntan a
+ * archivos válidos, se sirve por **HTTPS** (p. ej. cert autofirmado para EC2 por IP;
+ * ver `npm run tls:selfsigned`). Si no, HTTP plano. La terminación TLS también puede
+ * delegarse a un reverse proxy: en ese caso deje HTTP aquí y ponga SYSCOM_HTTPS=1.
+ */
+function createApiServer(requestListener) {
+  const keyPath = String(process.env.SYSCOM_TLS_KEY || '').trim();
+  const certPath = String(process.env.SYSCOM_TLS_CERT || '').trim();
+  if (keyPath && certPath) {
+    try {
+      const tlsOptions = { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
+      return { server: require('https').createServer(tlsOptions, requestListener), scheme: 'https' };
+    } catch (e) {
+      console.error(`❌ TLS: no se pudo leer SYSCOM_TLS_KEY/SYSCOM_TLS_CERT (${e.message}).`);
+      console.error('   Genere el certificado con: npm run tls:selfsigned');
+      process.exit(1);
+    }
+  }
+  return { server: require('http').createServer(requestListener), scheme: 'http' };
+}
+
+const { server, scheme: API_SCHEME } = createApiServer(app);
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`✅ Syscom IoT API en ${API_SCHEME}://0.0.0.0:${PORT}`);
   console.log(
     `[Auth] JWT sesión: expiresIn=${JWT_EXPIRES_IN} (SYSCOM_JWT_EXPIRES). Renovación POST /api/auth/refresh con gracia ${Math.round(JWT_REFRESH_GRACE_MS / 86400000)} d (SYSCOM_JWT_REFRESH_GRACE_MS).`
   );

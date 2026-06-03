@@ -1,0 +1,60 @@
+name: CI seguridad
+
+# Ejecuta las pruebas de seguridad reproducibles y el análisis de dependencias.
+# No despliega nada (eso lo hace deploy.yml). Pensado como gate de PR.
+on:
+  pull_request:
+    paths:
+      - 'LoraWan-Monitoreo-y-Control/**'
+      - '.github/workflows/ci-security.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'LoraWan-Monitoreo-y-Control/**'
+      - '.github/workflows/ci-security.yml'
+  workflow_dispatch: {}
+
+defaults:
+  run:
+    working-directory: LoraWan-Monitoreo-y-Control
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: LoraWan-Monitoreo-y-Control/package-lock.json
+
+      - name: Instalar dependencias
+        run: npm ci
+
+      - name: Build (sanidad)
+        run: npm run build
+
+      - name: Pruebas backend (selfhosted)
+        run: npm test
+
+      - name: Pruebas de seguridad LoRaWAN/UDP
+        run: node --test server/test/security-lorawan.test.cjs
+
+      - name: Suite de seguridad dinámica (API/web)
+        # Sale 0 siempre; el job falla solo si el proceso no arranca o lanza error.
+        run: node scripts/security-test.mjs
+
+      - name: Auditoría de dependencias (informativo)
+        # No bloquea el PR (queda 1 HIGH en nodemailer cuyo vector no es alcanzable;
+        # ver docs/SECURITY-AUDIT-FINDINGS.md). Revisar la salida en cada PR.
+        continue-on-error: true
+        run: npm audit --omit=dev
+
+      # NOTA: `npm run lint` y `npm run verify` NO se incluyen aún porque tienen
+      # fallos PREEXISTENTES no relacionados con seguridad (errores de ESLint en
+      # src/ y desajuste de forma en verify-integration.mjs ↔ /properties/history).
+      # Reincorpóralos como gates una vez saneados.

@@ -32,5 +32,24 @@ TimeoutStopSec=30
 # Límites razonables para una VM pequeña
 LimitNOFILE=65535
 
+# ── Hardening (SEC-11) ──────────────────────────────────────────────────────
+# Reduce la superficie si el proceso es comprometido. Si algo falla (p. ej. la
+# escritura de la BD), revise ReadWritePaths y los directorios que la app usa.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+# La app abre TCP y UDP (1700); no necesita AF_NETLINK/AF_PACKET.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# Con ProtectSystem=strict el FS queda de solo lectura salvo estas rutas.
+# Ajuste a la ubicación real de SYSCOM_SQLITE_PATH y del dist/ si difiere.
+ReadWritePaths=/opt/syscom-iot
+
 [Install]
 WantedBy=multi-user.target
