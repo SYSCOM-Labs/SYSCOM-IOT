@@ -197,6 +197,17 @@ function initSchema(db) {
       expires_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS report_templates (
+      user_id TEXT NOT NULL,
+      template_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, template_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_report_templates_user_updated ON report_templates(user_id, updated_at DESC);
   `);
 }
 
@@ -486,6 +497,18 @@ class Store {
           body_json TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
+      `);
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS report_templates (
+          user_id TEXT NOT NULL,
+          template_id TEXT NOT NULL,
+          name TEXT NOT NULL,
+          payload_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (user_id, template_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_report_templates_user_updated ON report_templates(user_id, updated_at DESC);
       `);
     } catch (e) {
       console.warn('[Syscom] Migración device schema:', e.message);
@@ -1122,6 +1145,20 @@ class Store {
       arInsert: this.db.prepare(
         'INSERT INTO automation_rules (user_id, rule_id, payload_json) VALUES (?, ?, ?)'
       ),
+      rtList: this.db.prepare(`
+        SELECT template_id, name, payload_json, created_at, updated_at
+        FROM report_templates WHERE user_id = ? ORDER BY updated_at DESC
+      `),
+      rtGet: this.db.prepare(`
+        SELECT template_id, name, payload_json, created_at, updated_at
+        FROM report_templates WHERE user_id = ? AND template_id = ?
+      `),
+      rtUpsert: this.db.prepare(`
+        INSERT OR REPLACE INTO report_templates (user_id, template_id, name, payload_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `),
+      rtDelete: this.db.prepare('DELETE FROM report_templates WHERE user_id = ? AND template_id = ?'),
+      rtDeleteUser: this.db.prepare('DELETE FROM report_templates WHERE user_id = ?'),
       dlInsert: this.db.prepare(
         'INSERT INTO downlink_log (id, user_id, created_at, body_json) VALUES (?, ?, ?, ?)'
       ),
@@ -1491,6 +1528,11 @@ class Store {
     this.deleteAllDeviceScopedDataForUser(uid);
     try {
       this.st.arDeleteUser.run(uid);
+    } catch {
+      /* ignore */
+    }
+    try {
+      this.st.rtDeleteUser.run(uid);
     } catch {
       /* ignore */
     }
@@ -4128,6 +4170,50 @@ class Store {
       this.db.exec('ROLLBACK');
       throw e;
     }
+  }
+
+  listReportTemplates(userId) {
+    return this.st.rtList.all(String(userId)).map((r) => {
+      let payload = {};
+      try {
+        payload = JSON.parse(r.payload_json || '{}');
+      } catch {
+        payload = {};
+      }
+      return {
+        id: r.template_id,
+        name: r.name,
+        createdAt: r.created_at,
+        updatedAt: r.updated_at,
+        dateFrom: payload.dateFrom || '',
+        dateTo: payload.dateTo || '',
+        devices: Array.isArray(payload.devices) ? payload.devices : [],
+      };
+    });
+  }
+
+  upsertReportTemplate(userId, template) {
+    const uid = String(userId);
+    const tid =
+      template.id != null && String(template.id).trim()
+        ? String(template.id).trim()
+        : `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+    const name = String(template.name || '').trim();
+    if (!name) throw new Error('Nombre de plantilla requerido');
+    const now = new Date().toISOString();
+    const existing = this.st.rtGet.get(uid, tid);
+    const createdAt = existing ? existing.created_at : now;
+    const payload = {
+      dateFrom: template.dateFrom || '',
+      dateTo: template.dateTo || '',
+      devices: Array.isArray(template.devices) ? template.devices : [],
+    };
+    this.st.rtUpsert.run(uid, tid, name.slice(0, 200), JSON.stringify(payload), createdAt, now);
+    return this.listReportTemplates(uid).find((t) => t.id === tid) || { id: tid, name, ...payload };
+  }
+
+  deleteReportTemplate(userId, templateId) {
+    this.st.rtDelete.run(String(userId), String(templateId));
   }
 
   appendDownlinkLog(userId, fields) {

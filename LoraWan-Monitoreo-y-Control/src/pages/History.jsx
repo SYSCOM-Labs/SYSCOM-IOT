@@ -10,6 +10,11 @@ import {
   CheckSquare,
   Square,
   Search,
+  Check,
+  Bookmark,
+  Trash2,
+  Play,
+  X,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
@@ -26,6 +31,11 @@ import {
   countReportDataRows,
 } from '../utils/reportsExport';
 import { deviceMatchesListSearch, deviceDevEuiDisplay } from '../utils/deviceListSearch';
+import {
+  fetchReportTemplates,
+  saveReportTemplate,
+  deleteReportTemplate,
+} from '../services/reportTemplatesService';
 import './DeviceList.css';
 import '../styles/premiumPageShell.css';
 import './History.css';
@@ -177,6 +187,14 @@ const HistoryPage = () => {
   const [reportRows, setReportRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  const [savedTemplates, setSavedTemplates] = useState([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [showSaveModal, setShowSaveModal] = useState(false);
+  const [saveTemplateName, setSaveTemplateName] = useState('');
+  const [saveTemplateBusy, setSaveTemplateBusy] = useState(false);
+  const [pendingSaveConfig, setPendingSaveConfig] = useState(null);
+
   const propsLoadSeqRef = useRef({});
   const loadingPropsRef = useRef(new Set());
   const devicePropertiesRef = useRef({});
@@ -197,6 +215,25 @@ const HistoryPage = () => {
     };
     if (token) loadDevices();
   }, [token, credentials]);
+
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    (async () => {
+      setTemplatesLoading(true);
+      try {
+        const list = await fetchReportTemplates();
+        if (!cancelled) setSavedTemplates(Array.isArray(list) ? list : []);
+      } catch (e) {
+        if (!cancelled) console.warn('[Reports] templates:', e?.message || e);
+      } finally {
+        if (!cancelled) setTemplatesLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   const selectedDevices = useMemo(
     () => sortDevicesForReport(devices.filter((d) => selectedDeviceIds.has(String(d.deviceId)))),
@@ -291,6 +328,80 @@ const HistoryPage = () => {
     return found?.name || key || '—';
   };
 
+  const buildCurrentTemplateConfig = useCallback(
+    () => ({
+      dateFrom,
+      dateTo,
+      devices: selectedDevices.map((d) => {
+        const id = String(d.deviceId);
+        return {
+          deviceId: id,
+          deviceLabel: deviceLabel(d),
+          variableKey: deviceVariableMap[id] || '',
+          variableLabel: variableLabelForDevice(d.deviceId),
+        };
+      }),
+    }),
+    [dateFrom, dateTo, selectedDevices, deviceVariableMap, devicePropertiesMap]
+  );
+
+  const defaultTemplateName = () => {
+    const d = new Date();
+    const label = d.toLocaleDateString('es-MX', { day: 'numeric', month: 'short', year: 'numeric' });
+    return `${t('reports.template_default_name')} ${label}`;
+  };
+
+  const handleSaveTemplate = async () => {
+    const cfg = pendingSaveConfig || buildCurrentTemplateConfig();
+    const name = String(saveTemplateName || '').trim();
+    if (!name) {
+      alert(t('reports.template_name_required'));
+      return;
+    }
+    setSaveTemplateBusy(true);
+    try {
+      const saved = await saveReportTemplate({ ...cfg, name });
+      setSavedTemplates((prev) => {
+        const rest = prev.filter((x) => x.id !== saved.id);
+        return [saved, ...rest];
+      });
+      setShowSaveModal(false);
+      setPendingSaveConfig(null);
+    } catch (e) {
+      alert(e?.response?.data?.error || e?.message || t('reports.template_save_error'));
+    } finally {
+      setSaveTemplateBusy(false);
+    }
+  };
+
+  const handleApplyTemplate = (template) => {
+    if (!template) return;
+    if (template.dateFrom) setDateFrom(template.dateFrom);
+    if (template.dateTo) setDateTo(template.dateTo);
+    const ids = new Set();
+    const vars = {};
+    (template.devices || []).forEach((entry) => {
+      const id = String(entry.deviceId);
+      ids.add(id);
+      if (entry.variableKey) vars[id] = entry.variableKey;
+    });
+    setSelectedDeviceIds(ids);
+    setDeviceVariableMap(vars);
+    setReportRows([]);
+    setError(null);
+    [...ids].forEach((id) => loadPropertiesForDevice(id));
+  };
+
+  const handleDeleteTemplate = async (templateId) => {
+    if (!window.confirm(t('reports.template_delete_confirm'))) return;
+    try {
+      await deleteReportTemplate(templateId);
+      setSavedTemplates((prev) => prev.filter((x) => x.id !== templateId));
+    } catch (e) {
+      alert(e?.response?.data?.error || e?.message || t('reports.template_delete_error'));
+    }
+  };
+
   const allDevicesHaveVariable = selectedDevices.every((d) => {
     const id = String(d.deviceId);
     return Boolean(deviceVariableMap[id]);
@@ -358,7 +469,27 @@ const HistoryPage = () => {
       }
 
       setReportRows(rows);
-      if (countReportDataRows(rows) === 0) setError(t('reports.empty'));
+      const dataCount = countReportDataRows(rows);
+      if (dataCount === 0) {
+        setError(t('reports.empty'));
+      } else {
+        const cfg = {
+          dateFrom,
+          dateTo,
+          devices: selectedDevices.map((d) => {
+            const idStr = String(d.deviceId);
+            return {
+              deviceId: idStr,
+              deviceLabel: deviceLabel(d),
+              variableKey: deviceVariableMap[idStr] || '',
+              variableLabel: variableLabelForDevice(d.deviceId),
+            };
+          }),
+        };
+        setPendingSaveConfig(cfg);
+        setSaveTemplateName(defaultTemplateName());
+        setShowSaveModal(true);
+      }
     } catch (err) {
       console.error(err);
       setError(err?.message || t('reports.error'));
@@ -432,18 +563,29 @@ const HistoryPage = () => {
                   const checked = selectedDeviceIds.has(id);
                   const model = String(d.model || d.productModel || d.deviceType || '').trim();
                   return (
-                    <label key={id} className={`reports-device-row ${checked ? 'is-selected' : ''}`}>
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleDevice(d.deviceId)}
-                      />
-                      <span className="reports-device-main">
-                        <span className="reports-device-name">{deviceLabel(d)}</span>
-                        {model ? <span className="reports-device-model">{model}</span> : null}
+                    <div
+                      key={id}
+                      role="option"
+                      aria-selected={checked}
+                      className={`reports-device-card ${checked ? 'is-selected' : ''}`}
+                      onClick={() => toggleDevice(d.deviceId)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          toggleDevice(d.deviceId);
+                        }
+                      }}
+                      tabIndex={0}
+                    >
+                      <span className="reports-device-check" aria-hidden="true">
+                        <span className="reports-device-check__box">{checked ? <Check size={13} strokeWidth={3} /> : null}</span>
                       </span>
-                      <span className="reports-device-id">{deviceDevEuiDisplay(d)}</span>
-                    </label>
+                      <div className="reports-device-card__body">
+                        <span className="reports-device-name">{deviceLabel(d)}</span>
+                        {model ? <span className="reports-device-model-badge">{model}</span> : null}
+                        <span className="reports-device-id">{deviceDevEuiDisplay(d)}</span>
+                      </div>
+                    </div>
                   );
                 })
               )}
@@ -591,6 +733,128 @@ const HistoryPage = () => {
             {dataRowCount > 500 && (
               <p className="reports-muted reports-preview-note">{t('reports.preview_truncated')}</p>
             )}
+          </div>
+        </div>
+      )}
+
+      <section className="reports-saved-templates glass card">
+        <div className="reports-saved-templates__header">
+          <h3>
+            <Bookmark size={18} /> {t('reports.saved_templates_title')}
+          </h3>
+          <p className="reports-saved-templates__hint">{t('reports.saved_templates_hint')}</p>
+        </div>
+        {templatesLoading ? (
+          <p className="reports-muted reports-saved-templates__loading">
+            <Loader size={16} className="spin" /> {t('reports.templates_loading')}
+          </p>
+        ) : savedTemplates.length === 0 ? (
+          <p className="reports-muted">{t('reports.saved_templates_empty')}</p>
+        ) : (
+          <ul className="reports-template-list">
+            {savedTemplates.map((tpl) => (
+              <li key={tpl.id} className="reports-template-card">
+                <div className="reports-template-card__main">
+                  <strong className="reports-template-card__name">{tpl.name}</strong>
+                  <span className="reports-template-card__meta">
+                    {(tpl.devices || []).length} {t('reports.devices_label')}
+                    {tpl.dateFrom && tpl.dateTo ? ` · ${tpl.dateFrom} — ${tpl.dateTo}` : ''}
+                  </span>
+                  <ul className="reports-template-card__devices">
+                    {(tpl.devices || []).slice(0, 4).map((d) => (
+                      <li key={`${tpl.id}-${d.deviceId}`}>
+                        {d.deviceLabel || d.deviceId}
+                        {d.variableLabel ? ` · ${d.variableLabel}` : ''}
+                      </li>
+                    ))}
+                    {(tpl.devices || []).length > 4 ? (
+                      <li className="reports-template-card__more">
+                        +{(tpl.devices || []).length - 4} {t('reports.more_devices')}
+                      </li>
+                    ) : null}
+                  </ul>
+                </div>
+                <div className="reports-template-card__actions">
+                  <button
+                    type="button"
+                    className="btn btn-primary reports-template-apply-btn"
+                    onClick={() => handleApplyTemplate(tpl)}
+                  >
+                    <Play size={14} /> {t('reports.template_apply')}
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-secondary reports-template-delete-btn"
+                    onClick={() => handleDeleteTemplate(tpl.id)}
+                    title={t('reports.template_delete')}
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {showSaveModal && (
+        <div
+          className="modal-overlay reports-save-modal-overlay"
+          role="presentation"
+          onClick={() => !saveTemplateBusy && setShowSaveModal(false)}
+        >
+          <div
+            className="modal-content glass reports-save-modal"
+            role="dialog"
+            aria-labelledby="reports-save-modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h2 id="reports-save-modal-title">{t('reports.save_modal_title')}</h2>
+              <button
+                type="button"
+                className="reports-save-modal__close"
+                onClick={() => !saveTemplateBusy && setShowSaveModal(false)}
+                aria-label={t('reports.save_modal_cancel')}
+              >
+                <X size={20} />
+              </button>
+            </div>
+            <div className="modal-body">
+              <p className="reports-save-modal__text">{t('reports.save_modal_question')}</p>
+              <label className="filter-group" htmlFor="report-template-name">
+                {t('reports.template_name_label')}
+                <input
+                  id="report-template-name"
+                  type="text"
+                  className="glass"
+                  value={saveTemplateName}
+                  onChange={(e) => setSaveTemplateName(e.target.value)}
+                  placeholder={t('reports.template_name_placeholder')}
+                  maxLength={200}
+                  autoFocus
+                />
+              </label>
+            </div>
+            <div className="modal-footer">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={saveTemplateBusy}
+                onClick={() => setShowSaveModal(false)}
+              >
+                {t('reports.save_modal_cancel')}
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary device-create-top-btn"
+                disabled={saveTemplateBusy}
+                onClick={() => void handleSaveTemplate()}
+              >
+                {saveTemplateBusy ? <Loader size={16} className="spin" /> : <Bookmark size={16} />}
+                {t('reports.save_modal_confirm')}
+              </button>
+            </div>
           </div>
         </div>
       )}

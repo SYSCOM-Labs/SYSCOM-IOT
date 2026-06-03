@@ -262,64 +262,121 @@ body.theme-dark .history-page .btn-secondary:hover:not(:disabled) {
 }
 
 .reports-device-list {
-  max-height: 320px;
+  max-height: 360px;
   overflow-y: auto;
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
-  background: var(--bg-card);
-}
-
-.reports-device-row {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 10px;
-  align-items: center;
-  padding: 10px 12px;
-  border-bottom: 1px solid var(--border-color);
-  cursor: pointer;
-  font-size: 0.88rem;
-}
-
-.reports-device-row:last-child {
-  border-bottom: none;
-}
-
-.reports-device-row.is-selected {
-  background: rgb(59 130 246 / 0.08);
-}
-
-.reports-device-row input {
-  width: 16px;
-  height: 16px;
-  accent-color: var(--accent-blue, #3b82f6);
-}
-
-.reports-device-main {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 8px;
+  padding: 4px;
+}
+
+.reports-device-card {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgb(99 102 241 / 0.18);
+  background: linear-gradient(135deg, rgb(255 255 255 / 0.96), rgb(99 102 241 / 0.04));
+  cursor: pointer;
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.12s ease;
+  outline: none;
+}
+
+.reports-device-card:hover {
+  border-color: rgb(99 102 241 / 0.42);
+  box-shadow: 0 6px 18px rgb(99 102 241 / 0.12);
+}
+
+.reports-device-card.is-selected {
+  border-color: rgb(59 130 246 / 0.75);
+  background: linear-gradient(135deg, rgb(59 130 246 / 0.1), rgb(99 102 241 / 0.08));
+  box-shadow:
+    0 0 0 1px rgb(59 130 246 / 0.25),
+    0 8px 22px rgb(59 130 246 / 0.14);
+}
+
+.reports-device-check {
+  padding-top: 2px;
+}
+
+.reports-device-check__box {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  border: 2px solid rgb(99 102 241 / 0.35);
+  background: rgb(255 255 255 / 0.9);
+  color: #fff;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.reports-device-card.is-selected .reports-device-check__box {
+  border-color: rgb(59 130 246);
+  background: linear-gradient(145deg, rgb(59 130 246), rgb(99 102 241));
+}
+
+.reports-device-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   min-width: 0;
 }
 
 .reports-device-name {
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 600;
+  font-size: 0.92rem;
+  line-height: 1.25;
+  color: var(--text-primary);
 }
 
-.reports-device-model {
+.reports-device-model-badge {
+  align-self: flex-start;
   font-size: 0.72rem;
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgb(99 102 241 / 0.12);
+  color: rgb(67 56 202);
+  border: 1px solid rgb(99 102 241 / 0.2);
 }
 
 .reports-device-id {
   font-size: 0.72rem;
   color: var(--text-secondary);
   font-family: ui-monospace, monospace;
+  word-break: break-all;
+}
+
+body.theme-dark .reports-device-card {
+  background: linear-gradient(135deg, rgb(28 28 42 / 0.96), rgb(99 102 241 / 0.1));
+  border-color: rgb(129 140 248 / 0.22);
+}
+
+body.theme-dark .reports-device-card.is-selected {
+  background: linear-gradient(135deg, rgb(59 130 246 / 0.18), rgb(99 102 241 / 0.12));
+}
+
+body.theme-dark .reports-device-check__box {
+  background: rgb(30 30 46 / 0.9);
+  border-color: rgb(129 140 248 / 0.4);
+}
+
+body.theme-dark .reports-device-model-badge {
+  color: rgb(196 181 253);
+  background: rgb(99 102 241 / 0.2);
+}
+
+.reports-device-row {
+  display: none;
 }
 
 .reports-section--filters .filter-group {
@@ -478,4 +535,120 @@ body.theme-dark .reports-device-var-row {
   .reports-panel-grid {
     grid-template-columns: 1fr;
   }
+}
+
+.reports-saved-templates {
+  margin-top: 8px;
+  padding: 22px 24px 24px;
+}
+
+.reports-saved-templates__header h3 {
+  margin: 0 0 6px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.05rem;
+}
+
+.reports-saved-templates__hint {
+  margin: 0 0 16px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.reports-saved-templates__loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reports-template-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.reports-template-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 14px;
+  border: 1px solid rgb(99 102 241 / 0.2);
+  background: linear-gradient(160deg, rgb(255 255 255 / 0.98), rgb(59 130 246 / 0.05));
+}
+
+.reports-template-card__name {
+  display: block;
+  font-size: 0.95rem;
+  margin-bottom: 4px;
+}
+
+.reports-template-card__meta {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.reports-template-card__devices {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.reports-template-card__more {
+  font-style: italic;
+}
+
+.reports-template-card__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.reports-template-apply-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 38px;
+  font-size: 0.85rem !important;
+}
+
+.reports-template-delete-btn {
+  min-width: 42px;
+  min-height: 38px;
+  padding: 0 10px !important;
+}
+
+.reports-save-modal {
+  max-width: 440px;
+  width: min(440px, calc(100vw - 32px));
+}
+
+.reports-save-modal__close {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 8px;
+}
+
+.reports-save-modal__text {
+  margin: 0 0 16px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+body.theme-dark .reports-template-card {
+  background: linear-gradient(160deg, rgb(28 28 42 / 0.98), rgb(59 130 246 / 0.1));
 }

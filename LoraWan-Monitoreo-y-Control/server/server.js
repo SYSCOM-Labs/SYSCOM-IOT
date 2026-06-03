@@ -2147,6 +2147,15 @@ const navAutomationsMiddleware = (req, res, next) => {
   next();
 };
 
+const navHistoryMiddleware = (req, res, next) => {
+  const full = store.getUserById(req.user.id);
+  if (!full) return res.status(401).json({ error: 'Usuario no encontrado' });
+  if (!navPerm.userHasNav(full, 'History')) {
+    return res.status(403).json({ error: 'Permisos insuficientes para esta acción' });
+  }
+  next();
+};
+
 const superAdminOnlyMiddleware = (req, res, next) => {
   if (req.user.role !== 'superadmin') {
     return res.status(403).json({ error: 'Solo el super administrador puede realizar esta acción' });
@@ -3912,6 +3921,28 @@ app.put('/api/automations', authMiddleware, navAutomationsMiddleware, (req, res)
   if (!Array.isArray(rules)) return res.status(400).json({ error: 'rules debe ser un array' });
   store.replaceAutomationRules(req.user.id, rules);
   res.json({ ok: true, count: rules.length });
+});
+
+app.get('/api/report-templates', authMiddleware, navHistoryMiddleware, (req, res) => {
+  res.json({ templates: store.listReportTemplates(req.user.id) });
+});
+
+app.post('/api/report-templates', authMiddleware, navHistoryMiddleware, (req, res) => {
+  const { name, dateFrom, dateTo, devices, id } = req.body || {};
+  if (!Array.isArray(devices) || devices.length === 0) {
+    return res.status(400).json({ error: 'Seleccione al menos un dispositivo en la plantilla' });
+  }
+  try {
+    const saved = store.upsertReportTemplate(req.user.id, { id, name, dateFrom, dateTo, devices });
+    res.json({ ok: true, template: saved });
+  } catch (e) {
+    res.status(400).json({ error: e.message || 'No se pudo guardar la plantilla' });
+  }
+});
+
+app.delete('/api/report-templates/:templateId', authMiddleware, navHistoryMiddleware, (req, res) => {
+  store.deleteReportTemplate(req.user.id, decodeURIComponent(req.params.templateId));
+  res.json({ ok: true });
 });
 
 const BACKUP_NAS_SETTING_KEY = 'backup_nas_destination';
