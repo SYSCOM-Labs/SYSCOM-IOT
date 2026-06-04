@@ -10,6 +10,10 @@ const {
   effectiveAutomationConditions,
   resolveAutomationRuleMode,
 } = require('./lib/automation-rule-mode.cjs');
+const {
+  resolveAutomationTimezone,
+  getScheduleClockParts,
+} = require('./lib/automation-schedule-clock.cjs');
 
 /** @type {null | { store: object, tryLnsAppDownlinkEnqueue: Function, appendDownlinkLog: Function, insertUiEventWithStream: Function, buildLnsDownlinkApiSuccessBody: Function, canRunAutomationsForUser: Function }} */
 let _ctx = null;
@@ -435,8 +439,6 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
 
   const activeRules = rules.filter((r) => r.active !== false);
   const now = new Date();
-  const currentDay = now.getDay();
-  const currentTimeStr = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
   /** Evita dos reglas solo-horario al mismo dispositivo en el mismo tick (p. ej. ON y OFF a la vez). */
   const scheduleOnlyDownlinkTargets = new Set();
 
@@ -455,17 +457,23 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
 
     if (scheduleTickOnly) {
       if (!scheduleOnly) continue;
+      const tz = resolveAutomationTimezone(rule);
+      const { currentDay, currentTimeStr } = getScheduleClockParts(now, tz);
       const inside =
         dayMatchesRule(rule, currentDay) && isTimeInRange(currentTimeStr, schedStart, schedEnd);
       const rid = rule.id != null ? String(rule.id) : `r${ridx}`;
       const edgeKey = `${userId}::${rid}`;
+      const hadPrior = Object.prototype.hasOwnProperty.call(scheduleEdgeState, edgeKey);
       const prev = scheduleEdgeState[edgeKey] === true;
       scheduleEdgeState[edgeKey] = inside;
+      if (!hadPrior) {
+        continue;
+      }
       const entering = inside && !prev;
       const leaving = !inside && prev;
       if (entering || leaving) {
         console.info(
-          `[automation] Horario ${entering ? 'INICIO' : 'FIN'} regla="${rule.name || rid}" usuario=${userId}`
+          `[automation] Horario ${entering ? 'INICIO' : 'FIN'} regla="${rule.name || rid}" usuario=${userId} tz=${tz} reloj=${currentTimeStr}`
         );
         for (let i = 0; i < (rule.actions || []).length; i++) {
           const action = rule.actions[i];
@@ -485,6 +493,7 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
 
     // Telemetría: reglas solo-horario se evalúan en el tick de agenda (sin filtro día/hora aquí).
     if (scheduleOnly) continue;
+    if (effectiveConditions.length === 0) continue;
 
     let allConditionsMet = true;
     for (const cond of effectiveConditions) {
