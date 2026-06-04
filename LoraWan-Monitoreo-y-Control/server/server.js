@@ -1957,6 +1957,7 @@ function sendHttpResponseAfterLnsAppDownlinkEnqueue(res, userId, r, meta) {
 }
 
 const smtpMail = require('./lib/smtp-mail.cjs');
+const appTimezone = require('./lib/app-timezone.cjs');
 const automationRunner = require('./automation-runner');
 automationRunner.configure({
   store,
@@ -3965,6 +3966,26 @@ app.put('/api/admin/backup-config', authMiddleware, navSettingsMiddleware, (req,
   }
   store.setServerSetting(BACKUP_NAS_SETTING_KEY, raw.trimEnd().slice(0, BACKUP_NAS_DEST_MAX_LEN));
   res.json({ ok: true, nasDestination: store.getServerSetting(BACKUP_NAS_SETTING_KEY) });
+});
+
+/** Zona horaria de la aplicación (reglas por horario, respaldos, etc.). */
+app.get('/api/settings/app-timezone', authMiddleware, (req, res) => {
+  try {
+    res.json(appTimezone.getAppTimezoneStatus(store));
+  } catch (e) {
+    res.status(500).json({ error: e && e.message ? e.message : 'Error al leer zona horaria' });
+  }
+});
+
+app.put('/api/settings/app-timezone', authMiddleware, navSettingsMiddleware, (req, res) => {
+  try {
+    const tz = req.body && req.body.timezone != null ? String(req.body.timezone) : '';
+    const status = appTimezone.saveAppTimezone(store, tz);
+    res.json({ ok: true, ...status });
+  } catch (e) {
+    const code = e && e.code === 'VALIDATION' ? 400 : 500;
+    res.status(code).json({ error: e && e.message ? e.message : 'No se pudo guardar la zona horaria' });
+  }
 });
 
 /** SMTP gratuito (Gmail, Outlook, Yahoo, GMX): estado y configuración. La contraseña en producción debe ir en variables de entorno. */

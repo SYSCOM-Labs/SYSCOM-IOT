@@ -436,3 +436,43 @@ body.theme-dark .settings-logo-fallback-label {
 .settings-nas-save-btn {
   min-width: 220px;
 }
+
+.settings-timezone-block {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border-radius: 14px;
+}
+
+.settings-timezone-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.settings-timezone-select {
+  width: 100%;
+  max-width: 420px;
+  min-height: 42px;
+  padding: 8px 12px;
+}
+
+.settings-timezone-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.84rem;
+  color: var(--text-secondary);
+}
+
+.settings-timezone-meta code {
+  font-size: 0.8rem;
+}
+
+.settings-timezone-now strong {
+  color: var(--text-primary);
+}
+
+.settings-timezone-save-wrap {
+  margin-top: 4px;
+}

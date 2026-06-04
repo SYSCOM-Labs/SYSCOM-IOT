@@ -1,5 +1,5 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Settings as SettingsIcon, Upload, Trash2, User, Database, Download } from 'lucide-react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+import { Settings as SettingsIcon, Upload, Trash2, User, Database, Download, Globe } from 'lucide-react';
 import './DeviceList.css';
 import '../styles/premiumPageShell.css';
 import './Settings.css';
@@ -23,11 +23,14 @@ import {
   importDatabaseBackupFile,
   fetchBackupConfig,
   saveBackupConfig,
+  fetchAppTimezone,
+  saveAppTimezone,
   fetchSmtpSettings,
   saveSmtpSettings,
   testSmtpSettings,
 } from '../services/api';
 import AppActivityLogDock from '../components/AppActivityLogDock';
+import { APP_TIMEZONE_OPTIONS, browserTimezone } from '../constants/timezones';
 
 const LOGO_STORAGE_KEY = 'syscom_iot_logo';
 const LOGO_CHANGED_EVENT = 'syscom-custom-logo-changed';
@@ -48,6 +51,10 @@ const SettingsPage = () => {
   const [dbImportBusy, setDbImportBusy] = useState(false);
   const [nasDestination, setNasDestination] = useState('');
   const [nasSaveBusy, setNasSaveBusy] = useState(false);
+  const [appTimezoneDraft, setAppTimezoneDraft] = useState('America/Mexico_City');
+  const [appTimezoneStatus, setAppTimezoneStatus] = useState(null);
+  const [appTimezoneSaveBusy, setAppTimezoneSaveBusy] = useState(false);
+  const browserTz = useMemo(() => browserTimezone(), []);
   const [customLogo, setCustomLogo] = useState(() => localStorage.getItem(LOGO_STORAGE_KEY) || null);
   const [barAvatarDataUrl, setBarAvatarDataUrl] = useState(() => readBarAvatarOverride());
   const [profileDisplayName, setProfileDisplayName] = useState('');
@@ -73,6 +80,24 @@ const SettingsPage = () => {
         if (!cancelled) setNasDestination(String(data?.nasDestination ?? ''));
       } catch {
         /* sin sesión o sin permiso */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [hasNavPage]);
+
+  useEffect(() => {
+    if (!hasNavPage('Settings')) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await fetchAppTimezone();
+        if (cancelled) return;
+        setAppTimezoneStatus(data);
+        setAppTimezoneDraft(String(data?.timezone || data?.configured || 'America/Mexico_City'));
+      } catch {
+        /* sin sesión */
       }
     })();
     return () => {
@@ -328,6 +353,26 @@ const SettingsPage = () => {
     }
   };
 
+  const handleSaveAppTimezone = async () => {
+    setAppTimezoneSaveBusy(true);
+    try {
+      const data = await saveAppTimezone(appTimezoneDraft);
+      setAppTimezoneStatus(data);
+      setAppTimezoneDraft(String(data?.timezone || appTimezoneDraft));
+      alert(t('settings.timezone_saved'));
+    } catch (e) {
+      alert(e?.response?.data?.error || e?.message || t('settings.timezone_save_error'));
+    } finally {
+      setAppTimezoneSaveBusy(false);
+    }
+  };
+
+  const timezoneSourceLabel = (source) => {
+    if (source === 'settings') return t('settings.timezone_source_settings');
+    if (source === 'env') return t('settings.timezone_source_env');
+    return t('settings.timezone_source_default');
+  };
+
   const handleDatabaseImportPick = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -389,6 +434,63 @@ const SettingsPage = () => {
                   transition: 'transform 0.2s',
                 }}
               />
+            </div>
+          </div>
+        </section>
+
+        <section className="settings-section settings-section-premium">
+          <h3>
+            <Globe size={18} style={{ verticalAlign: 'text-bottom', marginRight: 6 }} aria-hidden />
+            {t('settings.timezone_section')}
+          </h3>
+          <p className="description settings-logo-hint">{t('settings.timezone_hint')}</p>
+          <div className="settings-timezone-block glass">
+            <label className="settings-timezone-label" htmlFor="syscom-app-timezone">
+              {t('settings.timezone_label')}
+            </label>
+            <select
+              id="syscom-app-timezone"
+              className="glass settings-timezone-select"
+              value={appTimezoneDraft}
+              onChange={(e) => setAppTimezoneDraft(e.target.value)}
+            >
+              {APP_TIMEZONE_OPTIONS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label} ({opt.value})
+                </option>
+              ))}
+            </select>
+            {appTimezoneStatus ? (
+              <div className="settings-timezone-meta">
+                <p className="settings-timezone-now">
+                  {t('settings.timezone_now')}: <strong>{appTimezoneStatus.nowLocal}</strong>
+                </p>
+                <p className="settings-timezone-source">
+                  {t('settings.timezone_active')}: <code>{appTimezoneStatus.timezone}</code>
+                  {' · '}
+                  {timezoneSourceLabel(appTimezoneStatus.source)}
+                </p>
+                {appTimezoneStatus.envFallback ? (
+                  <p className="settings-timezone-env">
+                    {t('settings.timezone_env_fallback')}: <code>{appTimezoneStatus.envFallback}</code>
+                  </p>
+                ) : null}
+                {browserTz ? (
+                  <p className="settings-timezone-browser">
+                    {t('settings.timezone_browser')}: <code>{browserTz}</code>
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+            <div className="settings-timezone-save-wrap">
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={appTimezoneSaveBusy}
+                onClick={() => void handleSaveAppTimezone()}
+              >
+                {appTimezoneSaveBusy ? '…' : t('settings.timezone_save')}
+              </button>
             </div>
           </div>
         </section>

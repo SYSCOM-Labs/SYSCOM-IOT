@@ -210,6 +210,21 @@ export const saveBackupConfig = async (payload) => {
   return response.data;
 };
 
+/** Zona horaria del servidor (reglas por horario, etc.). */
+export const fetchAppTimezone = async () => {
+  const response = await axios.get(`${SERVER_API}/settings/app-timezone`, { headers: authHeaders() });
+  return response.data;
+};
+
+export const saveAppTimezone = async (timezone) => {
+  const response = await axios.put(
+    `${SERVER_API}/settings/app-timezone`,
+    { timezone },
+    { headers: authHeaders() }
+  );
+  return response.data;
+};
+
 /** Estado SMTP (sin contraseña). */
 export const fetchSmtpSettings = async () => {
   const response = await axios.get(`${SERVER_API}/settings/smtp`, { headers: authHeaders() });

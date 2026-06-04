@@ -3,17 +3,20 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
 const {
-  resolveAutomationTimezone,
+  resolveAppTimezone,
   getScheduleClockParts,
 } = require('../lib/automation-schedule-clock.cjs');
 
 describe('automation-schedule-clock', () => {
-  it('resolveAutomationTimezone prioriza regla y env', () => {
+  it('resolveAppTimezone prioriza regla y env', () => {
     const prev = process.env.SYSCOM_AUTOMATION_TIMEZONE;
     process.env.SYSCOM_AUTOMATION_TIMEZONE = 'America/Chicago';
     try {
-      assert.equal(resolveAutomationTimezone({ scheduleTimezone: 'America/Mexico_City' }), 'America/Mexico_City');
-      assert.equal(resolveAutomationTimezone({}), 'America/Chicago');
+      assert.equal(
+        resolveAppTimezone(null, { scheduleTimezone: 'America/Mexico_City' }),
+        'America/Mexico_City'
+      );
+      assert.equal(resolveAppTimezone(null, {}), 'America/Chicago');
     } finally {
       if (prev == null) delete process.env.SYSCOM_AUTOMATION_TIMEZONE;
       else process.env.SYSCOM_AUTOMATION_TIMEZONE = prev;

@@ -373,11 +373,6 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
       activeDays: ruleBySchedule ? activeDays : [],
       scheduleStart: ruleBySchedule ? scheduleStart : '00:00',
       scheduleEnd: ruleBySchedule ? scheduleEnd : '23:59',
-      scheduleTimezone: ruleBySchedule
-        ? typeof Intl !== 'undefined'
-          ? Intl.DateTimeFormat().resolvedOptions().timeZone || ''
-          : ''
-        : '',
       reactivation,
       allowReactivation,
     });

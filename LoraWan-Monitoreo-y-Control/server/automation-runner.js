@@ -11,9 +11,9 @@ const {
   resolveAutomationRuleMode,
 } = require('./lib/automation-rule-mode.cjs');
 const {
-  resolveAutomationTimezone,
+  resolveAppTimezone,
   getScheduleClockParts,
-} = require('./lib/automation-schedule-clock.cjs');
+} = require('./lib/app-timezone.cjs');
 
 /** @type {null | { store: object, tryLnsAppDownlinkEnqueue: Function, appendDownlinkLog: Function, insertUiEventWithStream: Function, buildLnsDownlinkApiSuccessBody: Function, canRunAutomationsForUser: Function }} */
 let _ctx = null;
@@ -457,7 +457,7 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
 
     if (scheduleTickOnly) {
       if (!scheduleOnly) continue;
-      const tz = resolveAutomationTimezone(rule);
+      const tz = resolveAppTimezone(store, rule);
       const { currentDay, currentTimeStr } = getScheduleClockParts(now, tz);
       const inside =
         dayMatchesRule(rule, currentDay) && isTimeInRange(currentTimeStr, schedStart, schedEnd);
