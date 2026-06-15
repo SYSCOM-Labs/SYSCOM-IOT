@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Settings as SettingsIcon, Upload, Trash2, User, Database, Download, Globe } from 'lucide-react';
+import { Settings as SettingsIcon, Upload, Trash2, User, Database, Download, Globe, RadioTower } from 'lucide-react';
 import './DeviceList.css';
 import '../styles/premiumPageShell.css';
 import './Settings.css';
@@ -31,6 +31,7 @@ import {
 } from '../services/api';
 import AppActivityLogDock from '../components/AppActivityLogDock';
 import { APP_TIMEZONE_OPTIONS, browserTimezone } from '../constants/timezones';
+import { probeEg71Gateway, probeEg71GatewaySaved } from '../services/eg71GatewayApi';
 
 const LOGO_STORAGE_KEY = 'syscom_iot_logo';
 const LOGO_CHANGED_EVENT = 'syscom-custom-logo-changed';
@@ -55,6 +56,13 @@ const SettingsPage = () => {
   const [appTimezoneStatus, setAppTimezoneStatus] = useState(null);
   const [appTimezoneSaveBusy, setAppTimezoneSaveBusy] = useState(false);
   const browserTz = useMemo(() => browserTimezone(), []);
+  const [eg71BaseUrl, setEg71BaseUrl] = useState('');
+  const [eg71Username, setEg71Username] = useState('admin');
+  const [eg71Password, setEg71Password] = useState('');
+  const [eg71HasSavedPassword, setEg71HasSavedPassword] = useState(false);
+  const [eg71RejectInsecureTls, setEg71RejectInsecureTls] = useState(false);
+  const [eg71SaveBusy, setEg71SaveBusy] = useState(false);
+  const [eg71ProbeBusy, setEg71ProbeBusy] = useState(false);
   const [customLogo, setCustomLogo] = useState(() => localStorage.getItem(LOGO_STORAGE_KEY) || null);
   const [barAvatarDataUrl, setBarAvatarDataUrl] = useState(() => readBarAvatarOverride());
   const [profileDisplayName, setProfileDisplayName] = useState('');
@@ -70,6 +78,15 @@ const SettingsPage = () => {
       '';
     setProfileDisplayName(n);
   }, [userProfile?.profileName, user?.profileName]);
+
+  useEffect(() => {
+    const g = userProfile?.eg71Gateway || user?.eg71Gateway;
+    if (!g) return;
+    setEg71BaseUrl(String(g.baseUrl || ''));
+    setEg71Username(String(g.apiUsername || 'admin'));
+    setEg71HasSavedPassword(Boolean(g.hasApiPassword));
+    setEg71RejectInsecureTls(g.rejectUnauthorized === false);
+  }, [userProfile?.eg71Gateway, user?.eg71Gateway]);
 
   useEffect(() => {
     if (!hasNavPage('Settings')) return undefined;
@@ -321,6 +338,58 @@ const SettingsPage = () => {
     notifyBarPrefsChanged();
   };
 
+  const handleSaveEg71Gateway = async () => {
+    if (!user?.id) return;
+    const baseUrl = String(eg71BaseUrl || '').trim();
+    if (!baseUrl) {
+      alert(t('settings.eg71_base_url_required'));
+      return;
+    }
+    setEg71SaveBusy(true);
+    try {
+      const payload = {
+        eg71Gateway: {
+          baseUrl,
+          apiUsername: String(eg71Username || 'admin').trim() || 'admin',
+          rejectUnauthorized: !eg71RejectInsecureTls,
+        },
+      };
+      if (eg71Password.trim()) payload.eg71Gateway.apiPassword = eg71Password.trim();
+      await updateUser(user.id, payload);
+      await resyncSession();
+      setEg71Password('');
+      setEg71HasSavedPassword(Boolean(eg71Password.trim()) || eg71HasSavedPassword);
+      alert(t('settings.eg71_saved'));
+    } catch (e) {
+      alert(e?.message || t('settings.eg71_save_error'));
+    } finally {
+      setEg71SaveBusy(false);
+    }
+  };
+
+  const handleProbeEg71Gateway = async () => {
+    setEg71ProbeBusy(true);
+    try {
+      const baseUrl = String(eg71BaseUrl || '').trim();
+      let data;
+      if (baseUrl && (eg71Password.trim() || !eg71HasSavedPassword)) {
+        data = await probeEg71Gateway({
+          baseUrl,
+          apiUsername: String(eg71Username || 'admin').trim() || 'admin',
+          apiPassword: eg71Password.trim(),
+          rejectUnauthorized: !eg71RejectInsecureTls,
+        });
+      } else {
+        data = await probeEg71GatewaySaved();
+      }
+      alert(data?.message || t('settings.eg71_probe_ok'));
+    } catch (e) {
+      alert(e?.response?.data?.error || e?.message || t('settings.eg71_probe_error'));
+    } finally {
+      setEg71ProbeBusy(false);
+    }
+  };
+
   const handleDatabaseExport = async () => {
     setDbExportBusy(true);
     try {
@@ -490,6 +559,78 @@ const SettingsPage = () => {
                 onClick={() => void handleSaveAppTimezone()}
               >
                 {appTimezoneSaveBusy ? '…' : t('settings.timezone_save')}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="settings-section settings-section-premium">
+          <h3>
+            <RadioTower size={18} style={{ verticalAlign: 'text-bottom', marginRight: 6 }} aria-hidden />
+            {t('settings.eg71_section')}
+          </h3>
+          <p className="description settings-logo-hint">{t('settings.eg71_hint')}</p>
+          <div className="settings-gateway-block glass">
+            <label className="settings-timezone-label" htmlFor="syscom-eg71-base-url">
+              {t('settings.eg71_base_url')}
+            </label>
+            <input
+              id="syscom-eg71-base-url"
+              type="url"
+              className="glass settings-gateway-input"
+              placeholder="https://192.168.1.10"
+              value={eg71BaseUrl}
+              onChange={(e) => setEg71BaseUrl(e.target.value)}
+              autoComplete="off"
+            />
+            <label className="settings-timezone-label" htmlFor="syscom-eg71-user">
+              {t('settings.eg71_username')}
+            </label>
+            <input
+              id="syscom-eg71-user"
+              type="text"
+              className="glass settings-gateway-input"
+              value={eg71Username}
+              onChange={(e) => setEg71Username(e.target.value)}
+              autoComplete="username"
+            />
+            <label className="settings-timezone-label" htmlFor="syscom-eg71-pass">
+              {t('settings.eg71_password')}
+              {eg71HasSavedPassword ? ` (${t('settings.eg71_password_saved')})` : ''}
+            </label>
+            <input
+              id="syscom-eg71-pass"
+              type="password"
+              className="glass settings-gateway-input"
+              placeholder={eg71HasSavedPassword ? '••••••••' : ''}
+              value={eg71Password}
+              onChange={(e) => setEg71Password(e.target.value)}
+              autoComplete="new-password"
+            />
+            <label className="settings-gateway-check checkbox-label">
+              <input
+                type="checkbox"
+                checked={eg71RejectInsecureTls}
+                onChange={(e) => setEg71RejectInsecureTls(e.target.checked)}
+              />
+              <span>{t('settings.eg71_allow_insecure_tls')}</span>
+            </label>
+            <div className="settings-gateway-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                disabled={eg71ProbeBusy || eg71SaveBusy}
+                onClick={() => void handleProbeEg71Gateway()}
+              >
+                {eg71ProbeBusy ? '…' : t('settings.eg71_probe')}
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={eg71SaveBusy || eg71ProbeBusy}
+                onClick={() => void handleSaveEg71Gateway()}
+              >
+                {eg71SaveBusy ? '…' : t('settings.eg71_save')}
               </button>
             </div>
           </div>

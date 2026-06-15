@@ -1,0 +1,36 @@
+{
+  "models": [
+    {
+      "id": "UG65",
+      "label": "Milesight UG65",
+      "apiModule": "milesight-ug-gateway",
+      "defaultBaseUrlHint": "https://IP-GATEWAY:8080",
+      "lnsMode": "semtech-udp",
+      "notes": "Packet Forwarder Semtech → LNS integrado (UDP 1700). API REST puerto 8080."
+    },
+    {
+      "id": "UG67",
+      "label": "Milesight UG67",
+      "apiModule": "milesight-ug-gateway",
+      "defaultBaseUrlHint": "https://IP-GATEWAY:8080",
+      "lnsMode": "semtech-udp",
+      "notes": "Misma API REST que UG65."
+    },
+    {
+      "id": "UG63",
+      "label": "Milesight UG63",
+      "apiModule": "milesight-mqtt",
+      "defaultBaseUrlHint": "MQTT + Semtech UDP",
+      "lnsMode": "semtech-udp",
+      "notes": "Ingesta MQTT opcional; downlinks vía LNS integrado."
+    },
+    {
+      "id": "EG71",
+      "label": "Milesight EG71",
+      "apiModule": "milesight-eg71-gateway",
+      "defaultBaseUrlHint": "https://IP-GATEWAY",
+      "lnsMode": "semtech-udp",
+      "notes": "API REST (JWT) + CGI (token td). Contraseña AES-128-CBC. CGI rate limit ≥500 ms. LoRaWAN downlinks: LNS integrado."
+    }
+  ]
+}

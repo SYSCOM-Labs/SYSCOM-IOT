@@ -323,6 +323,14 @@ function rowToUser(row) {
       milesightUgGateway = undefined;
     }
   }
+  let eg71Gateway;
+  if (row.eg71_gateway_json) {
+    try {
+      eg71Gateway = JSON.parse(row.eg71_gateway_json);
+    } catch {
+      eg71Gateway = undefined;
+    }
+  }
   return {
     id: row.id,
     email: row.email,
@@ -334,6 +342,7 @@ function rowToUser(row) {
     ingestToken: row.ingest_token,
     createdAt: row.created_at,
     milesightUgGateway,
+    eg71Gateway,
     mustChangePassword: Number(row.must_change_password) === 1,
     navPermissionsJson: row.nav_permissions_json != null ? String(row.nav_permissions_json) : null,
   };
@@ -372,6 +381,7 @@ class Store {
     this._migrateDeviceSchema();
     this._migrateLnsSchema();
     this._migrateServerSettings();
+    this._migrateEg71GatewayColumn();
     this._migrateNavPermissions();
     this._prepareStatements();
     this._migrateRoles();
@@ -578,6 +588,17 @@ class Store {
     }
   }
 
+  _migrateEg71GatewayColumn() {
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(users)').all();
+      if (!cols.some((c) => c.name === 'eg71_gateway_json')) {
+        this.db.exec('ALTER TABLE users ADD COLUMN eg71_gateway_json TEXT');
+      }
+    } catch (e) {
+      console.warn('[Syscom] Migración eg71_gateway_json:', e.message);
+    }
+  }
+
   _migrateLnsExtraColumns() {
     const add = (sql) => {
       try {
@@ -759,12 +780,13 @@ class Store {
         `SELECT id FROM users WHERE lower(trim(COALESCE(role, ''))) = 'superadmin'`
       ),
       insertUser: prepareBare(this.db, `
-        INSERT INTO users (id, email, password, role, profile_name, created_by, created_by_email, ingest_token, created_at, milesight_ug_json, must_change_password, nav_permissions_json)
-        VALUES (@id, @email, @password, @role, @profile_name, @created_by, @created_by_email, @ingest_token, @created_at, @milesight_ug_json, @must_change_password, @nav_permissions_json)
+        INSERT INTO users (id, email, password, role, profile_name, created_by, created_by_email, ingest_token, created_at, milesight_ug_json, eg71_gateway_json, must_change_password, nav_permissions_json)
+        VALUES (@id, @email, @password, @role, @profile_name, @created_by, @created_by_email, @ingest_token, @created_at, @milesight_ug_json, @eg71_gateway_json, @must_change_password, @nav_permissions_json)
       `),
       updateUserFull: prepareBare(this.db, `
         UPDATE users SET email=@email, password=@password, role=@role, profile_name=@profile_name,
           created_by=@created_by, created_by_email=@created_by_email, ingest_token=@ingest_token, created_at=@created_at, milesight_ug_json=@milesight_ug_json,
+          eg71_gateway_json=@eg71_gateway_json,
           must_change_password=@must_change_password, nav_permissions_json=@nav_permissions_json
         WHERE id=@id
       `),
@@ -1481,6 +1503,7 @@ class Store {
       ingest_token: user.ingestToken,
       created_at: user.createdAt || new Date().toISOString(),
       milesight_ug_json: user.milesightUgGateway ? JSON.stringify(user.milesightUgGateway) : null,
+      eg71_gateway_json: user.eg71Gateway ? JSON.stringify(user.eg71Gateway) : null,
       must_change_password: user.mustChangePassword ? 1 : 0,
       nav_permissions_json: navJson,
     });
@@ -1517,6 +1540,7 @@ class Store {
       ingest_token: user.ingestToken,
       created_at: user.createdAt || null,
       milesight_ug_json: user.milesightUgGateway ? JSON.stringify(user.milesightUgGateway) : null,
+      eg71_gateway_json: user.eg71Gateway ? JSON.stringify(user.eg71Gateway) : null,
       must_change_password: user.mustChangePassword ? 1 : 0,
       nav_permissions_json: navOut,
     });

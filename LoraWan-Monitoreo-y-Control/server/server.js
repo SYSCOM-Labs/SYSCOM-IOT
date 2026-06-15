@@ -28,6 +28,8 @@ const {
   loginToGateway,
   invalidateJwt,
 } = require('./milesight-ug-gateway-client');
+const eg71GatewayClient = require('./milesight-eg71-gateway-client');
+const registerMilesightEg71GatewayRoutes = require('./milesight-eg71-gateway-routes');
 const {
   publishDownlink,
   publishNsRequestAndWait,
@@ -1090,9 +1092,19 @@ function sanitizeUserRecord(user) {
       hasApiPassword: Boolean(milesightUgGateway.apiPassword),
     };
   }
+  let eg71Gateway = rest.eg71Gateway;
+  if (eg71Gateway && typeof eg71Gateway === 'object') {
+    eg71Gateway = {
+      baseUrl: eg71Gateway.baseUrl || '',
+      apiUsername: eg71Gateway.apiUsername || '',
+      rejectUnauthorized: eg71Gateway.rejectUnauthorized !== false,
+      hasApiPassword: Boolean(eg71Gateway.apiPassword),
+    };
+  }
   return {
     ...rest,
     milesightUgGateway,
+    eg71Gateway,
     mustChangePassword: Boolean(user.mustChangePassword),
     avatarUrl: profileAvatarUrl(user.email),
     nav: navPerm.effectiveNavForUser(user),
@@ -1119,6 +1131,29 @@ const requireMilesightUgGateway = (req, res, next) => {
     });
   }
   req.milesightUgConfig = config;
+  next();
+};
+
+function getEg71GatewayConfig(userId) {
+  const u = store.getUserById(userId);
+  const g = u?.eg71Gateway;
+  if (!g || !String(g.baseUrl || '').trim()) return null;
+  return {
+    baseUrl: eg71GatewayClient.normalizeBaseUrl(g.baseUrl),
+    apiUsername: g.apiUsername != null ? g.apiUsername : 'admin',
+    apiPassword: g.apiPassword != null ? g.apiPassword : '',
+    rejectUnauthorized: g.rejectUnauthorized !== false,
+  };
+}
+
+const requireEg71Gateway = (req, res, next) => {
+  const config = getEg71GatewayConfig(req.user.id);
+  if (!config) {
+    return res.status(400).json({
+      error: 'Configure el gateway EG71 en Ajustes: URL base (https://IP), usuario y contraseña.',
+    });
+  }
+  req.eg71Config = config;
   next();
 };
 
@@ -2755,6 +2790,15 @@ app.put(
   }
 );
 
+// ── Milesight EG71 API (REST + CGI; proxy autenticado) ──
+registerMilesightEg71GatewayRoutes(app, {
+  authMiddleware,
+  navSettingsMiddleware,
+  getEg71GatewayConfig,
+  requireEg71Gateway,
+  eg71: eg71GatewayClient,
+});
+
 // ── UG63 / SG50 MQTT (publicación desde la app; ingesta vía env + mqtt-ingest) ──
 app.get('/api/milesight-mqtt/status', authMiddleware, (req, res) => {
   res.json(getMqttApiStatus());
@@ -3011,6 +3055,26 @@ app.put('/api/users/:id', authMiddleware, (req, res) => {
     row.milesightUgGateway = next;
     invalidateJwt(row.id, ugNormalizeBaseUrl(prevUrl || ''));
     invalidateJwt(row.id, ugNormalizeBaseUrl(next.baseUrl || ''));
+  }
+  if (updates.eg71Gateway !== undefined && (isSelf || canManageDesc || isSuper)) {
+    const cur = row.eg71Gateway || {};
+    const inc = updates.eg71Gateway || {};
+    const prevUrl = cur.baseUrl;
+    const next = {
+      baseUrl: inc.baseUrl != null ? String(inc.baseUrl).trim() : cur.baseUrl || '',
+      apiUsername: inc.apiUsername != null ? String(inc.apiUsername) : cur.apiUsername || 'admin',
+      rejectUnauthorized: inc.rejectUnauthorized !== undefined ? Boolean(inc.rejectUnauthorized) : cur.rejectUnauthorized !== false,
+    };
+    if (inc.apiPassword != null && String(inc.apiPassword) !== '') {
+      next.apiPassword = String(inc.apiPassword);
+    } else if (cur.apiPassword) {
+      next.apiPassword = cur.apiPassword;
+    } else {
+      next.apiPassword = '';
+    }
+    row.eg71Gateway = next;
+    eg71GatewayClient.invalidateTokens(row.id, eg71GatewayClient.normalizeBaseUrl(prevUrl || ''));
+    eg71GatewayClient.invalidateTokens(row.id, eg71GatewayClient.normalizeBaseUrl(next.baseUrl || ''));
   }
   try {
     store.updateUserRecord(row);

@@ -40,6 +40,12 @@
   margin: 0;
 }
 
+.gateways-empty-hint {
+  margin-top: 0.65rem;
+  font-size: 0.82rem;
+  opacity: 0.9;
+}
+
 .gateways-table {
   width: 100%;
   border-collapse: collapse;

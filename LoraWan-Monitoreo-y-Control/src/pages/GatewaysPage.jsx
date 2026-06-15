@@ -177,6 +177,9 @@ const GatewaysPage = () => {
         <div className="table-container glass card">
           <div className="gateways-empty premium-empty-in-card">
             <p>No hay gateways registrados. Pulsa «Añadir gateway» para dar de alta el primero.</p>
+            <p className="gateways-empty-hint">
+              Compatible con UG65/UG63 (Semtech UDP) y EG71. Configure la API del EG71 en Ajustes si administra el gateway por REST/CGI.
+            </p>
           </div>
         </div>
       ) : (

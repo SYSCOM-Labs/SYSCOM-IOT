@@ -476,3 +476,33 @@ body.theme-dark .settings-logo-fallback-label {
 .settings-timezone-save-wrap {
   margin-top: 4px;
 }
+
+.settings-gateway-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 18px;
+  border-radius: 14px;
+}
+
+.settings-gateway-input {
+  width: 100%;
+  max-width: 480px;
+  min-height: 40px;
+  padding: 8px 12px;
+}
+
+.settings-gateway-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  margin-top: 4px;
+}
+
+.settings-gateway-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 8px;
+}
