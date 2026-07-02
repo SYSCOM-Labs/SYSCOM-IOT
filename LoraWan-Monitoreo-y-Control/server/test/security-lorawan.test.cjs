@@ -19,6 +19,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const dgram = require('node:dgram');
+const net = require('node:net');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -37,65 +38,108 @@ function buildPushData(euiHex, jsonStr = '{}') {
   return Buffer.concat([header, mac, Buffer.from(jsonStr, 'utf8')]);
 }
 
-async function bootServer(extraEnv) {
-  const httpPort = 43000 + Math.floor(Math.random() * 1000);
-  const udpPort = 47000 + Math.floor(Math.random() * 1000);
-  const base = `http://127.0.0.1:${httpPort}`;
-  const dbPath = path.join(os.tmpdir(), `syscom-secudp-${httpPort}.db`);
-  if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
-
-  const proc = spawn(process.execPath, ['server/server.js'], {
-    cwd: root,
-    env: {
-      ...process.env,
-      PORT: String(httpPort),
-      SYSCOM_SQLITE_PATH: dbPath,
-      SYSCOM_LNS_MAC: '0',
-      LNS_UDP_PORT: String(udpPort),
-      ...extraEnv,
-    },
-    stdio: ['ignore', 'pipe', 'pipe'],
+// Reserva un puerto TCP libre pidiéndoselo al kernel (bind a :0). Evita las
+// colisiones que provocaba elegir un puerto aleatorio en un rango fijo sin
+// comprobar disponibilidad (causa del flake EADDRINUSE en CI).
+function getFreeTcpPort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
   });
-  let stderr = '';
-  proc.stderr.on('data', (c) => (stderr += c.toString()));
+}
 
-  let ready = false;
-  for (let i = 0; i < 100; i++) {
-    if (proc.exitCode != null) break;
-    try {
-      const r = await fetch(`${base}/api/setup/status`);
-      if (r.ok) {
-        ready = true;
-        break;
-      }
-    } catch {
-      /* ignore */
-    }
-    await wait(100);
-  }
-  return {
-    base,
-    httpPort,
-    udpPort,
-    proc,
-    ready,
-    getStderr: () => stderr,
-    async stop() {
+// Equivalente para UDP (el listener Semtech GWMP).
+function getFreeUdpPort() {
+  return new Promise((resolve, reject) => {
+    const s = dgram.createSocket('udp4');
+    s.once('error', reject);
+    s.bind(0, '127.0.0.1', () => {
+      const { port } = s.address();
+      s.close(() => resolve(port));
+    });
+  });
+}
+
+async function bootServer(extraEnv) {
+  // Aunque los puertos se reservan libres, entre cerrar el socket de reserva y
+  // que el hijo haga bind hay una ventana mínima de carrera; reintentamos si el
+  // proceso muere por puerto ocupado en lugar de fallar el test.
+  const MAX_ATTEMPTS = 4;
+  let srv = null;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const httpPort = await getFreeTcpPort();
+    const udpPort = await getFreeUdpPort();
+    const base = `http://127.0.0.1:${httpPort}`;
+    const dbPath = path.join(os.tmpdir(), `syscom-secudp-${httpPort}.db`);
+    if (fs.existsSync(dbPath)) fs.unlinkSync(dbPath);
+
+    const proc = spawn(process.execPath, ['server/server.js'], {
+      cwd: root,
+      env: {
+        ...process.env,
+        PORT: String(httpPort),
+        SYSCOM_SQLITE_PATH: dbPath,
+        SYSCOM_LNS_MAC: '0',
+        LNS_UDP_PORT: String(udpPort),
+        ...extraEnv,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stderr = '';
+    proc.stderr.on('data', (c) => (stderr += c.toString()));
+
+    let ready = false;
+    for (let i = 0; i < 100; i++) {
+      if (proc.exitCode != null) break;
       try {
-        proc.kill('SIGKILL');
+        const r = await fetch(`${base}/api/setup/status`);
+        if (r.ok) {
+          ready = true;
+          break;
+        }
       } catch {
         /* ignore */
       }
       await wait(100);
-      for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+    }
+
+    srv = {
+      base,
+      httpPort,
+      udpPort,
+      proc,
+      ready,
+      getStderr: () => stderr,
+      async stop() {
         try {
-          if (fs.existsSync(f)) fs.unlinkSync(f);
+          proc.kill('SIGKILL');
         } catch {
           /* ignore */
         }
-      }
-    },
-  };
+        await wait(100);
+        for (const f of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+          try {
+            if (fs.existsSync(f)) fs.unlinkSync(f);
+          } catch {
+            /* ignore */
+          }
+        }
+      },
+    };
+
+    // Si el hijo murió por colisión de puerto, libera y reintenta con puertos nuevos.
+    const portClash = /EADDRINUSE|ya está en uso/i.test(stderr);
+    if (!ready && proc.exitCode != null && portClash && attempt < MAX_ATTEMPTS) {
+      await srv.stop();
+      continue;
+    }
+    return srv;
+  }
+  return srv;
 }
 
 async function jsonReq(base, method, p, { token, body } = {}) {
