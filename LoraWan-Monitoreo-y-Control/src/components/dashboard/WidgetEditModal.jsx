@@ -1163,7 +1163,7 @@ function ModalLivePreviewBlock({
       </div>
     );
   }
-  if (previewDashWidgetId === DASH_WIDGET.SWITCH) {
+  if (previewBaseDashId === DASH_WIDGET.SWITCH) {
     return (
       <div className={shellClassName(previewShellClear)} style={mergedSurface}>
         <SwitchWidgetPreview
@@ -1177,28 +1177,28 @@ function ModalLivePreviewBlock({
       </div>
     );
   }
-  if (previewDashWidgetId === DASH_WIDGET.DOWNLINK) {
+  if (previewBaseDashId === DASH_WIDGET.DOWNLINK) {
     return (
       <div className={shellClassName(previewShellClear)} style={mergedSurface}>
         <DownlinkWidgetPreview key={previewVisualKey} draft={draft} downlinkSelectState={downlinkSelectState} />
       </div>
     );
   }
-  if (previewDashWidgetId === DASH_WIDGET.IMAGE) {
+  if (previewBaseDashId === DASH_WIDGET.IMAGE) {
     return (
       <div className={shellClassName(previewShellClear)} style={mergedSurface}>
         <ImageWidgetPreview key={previewVisualKey} draft={draft} liveProps={previewMergedLiveProps} />
       </div>
     );
   }
-  if (previewDashWidgetId === DASH_WIDGET.MAP) {
+  if (previewBaseDashId === DASH_WIDGET.MAP) {
     return (
       <div className={shellClassName(previewShellClear)} style={mergedSurface}>
         <MapWidgetPreview key={previewVisualKey} draft={draft} liveProps={previewMergedLiveProps} />
       </div>
     );
   }
-  if (previewDashWidgetId === DASH_WIDGET.TRACKING_MAP) {
+  if (previewBaseDashId === DASH_WIDGET.TRACKING_MAP) {
     return (
       <div className={shellClassName(previewShellClear)} style={mergedSurface}>
         <TrackingMapWidgetPreview key={previewVisualKey} />
@@ -1539,11 +1539,12 @@ export default function WidgetEditModal({
     }
     let base = mergeWidgetConfig(sensor, initialConfig);
     const openedWid = dashWidgetIdFromPropertyKey(sensor.propertyKey);
-    if (isDashboardFixedWidgetSensor(sensor) && openedWid === DASH_WIDGET.STREAM) {
+    const openedBaseWid = openedWid ? dashboardWidgetBaseId(openedWid) : null;
+    if (isDashboardFixedWidgetSensor(sensor) && openedBaseWid === DASH_WIDGET.STREAM) {
       base = deepClone(base);
       base.data = ensureStreamSeriesDraftData(base.data || {});
     }
-    if (isDashboardFixedWidgetSensor(sensor) && openedWid === DASH_WIDGET.DOWNLINK) {
+    if (isDashboardFixedWidgetSensor(sensor) && openedBaseWid === DASH_WIDGET.DOWNLINK) {
       base = deepClone(base);
       base.data = ensureDownlinkButtonsDraft(base.data || {});
     }
@@ -1563,17 +1564,23 @@ export default function WidgetEditModal({
     return dashWidgetIdFromPropertyKey(sensor?.propertyKey);
   }, [sensor, fixedDashWidgetId]);
 
+  const previewBaseDashId = useMemo(() => {
+    if (!previewDashWidgetId) return null;
+    return dashboardWidgetBaseId(previewDashWidgetId);
+  }, [previewDashWidgetId]);
+
   const showPanelDevicePicker = useMemo(
     () =>
       bsdDashboardVariant === 'panel' &&
       Array.isArray(panelDeviceSelectOptions) &&
       panelDeviceSelectOptions.length > 0 &&
       Boolean(sensor && isDashboardFixedWidgetSensor(sensor)) &&
-      fixedDashWidgetId &&
-      fixedDashWidgetId !== DASH_WIDGET.PANEL_DEVICE_BAR &&
-      fixedDashWidgetId !== DASH_WIDGET.IMAGE &&
-      fixedDashWidgetId !== DASH_WIDGET.MAP,
-    [bsdDashboardVariant, panelDeviceSelectOptions, sensor, fixedDashWidgetId]
+      previewBaseDashId &&
+      previewBaseDashId !== DASH_WIDGET.PANEL_DEVICE_BAR &&
+      previewBaseDashId !== DASH_WIDGET.IMAGE &&
+      previewBaseDashId !== DASH_WIDGET.MAP &&
+      previewBaseDashId !== DASH_WIDGET.TRACKING_MAP,
+    [bsdDashboardVariant, panelDeviceSelectOptions, sensor, previewBaseDashId]
   );
 
   const previewBoundDeviceId = useMemo(() => {
@@ -1730,7 +1737,7 @@ export default function WidgetEditModal({
     let fk = draft.data?.fieldKey != null ? String(draft.data.fieldKey).trim() : '';
     if (fk.startsWith('__bsd_')) fk = '';
     /** Misma regla que el tablero: el lineal usa `streamSeries[0].fieldKey`, no `__bsd_dw_stream` (no existe en telemetría). */
-    if (fixedDashWidgetId === DASH_WIDGET.STREAM) {
+    if (previewBaseDashId === DASH_WIDGET.STREAM) {
       const series = normalizeStreamSeriesConfig(draft.data);
       const first = series[0]?.fieldKey != null ? String(series[0].fieldKey).trim() : '';
       if (first && !first.startsWith('__bsd_')) fk = first;
@@ -1743,7 +1750,7 @@ export default function WidgetEditModal({
       fk = `__bsd_${fixedDashWidgetId}`;
     }
     return fk;
-  }, [draft.data, sensor, fixedDashWidgetId]);
+  }, [draft.data, sensor, fixedDashWidgetId, previewBaseDashId]);
 
   /** Clave de telemetría de entrada para la fórmula (vista previa); si no hay fórmula activa, coincide con el campo principal. */
   const previewNumericSourceKey = useMemo(() => {
@@ -1865,20 +1872,20 @@ export default function WidgetEditModal({
   }, [effectiveAvailableDataFields, draft.data?.fieldKey, draft.data?.formulaSourceKey]);
 
   const showDownlinkDataSection =
-    previewDashWidgetId === DASH_WIDGET.SWITCH || previewDashWidgetId === DASH_WIDGET.DOWNLINK;
+    previewBaseDashId === DASH_WIDGET.SWITCH || previewBaseDashId === DASH_WIDGET.DOWNLINK;
 
-  const showStreamDataSection = previewDashWidgetId === DASH_WIDGET.STREAM;
+  const showStreamDataSection = previewBaseDashId === DASH_WIDGET.STREAM;
 
-  const showBarChartSection = previewDashWidgetId === DASH_WIDGET.BAR_CHART;
+  const showBarChartSection = previewBaseDashId === DASH_WIDGET.BAR_CHART;
 
-  const showTextWidgetSection = previewDashWidgetId === DASH_WIDGET.TEXT;
-  const showVeletaWidgetSection = dashboardWidgetBaseId(previewDashWidgetId) === DASH_WIDGET.VEleta;
+  const showTextWidgetSection = previewBaseDashId === DASH_WIDGET.TEXT;
+  const showVeletaWidgetSection = previewBaseDashId === DASH_WIDGET.VEleta;
 
-  const showImageDataSection = previewDashWidgetId === DASH_WIDGET.IMAGE;
+  const showImageDataSection = previewBaseDashId === DASH_WIDGET.IMAGE;
 
-  const showMapDataSection = previewDashWidgetId === DASH_WIDGET.MAP;
+  const showMapDataSection = previewBaseDashId === DASH_WIDGET.MAP;
 
-  const showTrackingMapDataSection = previewDashWidgetId === DASH_WIDGET.TRACKING_MAP;
+  const showTrackingMapDataSection = previewBaseDashId === DASH_WIDGET.TRACKING_MAP;
 
   const hideGaugeForWidget =
     showDownlinkDataSection ||
@@ -1911,22 +1918,22 @@ export default function WidgetEditModal({
     const circ = normalizeIndicatorType(draft.gauge?.indicatorType) === 'circular';
     return (
       circ ||
-      previewDashWidgetId === DASH_WIDGET.SATISFACTION ||
-      previewDashWidgetId === DASH_WIDGET.CONTAINER ||
-      previewDashWidgetId === DASH_WIDGET.BATTERY_LEVEL ||
-      previewDashWidgetId === DASH_WIDGET.METRIC_CIRCULAR
+      previewBaseDashId === DASH_WIDGET.SATISFACTION ||
+      previewBaseDashId === DASH_WIDGET.CONTAINER ||
+      previewBaseDashId === DASH_WIDGET.BATTERY_LEVEL ||
+      previewBaseDashId === DASH_WIDGET.METRIC_CIRCULAR
     );
-  }, [draft.gauge?.indicatorType, previewDashWidgetId]);
+  }, [draft.gauge?.indicatorType, previewBaseDashId]);
 
   const visibleTabs = useMemo(() => {
     let tabs = tabsForScope(editScope);
     if (hideGaugeForWidget) tabs = tabs.filter((t) => t.id !== 'gauge');
     if (hideFormulaTabForWidget) tabs = tabs.filter((t) => t.id !== 'formula');
-    if (previewDashWidgetId === DASH_WIDGET.IMAGE || previewDashWidgetId === DASH_WIDGET.MAP) {
+    if (previewBaseDashId === DASH_WIDGET.IMAGE || previewBaseDashId === DASH_WIDGET.MAP) {
       tabs = tabs.filter((t) => t.id !== 'data');
     }
     return tabs;
-  }, [editScope, hideGaugeForWidget, hideFormulaTabForWidget, previewDashWidgetId]);
+  }, [editScope, hideGaugeForWidget, hideFormulaTabForWidget, previewBaseDashId]);
 
   /** Panel Control: [Básicos] [Dispositivo ▼] [Datos] […] según tipo (Imagen/Mapa: sin dispositivo ni Datos). */
   const panelToolbarTabs = useMemo(() => {
@@ -1976,7 +1983,7 @@ export default function WidgetEditModal({
     return [...set].filter((k) => !q || k.toLowerCase().includes(q)).sort((a, b) => a.localeCompare(b));
   }, [effectiveAvailableDataFields, draft.data?.streamSeries, fieldSearch]);
 
-  const showSensorGridPreview = previewDashWidgetId === DASH_WIDGET.SENSOR_GRID;
+  const showSensorGridPreview = previewBaseDashId === DASH_WIDGET.SENSOR_GRID;
 
   /** Valores para la regla de fondo (misma lógica que el tablero: etiqueta en pantalla + escalar crudo en widget Texto). */
   const previewConditionalSources = useMemo(() => {
@@ -1987,7 +1994,7 @@ export default function WidgetEditModal({
       return { primary: fallback, alternate: undefined };
     }
     const cfg = draft;
-    if (previewDashWidgetId === DASH_WIDGET.TEXT) {
+    if (previewBaseDashId === DASH_WIDGET.TEXT) {
       const scalar = resolveTextWidgetRawScalar(previewMergedLiveProps, key, cfg);
       if (scalar !== undefined && scalar !== null) {
         if (previewLiveDeviceModel) {
@@ -2043,11 +2050,6 @@ export default function WidgetEditModal({
     () => isWidgetBackgroundTransparent(previewEffectiveAppearance),
     [previewEffectiveAppearance]
   );
-
-  const previewBaseDashId = useMemo(() => {
-    if (!previewDashWidgetId) return null;
-    return dashboardWidgetBaseId(previewDashWidgetId);
-  }, [previewDashWidgetId]);
 
   const previewCardFieldKey = useMemo(() => {
     const fk = String(draft.data?.fieldKey ?? '').trim();
@@ -2156,17 +2158,18 @@ export default function WidgetEditModal({
   const handleSave = () => {
     const cfg = deepClone(draft);
     const dashWid = isDashboardFixedWidgetSensor(sensor) ? dashWidgetIdFromPropertyKey(sensor.propertyKey) : null;
-    if (dashWid === DASH_WIDGET.STREAM) {
+    const dashBaseWid = dashWid ? dashboardWidgetBaseId(dashWid) : null;
+    if (dashBaseWid === DASH_WIDGET.STREAM) {
       cfg.data = ensureStreamSeriesDraftData(cfg.data || {});
       const rows = cfg.data?.streamSeries;
       if (Array.isArray(rows) && rows[0]?.fieldKey) {
         cfg.data.fieldKey = String(rows[0].fieldKey).trim();
       }
     }
-    if (dashWid === DASH_WIDGET.DOWNLINK) {
+    if (dashBaseWid === DASH_WIDGET.DOWNLINK) {
       cfg.data = normalizeDownlinkButtonsForSave(cfg.data || {});
     }
-    if (dashWid === DASH_WIDGET.MAP) {
+    if (dashBaseWid === DASH_WIDGET.MAP) {
       cfg.data = cfg.data || {};
       const lat = toFloatCoord(cfg.data.savedLatitude);
       const lng = toFloatCoord(cfg.data.savedLongitude);
@@ -2178,7 +2181,7 @@ export default function WidgetEditModal({
         cfg.data.savedLongitude = '';
       }
     }
-    if (dashWid === DASH_WIDGET.TRACKING_MAP) {
+    if (dashBaseWid === DASH_WIDGET.TRACKING_MAP) {
       cfg.data = cfg.data || {};
       const tr = String(cfg.data.trackingTimeRange || '').toLowerCase();
       cfg.data.trackingTimeRange = tr === 'week' || tr === 'month' ? tr : 'day';
@@ -2188,7 +2191,7 @@ export default function WidgetEditModal({
       delete cfg.data.longitudeKey;
       delete cfg.data.historyKey;
     }
-    if (dashWid === DASH_WIDGET.IMAGE) {
+    if (dashBaseWid === DASH_WIDGET.IMAGE) {
       cfg.data = cfg.data || {};
       cfg.data.staticImageUrl = String(cfg.data.staticImageUrl ?? '').trim();
     }
@@ -2347,10 +2350,10 @@ export default function WidgetEditModal({
                   onChange={(e) => update('basics.title', e.target.value)}
                 />
               </label>
-              {previewDashWidgetId === DASH_WIDGET.IMAGE && (
+              {previewBaseDashId === DASH_WIDGET.IMAGE && (
                 <ImageWidgetBasicsImageSource draft={draft} setDraft={setDraft} />
               )}
-              {previewDashWidgetId === DASH_WIDGET.MAP && (
+              {previewBaseDashId === DASH_WIDGET.MAP && (
                 <MapWidgetBasicsCoords draft={draft} setDraft={setDraft} />
               )}
               {editScope === 'value' && (
@@ -2452,13 +2455,13 @@ export default function WidgetEditModal({
                 <div className="widget-edit-downlink-block">
                   <label className="widget-edit-label">Downlinks del dispositivo</label>
                   <p className="widget-edit-hint">
-                    {previewDashWidgetId === DASH_WIDGET.SWITCH
+                    {previewBaseDashId === DASH_WIDGET.SWITCH
                       ? 'Los mismos que en Dispositivos → acciones → Downlink. Asigna qué HEX envía cada posición del interruptor.'
                       : 'Los mismos que en Dispositivos → acciones → Downlink. Cada fila es un botón en el tablero; la etiqueta es opcional (si la dejas vacía, se usa el nombre del comando).'}
                   </p>
                   {!downlinkSelectState.dlList.length ? (
                     <p className="widget-edit-hint">Aún no hay downlinks guardados para este dispositivo.</p>
-                  ) : previewDashWidgetId === DASH_WIDGET.SWITCH ? (
+                  ) : previewBaseDashId === DASH_WIDGET.SWITCH ? (
                     <>
                       <label className="widget-edit-label widget-edit-label--mt">
                         Comando al encender (OFF → ON)
@@ -2975,7 +2978,7 @@ export default function WidgetEditModal({
                       }}
                     />
                   </label>
-                  {previewDashWidgetId === DASH_WIDGET.METRIC_CIRCULAR && (
+                  {previewBaseDashId === DASH_WIDGET.METRIC_CIRCULAR && (
                     <>
                       <label className="widget-edit-label">
                         Subtítulo (debajo del valor)
@@ -3000,7 +3003,7 @@ export default function WidgetEditModal({
                       </label>
                     </>
                   )}
-                  {previewDashWidgetId === DASH_WIDGET.BAR_CHART && (
+                  {previewBaseDashId === DASH_WIDGET.BAR_CHART && (
                     <>
                       <p className="widget-edit-hint">
                         Hora = últimos 60 minutos; Día = 24 barras por hora; Semana = 7 días; Mes = 30 días. Los botones
@@ -3244,7 +3247,7 @@ export default function WidgetEditModal({
                   </div>
                 ) : null}
               </div>
-              {previewDashWidgetId === DASH_WIDGET.DOWNLINK && (
+              {previewBaseDashId === DASH_WIDGET.DOWNLINK && (
                 <div className="widget-edit-downlink-appearance">
                   <p className="widget-edit-hint widget-edit-hint--preset">
                     Fondo opcional por botón. El texto usa el color del título; si no hay contraste suficiente sobre el
@@ -3350,7 +3353,7 @@ export default function WidgetEditModal({
                   />
                 </label>
               </div>
-              {previewDashWidgetId === DASH_WIDGET.CONTAINER && showInverseGaugeOption ? (
+              {previewBaseDashId === DASH_WIDGET.CONTAINER && showInverseGaugeOption ? (
                 <div className="widget-edit-container-gauge-options">
                   <label className="widget-edit-label widget-edit-label--inline widget-edit-lorawan-toggle">
                     <input

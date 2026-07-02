@@ -328,6 +328,12 @@ export function dashWidgetIdFromPropertyKey(propertyKey) {
   return s.slice(6) || null;
 }
 
+/** Tipo base del widget (`dw_image`, etc.) a partir de `propertyKey` (`__bsd_dw_image__…`). */
+export function dashWidgetBaseIdFromPropertyKey(propertyKey) {
+  const slotId = dashWidgetIdFromPropertyKey(propertyKey);
+  return slotId ? dashboardWidgetBaseId(slotId) : null;
+}
+
 /** @param {Record<string, unknown> | null | undefined} sensor */
 export function isDashboardFixedWidgetSensor(sensor) {
   return Boolean(sensor?.sourceDeviceId === 'dashboard' && dashWidgetIdFromPropertyKey(sensor?.propertyKey));
@@ -1500,18 +1506,17 @@ export function applyWidgetPresetToDraft(draft, presetId) {
 /** @returns {Record<string, unknown>} */
 export function defaultWidgetConfig(sensor) {
   const pk = sensor.propertyKey || 'value';
-  const isMetricCircular = pk === `__bsd_${DASH_WIDGET.METRIC_CIRCULAR}`;
-  const isContainerWidget = pk === `__bsd_${DASH_WIDGET.CONTAINER}`;
-  const isBatteryLevelWidget = pk === `__bsd_${DASH_WIDGET.BATTERY_LEVEL}`;
-  const isStreamChart = pk === `__bsd_${DASH_WIDGET.STREAM}`;
-  const isBarChart = pk === `__bsd_${DASH_WIDGET.BAR_CHART}`;
-  const isTextWidget =
-    pk === `__bsd_${DASH_WIDGET.TEXT}` || String(pk).startsWith(`__bsd_${DASH_WIDGET.TEXT}__`);
-  const isVeletaWidget =
-    pk === `__bsd_${DASH_WIDGET.VEleta}` || String(pk).startsWith(`__bsd_${DASH_WIDGET.VEleta}__`);
-  const isImageWidget = pk === `__bsd_${DASH_WIDGET.IMAGE}`;
-  const isMapWidget = pk === `__bsd_${DASH_WIDGET.MAP}`;
-  const isTrackingMapWidget = pk === `__bsd_${DASH_WIDGET.TRACKING_MAP}`;
+  const dashBase = dashWidgetBaseIdFromPropertyKey(pk);
+  const isMetricCircular = dashBase === DASH_WIDGET.METRIC_CIRCULAR;
+  const isContainerWidget = dashBase === DASH_WIDGET.CONTAINER;
+  const isBatteryLevelWidget = dashBase === DASH_WIDGET.BATTERY_LEVEL;
+  const isStreamChart = dashBase === DASH_WIDGET.STREAM;
+  const isBarChart = dashBase === DASH_WIDGET.BAR_CHART;
+  const isTextWidget = dashBase === DASH_WIDGET.TEXT;
+  const isVeletaWidget = dashBase === DASH_WIDGET.VEleta;
+  const isImageWidget = dashBase === DASH_WIDGET.IMAGE;
+  const isMapWidget = dashBase === DASH_WIDGET.MAP;
+  const isTrackingMapWidget = dashBase === DASH_WIDGET.TRACKING_MAP;
   const baseMax =
     typeof sensor.threshold === 'number' && sensor.threshold > 0
       ? Math.max(sensor.threshold * 1.2, sensor.value * 1.1 || sensor.threshold)
