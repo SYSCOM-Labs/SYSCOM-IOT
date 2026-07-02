@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useCallback, useRef, useEffect } from 'react';
 import './DeviceList.css';
 import '../styles/premiumPageShell.css';
-import { Plus, Pencil, Trash2, X, Layers, Wand2, Upload, Download } from 'lucide-react';
+import { Plus, Pencil, Trash2, X, Layers, Wand2, Upload, Download, Search } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import {
   getDeviceTemplates,
@@ -69,6 +69,7 @@ const TemplatesPage = () => {
   const [templateSyncLabel, setTemplateSyncLabel] = useState('');
   /** Avisos de la página (guardar, importar, «Ajustar»): modal Syscom, sin `alert` nativo. */
   const [templatesNoticeModal, setTemplatesNoticeModal] = useState(() => initialTemplatesNotice());
+  const [templateSearchQuery, setTemplateSearchQuery] = useState('');
   const closeTemplatesNotice = () => setTemplatesNoticeModal(initialTemplatesNotice());
 
   const refresh = useCallback(() => {
@@ -448,6 +449,25 @@ const TemplatesPage = () => {
     [templates]
   );
 
+  const filteredSorted = useMemo(() => {
+    const q = templateSearchQuery.trim().toLowerCase();
+    if (!q) return sorted;
+    return sorted.filter(
+      (t) =>
+        String(t.modelo || '')
+          .toLowerCase()
+          .includes(q) ||
+        String(t.marca || '')
+          .toLowerCase()
+          .includes(q)
+    );
+  }, [sorted, templateSearchQuery]);
+
+  const templateCountLabel =
+    templateSearchQuery.trim() && filteredSorted.length !== sorted.length
+      ? `${filteredSorted.length} de ${sorted.length}`
+      : String(sorted.length);
+
   const saveBlockedByDecoder =
     Boolean(String(form.decoderScript || '').trim()) &&
     form.decoderScript !== decoderSnapshot &&
@@ -486,8 +506,27 @@ const TemplatesPage = () => {
         <div className="device-page-header-titles">
           <h1>
             <Layers size={26} className="premium-hero-title-icon" aria-hidden />
-            <span className="premium-hero-title-text">Plantillas de dispositivo ({sorted.length})</span>
+            <span className="premium-hero-title-text">Plantillas de dispositivo ({templateCountLabel})</span>
           </h1>
+        </div>
+        <div className="templates-header-search">
+          <label className="templates-search-field templates-header-search__label">
+            <Search size={18} className="templates-search-field__icon" strokeWidth={2.25} aria-hidden />
+            <input
+              id="templates-header-search"
+              name="templates-header-search"
+              type="text"
+              inputMode="search"
+              enterKeyHint="search"
+              className="templates-search-field__input"
+              placeholder="Buscar por marca o modelo…"
+              value={templateSearchQuery}
+              onChange={(e) => setTemplateSearchQuery(e.target.value)}
+              aria-label="Filtrar plantillas por marca o modelo"
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </label>
         </div>
         <div className="premium-header-actions">
           <input
@@ -522,6 +561,10 @@ const TemplatesPage = () => {
         <div className="device-table-scroll">
         {sorted.length === 0 ? (
           <div className="templates-empty premium-empty-in-card">No hay plantillas. Crea la primera con el botón superior.</div>
+        ) : filteredSorted.length === 0 ? (
+          <div className="templates-empty premium-empty-in-card">
+            No hay plantillas que coincidan con «{templateSearchQuery.trim()}». Prueba con otra marca o modelo.
+          </div>
         ) : (
           <table className="premium-data-table templates-table">
             <thead>
@@ -541,7 +584,7 @@ const TemplatesPage = () => {
               </tr>
             </thead>
             <tbody>
-              {sorted.map((t) => (
+              {filteredSorted.map((t) => (
                 <tr
                   key={t.id}
                   className="templates-table-row templates-table-row--clickable"

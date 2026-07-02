@@ -15,7 +15,7 @@ function defaultLorawanClassForModelo(modelo) {
   const m = String(modelo || '')
     .trim()
     .toUpperCase();
-  if (m === 'WT201' || m === 'WS501') return 'C';
+  if (m === 'WT201' || m === 'WS501' || m === 'UC701') return 'C';
   return 'A';
 }
 

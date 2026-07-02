@@ -12,6 +12,8 @@ import { TIMEWAVE_DECODER_SCRIPT } from './timewaveDecoderScript.js';
 import { VS133_DECODER_SCRIPT } from './vs133DecoderScript.js';
 import { WT201_DOWNLINK_PRESETS } from './wt201DownlinkPresets.js';
 import { WT201_DECODER_SCRIPT } from './wt201DecoderScript.js';
+import { UC701_DOWNLINK_PRESETS } from './uc701DownlinkPresets.js';
+import { UC701_DECODER_SCRIPT } from './uc701DecoderScript.js';
 
 const EASTRON_DECODER_SCRIPT = `
 function decodeUplink(input) {
@@ -123,6 +125,15 @@ export const SEED_DEVICE_TEMPLATES = [
     lorawanClass: 'C',
     decoderScript: WT201_DECODER_SCRIPT,
     downlinks: WT201_DOWNLINK_PRESETS,
+  },
+  {
+    modelo: 'UC701',
+    marca: 'Milesight',
+    channel: '85',
+    /** Controlador minisplit LoRaWAN: clase C para downlink inmediato. */
+    lorawanClass: 'C',
+    decoderScript: UC701_DECODER_SCRIPT,
+    downlinks: UC701_DOWNLINK_PRESETS,
   },
   {
     modelo: 'WS101',
