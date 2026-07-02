@@ -46,10 +46,36 @@ jobs:
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
         run: |
+          set -euo pipefail
           mkdir -p ~/.ssh
-          echo "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+          if [ -z "${DEPLOY_HOST:-}" ]; then
+            echo "❌ El secret DEPLOY_HOST está vacío. Configúralo en Settings → Secrets → Actions."
+            exit 1
+          fi
+
+          # ssh-keyscan con reintentos y timeout explícito. NO ocultamos stderr:
+          # si el host es inalcanzable (instancia apagada, IP cambiada o puerto 22
+          # cerrado) queremos ver la causa real en el log en vez de un exit 1 mudo.
+          ok=0
+          for i in 1 2 3; do
+            if ssh-keyscan -T 10 -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/tmp/keyscan.err \
+               && [ -s ~/.ssh/known_hosts ]; then
+              ok=1; break
+            fi
+            echo "⚠️  Intento $i: ssh-keyscan no obtuvo claves de $DEPLOY_HOST"
+            cat /tmp/keyscan.err || true
+            sleep 5
+          done
+          if [ "$ok" != "1" ]; then
+            echo "❌ No se pudo alcanzar $DEPLOY_HOST en el puerto 22 por SSH."
+            echo "   Verifica que la instancia Lightsail esté encendida, que el puerto 22/TCP"
+            echo "   esté abierto en el firewall y que el secret DEPLOY_HOST apunte a la"
+            echo "   IP/hostname actual (una IP estática evita que cambie al reiniciar)."
+            exit 1
+          fi
 
       - name: Subir código + dist al servidor (rsync)
         run: |
