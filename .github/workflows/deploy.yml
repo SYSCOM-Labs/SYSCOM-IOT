@@ -1,0 +1,119 @@
+name: Deploy a producción
+
+# Auto-deploy: cada push a main reconstruye el frontend en el runner self-hosted,
+# sube el código + dist/ por rsync al servidor (DEPLOY_HOST) y reinicia el servicio systemd.
+# Runner: máquina propia etiquetada [self-hosted, Linux, X64, iot]; el deploy es remoto vía SSH.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'LoraWan-Monitoreo-y-Control/**'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch: {}   # permite lanzarlo a mano desde la pestaña Actions
+
+# Evita que dos deploys corran a la vez (pero no cancela uno en curso)
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: LoraWan-Monitoreo-y-Control
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, Linux, X64, iot]
+    env:
+      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configurar Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: LoraWan-Monitoreo-y-Control/package-lock.json
+
+      - name: Instalar dependencias (incluye dev para compilar)
+        run: npm ci
+
+      - name: Compilar frontend (vite build -> dist/)
+        run: npm run build
+
+      - name: Validar secrets y preparar llave SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+
+          for var in DEPLOY_HOST DEPLOY_USER DEPLOY_SSH_KEY; do
+            if [ -z "${!var:-}" ]; then
+              echo "❌ El secret $var está vacío. Configúralo en Settings → Secrets → Actions."
+              exit 1
+            fi
+          done
+
+          # $RUNNER_TEMP se limpia al terminar el job: en un runner self-hosted
+          # (persistente) la llave privada no debe quedar en el home del usuario.
+          SSH_DIR="$RUNNER_TEMP/ssh"
+          mkdir -p "$SSH_DIR"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$SSH_DIR/deploy_key"
+          chmod 600 "$SSH_DIR/deploy_key"
+          echo "SSH_DIR=$SSH_DIR" >> "$GITHUB_ENV"
+
+          # ssh-keyscan con reintentos y timeout explícito. NO ocultamos stderr:
+          # si el host es inalcanzable (servidor apagado, IP cambiada o puerto 22
+          # cerrado) queremos ver la causa real en el log en vez de un exit 1 mudo.
+          ok=0
+          for i in 1 2 3; do
+            if ssh-keyscan -T 10 -H "$DEPLOY_HOST" >> "$SSH_DIR/known_hosts" 2>"$RUNNER_TEMP/keyscan.err" \
+               && [ -s "$SSH_DIR/known_hosts" ]; then
+              ok=1; break
+            fi
+            echo "⚠️  Intento $i: ssh-keyscan no obtuvo claves de $DEPLOY_HOST"
+            cat "$RUNNER_TEMP/keyscan.err" || true
+            sleep 5
+          done
+          if [ "$ok" != "1" ]; then
+            echo "❌ No se pudo alcanzar $DEPLOY_HOST en el puerto 22 por SSH."
+            echo "   Verifica que el servidor esté encendido, que el puerto 22/TCP esté"
+            echo "   abierto en el firewall y que el secret DEPLOY_HOST apunte a la"
+            echo "   IP/hostname actual (una IP estática evita que cambie al reiniciar)."
+            exit 1
+          fi
+
+      - name: Subir código + dist al servidor (rsync)
+        run: |
+          rsync -az --delete \
+            --exclude 'node_modules/' \
+            --exclude '.git/' \
+            --exclude '.env' --exclude '.env.*' \
+            --exclude 'server/data/' \
+            --exclude '*.db' --exclude '*.db-shm' --exclude '*.db-wal' \
+            --exclude 'server/db.json' \
+            --exclude 'tmp/' \
+            --rsync-path="sudo rsync" \
+            -e "ssh -i $SSH_DIR/deploy_key -o UserKnownHostsFile=$SSH_DIR/known_hosts -o StrictHostKeyChecking=yes" \
+            ./ "$DEPLOY_USER@$DEPLOY_HOST:/opt/syscom-iot/app/"
+
+      - name: Instalar deps de runtime y reiniciar servicio
+        run: |
+          ssh -i "$SSH_DIR/deploy_key" -o UserKnownHostsFile="$SSH_DIR/known_hosts" -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+          sudo chown -R syscom:syscom /opt/syscom-iot/app
+          cd /opt/syscom-iot/app
+          sudo -u syscom -H npm ci --omit=dev
+          sudo systemctl restart syscom-iot
+          sleep 3
+          if systemctl is-active --quiet syscom-iot; then
+            echo "✅ syscom-iot activo"
+          else
+            echo "❌ syscom-iot no arrancó; últimas líneas de log:"
+            journalctl -u syscom-iot -n 40 --no-pager
+            exit 1
+          fi
+          REMOTE

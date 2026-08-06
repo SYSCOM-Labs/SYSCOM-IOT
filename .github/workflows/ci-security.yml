@@ -14,13 +14,21 @@ on:
       - '.github/workflows/ci-security.yml'
   workflow_dispatch: {}
 
+# Evita ejecuciones solapadas en el runner self-hosted (persistente, no efímero)
+concurrency:
+  group: ci-security-${{ github.ref }}
+  cancel-in-progress: true
+
 defaults:
   run:
     working-directory: LoraWan-Monitoreo-y-Control
 
 jobs:
   security:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, iot]
+    # En runners self-hosted NO se ejecuta código de PRs de forks: un PR externo
+    # correría código arbitrario dentro de nuestra infraestructura.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout
         uses: actions/checkout@v4
