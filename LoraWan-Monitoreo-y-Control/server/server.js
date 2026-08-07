@@ -2389,14 +2389,23 @@ app.post('/api/auth/check-email', loginRateLimit, (req, res) => {
   });
 });
 
+// Hash bcrypt (coste 10) de formato válido contra el que se compara cuando el
+// correo NO existe: iguala el tiempo de respuesta y evita enumerar usuarios
+// por timing (antes: ~0 ms si no existía, ~130 ms si existía).
+const LOGIN_DUMMY_BCRYPT_HASH = '$2a$10$C6UzMDM.H6dfI/f/IKcEeO7ZDZR9qHhJGkZhPGhNQDmJCGvvH9qLi';
+
 app.post('/api/auth/login', loginRateLimit, (req, res) => {
   metrics.inc('login_attempt');
-  const { email: rawEmail, password } = req.body || {};
+  const { email: rawEmail, password: rawPassword } = req.body || {};
   const email = String(rawEmail || '')
     .trim()
     .toLowerCase();
+  // Coerción defensiva: bcryptjs lanza con tipos no string, lo que devolvía
+  // 500 con correos válidos y permitía enumerarlos por código de estado.
+  const password = typeof rawPassword === 'string' ? rawPassword : '';
   const user = store.getUserByEmail(email);
   if (!user) {
+    bcrypt.compareSync(password, LOGIN_DUMMY_BCRYPT_HASH); // siempre false; iguala timing
     metrics.inc('login_fail');
     return res.status(401).json({ error: 'Correo o contraseña incorrectos' });
   }
