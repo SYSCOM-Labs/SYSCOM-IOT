@@ -170,7 +170,7 @@ Comprobar motor sin sesión web: `node scripts/health-platform.mjs` o `GET /api/
 
 Si el front se construye para **otro host** que el de la API, definid `VITE_API_BASE` en el momento del build (debe terminar en `/api`); detalle en comentarios de `src/config/apiBase.js` y `.env.example`.
 
-Despliegue en **AWS EC2** (systemd, Nginx, SQLite, UDP): [docs/DEPLOY-AWS-EC2.md](./docs/DEPLOY-AWS-EC2.md). **Windows 24/7**: [docs/DEPLOY-WINDOWS.md](./docs/DEPLOY-WINDOWS.md). **Render** u otros PaaS HTTP: [docs/DEPLOY-RENDER.md](./docs/DEPLOY-RENDER.md). Unidad **systemd** de ejemplo: [deploy/ec2/README.md](./deploy/ec2/README.md).
+Despliegue en **AWS EC2** (systemd, Nginx, SQLite, UDP): [docs/DEPLOY-AWS-EC2.md](./docs/DEPLOY-AWS-EC2.md). **Producción actual (iot.syscom.mx, servidor propio)**: [docs/DEPLOY-IOT-SYSCOM-MX.md](./docs/DEPLOY-IOT-SYSCOM-MX.md). **Windows 24/7**: [docs/DEPLOY-WINDOWS.md](./docs/DEPLOY-WINDOWS.md). **Render** u otros PaaS HTTP: [docs/DEPLOY-RENDER.md](./docs/DEPLOY-RENDER.md). Unidad **systemd** de ejemplo: [deploy/ec2/README.md](./deploy/ec2/README.md).
 
 Obligatoriedad referida a **entorno de producción** típico (`NODE_ENV=production`). El listado exhaustivo está en [`.env.example`](./.env.example).
 

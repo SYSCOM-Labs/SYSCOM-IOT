@@ -49,7 +49,8 @@ LockPersonality=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 # Con ProtectSystem=strict el FS queda de solo lectura salvo estas rutas.
 # Ajuste a la ubicación real de SYSCOM_SQLITE_PATH y del dist/ si difiere.
-ReadWritePaths=/opt/syscom-iot
+# (/var/lib/syscom-iot es la ruta de SQLite recomendada en docs/DEPLOY-AWS-EC2.md)
+ReadWritePaths=/opt/syscom-iot /var/lib/syscom-iot
 
 [Install]
 WantedBy=multi-user.target
