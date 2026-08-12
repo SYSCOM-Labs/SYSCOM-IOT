@@ -1936,7 +1936,19 @@ function createLorawanLnsEngine(ctx) {
     const prevImme = Boolean(tx.imme);
 
     if (joinAccept) {
-      applyJoinAcceptTxpkSchedule(tx, session, tmstBase, rxpkStub, isUs);
+      /**
+       * El Join-Accept debe anclarse al `tmst` del Join Request, no al último RX del gateway.
+       * `resolveTmstBaseForGw` elige el RX más reciente del concentrador; con radio vecina / TTN
+       * eso desplaza RX1 y el nodo nunca completa OTAA → listado «Solo join LoRaWAN».
+       */
+      const joinTmst = Number(session.lastRxTmst) > 0 ? Number(session.lastRxTmst) >>> 0 : 0;
+      const joinRxpk = {
+        ...rxpkStub,
+        tmst: joinTmst || rxpkStub.tmst,
+        freq: session.lastRxFreq != null ? session.lastRxFreq : rxpkStub.freq,
+        datr: session.lastRxDatr || rxpkStub.datr,
+      };
+      applyJoinAcceptTxpkSchedule(tx, session, joinTmst, joinRxpk, isUs);
       if (String(process.env.SYSCOM_LNS_LOG_DOWNLINK_SCHEDULE || '').trim() === '1') {
         const changed = prevTmst !== tx.tmst || prevImme !== Boolean(tx.imme);
         if (changed) {
@@ -2051,6 +2063,7 @@ function createLorawanLnsEngine(ctx) {
     normalizeDeviceClass,
     handleTxAck,
     refreshPullRespJsonBeforeSend,
+    noteGwRxActivity,
   };
 }
 

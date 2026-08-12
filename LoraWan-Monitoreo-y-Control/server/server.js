@@ -39,7 +39,6 @@ const { store, readLnsTxAckPruneSilenceMs } = require('./store');
 const navPerm = require('./navPermissions');
 const { flattenTelemetryProps } = require('./lib/telemetryPayloadUtils');
 const {
-  hasDecodedPeopleCountTelemetry,
   needsMergedTelemetryForList,
   applyVs133TelemetryAliases,
 } = require('./lib/vs133-telemetry-aliases');
@@ -57,9 +56,9 @@ const { mountYahooAuthRoutes } = require('./yahoo-auth-routes');
 const { mountOAuthProvidersConfig } = require('./oauth-providers-config');
 const {
   resolveCommsStaleOfflineMs,
-  resolveAppUplinkStaleMs,
   isLastDbIngestStale,
 } = require('./comms-stale-policy');
+const { joinOnlyTelemetryHint, inferFreshOnlineConnectStatus } = require('./lib/device-connect-status-infer');
 
 const realtimeSseContract = require(path.join(__dirname, '..', 'shared', 'realtime-sse-contract.json'));
 
@@ -182,6 +181,12 @@ const LEGACY_ADMIN_SECRET = String(process.env.SYSCOM_LEGACY_ADMIN_SECRET || '')
  * CORS: en desarrollo por defecto `*`. En producción use SYSCOM_CORS_ORIGINS (lista separada por comas) o `*` explícito.
  * Peticiones sin cabecera Origin (gateways, curl) se aceptan cuando hay lista explícita.
  */
+const CAPACITOR_MOBILE_ORIGINS = [
+  'capacitor://localhost',
+  'http://localhost',
+  'https://localhost',
+];
+
 function buildCorsOptions() {
   const raw = process.env.SYSCOM_CORS_ORIGINS;
   const trimmed = raw != null ? String(raw).trim() : '';
@@ -191,6 +196,9 @@ function buildCorsOptions() {
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean);
+    for (const o of CAPACITOR_MOBILE_ORIGINS) {
+      if (!allowed.includes(o)) allowed.push(o);
+    }
     return {
       origin(origin, callback) {
         if (!origin) return callback(null, true);
@@ -294,8 +302,6 @@ const RETENTION_MS =
   parseInt(process.env.SYSCOM_TELEMETRY_RETENTION_MS, 10) || 365 * 24 * 60 * 60 * 1000;
 /** Misma ventana que gateways: sin nueva ingesta en BD → OFFLINE (ver `comms-stale-policy.js`). */
 const COMMS_STALE_OFFLINE_MS = resolveCommsStaleOfflineMs();
-/** Sin payload de aplicación reciente → no «En línea» aunque haya joins OTAA (p. ej. WT201 cada 1 min). */
-const APP_UPLINK_STALE_MS = resolveAppUplinkStaleMs();
 
 /**
  * FPort LoRaWAN para downlinks de aplicación.
@@ -638,16 +644,6 @@ function normalizeDevIdKey(s) {
   return String(s || '').replace(/[^0-9a-fA-F]/gi, '').toLowerCase();
 }
 
-/** Telemetría generada por el LNS al encolar Join-Accept (sin payload de aplicación / conteo). */
-function joinOnlyTelemetryHint(properties) {
-  if (!properties || typeof properties !== 'object') return null;
-  if (hasDecodedPeopleCountTelemetry(properties)) return null;
-  const ev = properties.lorawan_event != null ? String(properties.lorawan_event).trim() : '';
-  if (!ev || !/join/i.test(ev)) return null;
-  const hex = properties.payload_hex != null ? String(properties.payload_hex).trim() : '';
-  if (hex.length > 0) return null;
-  return 'Solo join LoRaWAN (sin uplink de aplicación reciente). Espere el próximo reporte del sensor o revise intervalo de envío en el equipo.';
-}
 
 /** Fila del listado de dispositivos con telemetría fusionada y `ingestStatus` coherente. */
 function mapDeviceListTelemetryRow(t, resolveName) {
@@ -716,64 +712,6 @@ function applyStaleOfflineFromTelemetryRow(row, telemetryRow) {
   }
 }
 
-/**
- * Estado de conexión para el listado: usa el último paquete en aire (raw) y la edad del último uplink de app.
- * Evita marcar ONLINE al fusionar telemetría vieja cuando el nodo solo envía joins OTAA.
- * @param {object} row Fila del listado
- * @param {object} telemetryRow Telemetría mostrada (puede ser fusionada)
- * @param {object|null} [rawLatestRow] Última fila en BD sin fusionar
- */
-function inferFreshOnlineConnectStatus(row, telemetryRow, rawLatestRow = null) {
-  if (!telemetryRow || telemetryRow.timestamp == null) return;
-  const now = Date.now();
-  const activityTs = Number(telemetryRow.timestamp);
-  if (!Number.isFinite(activityTs)) return;
-  if (isLastDbIngestStale(activityTs, now, COMMS_STALE_OFFLINE_MS)) return;
-
-  const displayProps = telemetryRow.properties || {};
-  const rawProps =
-    rawLatestRow && rawLatestRow.properties && typeof rawLatestRow.properties === 'object'
-      ? rawLatestRow.properties
-      : displayProps;
-
-  const lastAppTs = Number(displayProps.lastAppUplinkMs);
-  const hasAppTs = Number.isFinite(lastAppTs) && lastAppTs > 0;
-  const appStale = hasAppTs && isLastDbIngestStale(lastAppTs, now, APP_UPLINK_STALE_MS);
-
-  if (joinOnlyTelemetryHint(rawProps)) {
-    row.connectStatus = appStale ? 'OFFLINE' : 'JOIN_PENDING';
-    if (appStale) {
-      row.ingestStatus =
-        'Sin reporte de aplicación reciente (solo join OTAA). Revise ToolBox: Activate, App Key, LoRaWAN 1.0.3, Rejoin OFF.';
-    }
-    if (hasAppTs) row.lastUpdateTime = lastAppTs;
-    return;
-  }
-
-  if (appStale) {
-    row.connectStatus = 'OFFLINE';
-    row.ingestStatus =
-      row.ingestStatus ||
-      'Último reporte de sensor antiguo. El equipo no cumple el intervalo configurado (p. ej. 1 min).';
-    if (hasAppTs) row.lastUpdateTime = lastAppTs;
-    return;
-  }
-
-  const p = displayProps;
-  if (joinOnlyTelemetryHint(p)) {
-    row.connectStatus = 'JOIN_PENDING';
-    return;
-  }
-  const cs = row.connectStatus != null ? String(row.connectStatus).trim() : '';
-  const csU = cs.toUpperCase();
-  if (csU === 'JOINED' || csU === 'CONNECTED') {
-    row.connectStatus = 'ONLINE';
-    return;
-  }
-  if (csU === 'JOIN' || csU === 'JOIN_PENDING') return;
-  if (cs) return;
-  row.connectStatus = 'ONLINE';
-}
 
 function attachLicenseFieldsToDeviceRow(row, licenseMeta) {
   const did = row && row.deviceId;

@@ -54,6 +54,8 @@ import {
   isDeviceJoinPendingOnly,
   isDeviceVisuallyOnline,
 } from '../utils/deviceConnectionStatus';
+import { isJoinOnlyTelemetryProperties } from '../utils/joinOnlyTelemetry';
+import { APP_UPLINK_STALE_MS, isLastDbIngestStaleForDisplay } from '../constants/commsStaleOfflineMs';
 import { pushAppActivityLog } from '../utils/appActivityLog';
 import { SYSCOM_REALTIME_TELEMETRY, SYSCOM_SSE_CONNECTED } from '../constants/realtimeEvents';
 import { collectDeviceBsdBundle, deviceBsdBundleIsEmpty } from '../utils/deviceBsdPreferencesBundle';
@@ -199,12 +201,30 @@ function mergeDeviceRowWithLatestTelemetry(dev, localUpdate) {
     return applyStaleOfflineConnectStatus(dev);
   }
   const p = localUpdate.properties;
+  const joinOnly = isJoinOnlyTelemetryProperties(p);
   let connectStatus = p.connectStatus || p.status || dev.connectStatus;
-  const ev = p.lorawan_event != null ? String(p.lorawan_event).trim() : '';
   const hex = p.payload_hex != null ? String(p.payload_hex).trim() : '';
-  if (ev && /join/i.test(ev) && !hex) {
-    connectStatus = 'JOIN_PENDING';
-  } else if (!connectStatus && (hex || p.fPort != null)) {
+  if (joinOnly) {
+    const appMs = Number(dev.lastAppUplinkMs ?? p.lastAppUplinkMs);
+    const appFresh =
+      Number.isFinite(appMs) &&
+      appMs > 0 &&
+      !isLastDbIngestStaleForDisplay(appMs, Date.now(), APP_UPLINK_STALE_MS);
+    if (!appFresh) connectStatus = 'JOIN_PENDING';
+    const mergedJoin = {
+      ...dev,
+      connectStatus,
+      lastUpdateTime:
+        localUpdate.timestamp > (dev.lastUpdateTime || 0) ? localUpdate.timestamp : dev.lastUpdateTime,
+      ingestStatus: appFresh ? undefined : p.ingestStatus || dev.ingestStatus,
+      lorawan_event: p.lorawan_event,
+      rssi: p.rssi !== undefined ? p.rssi : dev.rssi,
+    };
+    const outJoin = applyStaleOfflineConnectStatus(mergedJoin);
+    primeDeviceTelemetryPreloadFromListRow(outJoin);
+    return outJoin;
+  }
+  if (!connectStatus && (hex || p.fPort != null)) {
     connectStatus = 'ONLINE';
   }
   const merged = {

@@ -1,8 +1,4 @@
-import {
-  APP_UPLINK_STALE_MS,
-  DEVICE_STALE_OFFLINE_MS,
-  isLastDbIngestStaleForDisplay,
-} from '../constants/commsStaleOfflineMs';
+import { APP_UPLINK_STALE_MS, DEVICE_STALE_OFFLINE_MS, isLastDbIngestStaleForDisplay } from '../constants/commsStaleOfflineMs';
 import { isJoinOnlyDeviceRow } from './joinOnlyTelemetry';
 
 export { DEVICE_STALE_OFFLINE_MS };
@@ -42,9 +38,7 @@ export function isDeviceJoinPendingOnly(device) {
   if (ms == null) return false;
   if (isLastDbIngestStaleForDisplay(ms)) return false;
   const appMs = lastAppUplinkMsFromDevice(d);
-  if (appMs != null && isLastDbIngestStaleForDisplay(appMs, Date.now(), APP_UPLINK_STALE_MS)) {
-    return false;
-  }
+  if (appMs != null) return false;
   return isJoinOnlyDeviceRow(d);
 }
 
@@ -58,6 +52,11 @@ export function isDeviceVisuallyOnline(device) {
   const ms = lastSeenMsFromDevice(d);
   if (ms == null) return false;
   if (isLastDbIngestStaleForDisplay(ms)) return false;
+
+  const appMs = lastAppUplinkMsFromDevice(d);
+  if (appMs != null && !isLastDbIngestStaleForDisplay(appMs, Date.now(), APP_UPLINK_STALE_MS)) {
+    return true;
+  }
 
   const raw = d.connectStatus ?? d.status;
   const s = raw == null ? '' : String(raw).trim();

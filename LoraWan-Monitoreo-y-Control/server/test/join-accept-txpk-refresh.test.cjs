@@ -80,6 +80,23 @@ for (const cls of ['A', 'B', 'C']) {
   });
 }
 
+test('Join-Accept: tmst del JR no se sustituye por RX posterior de otro nodo', () => {
+  const eng = createLorawanLnsEngine({
+    store: mockStoreForJoinRefresh('C'),
+    saveIngestEntry: () => {},
+    runLegacyUplink: () => {},
+    insertUiEvent: () => {},
+  });
+  eng.noteGwRxActivity('u1', '0011223344556677', 9_000_000);
+  const out = refreshJoinAccept(eng);
+  assert.equal(out.txpk.imme, false);
+  assert.equal(
+    Number(out.txpk.tmst),
+    6_000_000,
+    'RX1 debe seguir anclado al Join Request (1e6 + 5s), no al último RX del gateway (9e6 + 5s)'
+  );
+});
+
 test('Join-Accept: detecta marca _syscomLnsKind sin prioridad 255', () => {
   const eng = createLorawanLnsEngine({
     store: mockStoreForJoinRefresh('C'),
