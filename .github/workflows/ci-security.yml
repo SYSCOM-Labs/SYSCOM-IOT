@@ -2,6 +2,7 @@ name: CI seguridad
 
 # Ejecuta las pruebas de seguridad reproducibles y el análisis de dependencias.
 # No despliega nada (eso lo hace deploy.yml). Pensado como gate de PR.
+# Nota: un commit que solo toque este archivo dispara CI seguridad sin deploy (2026-08-12).
 on:
   pull_request:
     paths:
