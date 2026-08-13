@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Zap, Plus, Trash2, Edit2, AlertCircle, Calendar, Clock, Bell, Globe, Mail } from 'lucide-react';
+import { Zap, Plus, Trash2, Edit2, Copy, AlertCircle, Calendar, Clock, Bell, Globe, Mail } from 'lucide-react';
 import AutomationModal from '../components/modals/AutomationModal';
 import { useLanguage } from '../context/LanguageContext';
 import './DeviceList.css';
@@ -19,6 +19,7 @@ const AutomationsPage = () => {
   const [loadError, setLoadError] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRule, setEditingRule] = useState(null);
+  const [isDuplicating, setIsDuplicating] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,7 +61,7 @@ const AutomationsPage = () => {
 
   const handleSaveRule = async (ruleData) => {
     let next;
-    if (editingRule) {
+    if (editingRule && !isDuplicating) {
       next = rules.map((r) =>
         String(r.id) === String(editingRule.id) ? { ...r, ...ruleData, id: r.id } : r
       );
@@ -76,6 +77,26 @@ const AutomationsPage = () => {
     }
     setIsModalOpen(false);
     setEditingRule(null);
+    setIsDuplicating(false);
+  };
+
+  const cloneRuleForDuplicate = (rule) => {
+    let copy;
+    try {
+      copy = JSON.parse(JSON.stringify(rule || {}));
+    } catch {
+      copy = { ...(rule || {}) };
+    }
+    delete copy.id;
+    const baseName = String(copy.name || 'Regla').trim() || 'Regla';
+    copy.name = /\(copia( \d+)?\)$/i.test(baseName) ? `${baseName} 2` : `${baseName} (copia)`;
+    return copy;
+  };
+
+  const openDuplicateRule = (rule) => {
+    setEditingRule(cloneRuleForDuplicate(rule));
+    setIsDuplicating(true);
+    setIsModalOpen(true);
   };
 
   const handleDelete = async (id) => {
@@ -121,6 +142,7 @@ const AutomationsPage = () => {
           className="btn btn-primary device-create-top-btn"
           onClick={() => {
             setEditingRule(null);
+            setIsDuplicating(false);
             setIsModalOpen(true);
           }}
         >
@@ -152,11 +174,21 @@ const AutomationsPage = () => {
                   title="Editar regla"
                   aria-label="Editar regla"
                   onClick={() => {
+                    setIsDuplicating(false);
                     setEditingRule(rule);
                     setIsModalOpen(true);
                   }}
                 >
                   <Edit2 size={16} />
+                </button>
+                <button
+                  type="button"
+                  className="btn-icon"
+                  title="Copiar regla"
+                  aria-label="Copiar regla"
+                  onClick={() => openDuplicateRule(rule)}
+                >
+                  <Copy size={16} />
                 </button>
                 <button
                   type="button"
@@ -267,7 +299,7 @@ const AutomationsPage = () => {
             <AlertCircle size={48} />
             <h2>{t('automations.no_rules')}</h2>
             <p>{t('automations.subtitle')}</p>
-            <button className="btn btn-accent" onClick={() => { setEditingRule(null); setIsModalOpen(true); }}>
+            <button className="btn btn-accent" onClick={() => { setEditingRule(null); setIsDuplicating(false); setIsModalOpen(true); }}>
               {t('automations.add_rule')}
             </button>
           </div>
@@ -280,9 +312,11 @@ const AutomationsPage = () => {
           onClose={() => {
             setIsModalOpen(false);
             setEditingRule(null);
+            setIsDuplicating(false);
           }}
           onSave={handleSaveRule}
           rule={editingRule}
+          isDuplicate={isDuplicating}
         />
       )}
     </div>

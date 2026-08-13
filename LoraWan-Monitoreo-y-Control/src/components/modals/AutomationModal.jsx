@@ -89,7 +89,7 @@ function normalizeDevicesListResponse(resp) {
   return [];
 }
 
-const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
+const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false }) => {
   const { credentials, token, loading } = useAuth();
   
   const [name, setName] = useState(rule?.name || '');
@@ -410,7 +410,7 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
     <div className="modal-overlay">
       <div className="modal-content rule-modal">
         <header className="modal-header">
-          <h2>{rule ? 'Editar regla' : 'Nueva regla'}</h2>
+          <h2>{isDuplicate ? 'Duplicar regla' : rule ? 'Editar regla' : 'Nueva regla'}</h2>
           <button className="btn-icon" onClick={onClose}><X size={20} /></button>
         </header>
 
@@ -419,6 +419,9 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
             <div className="form-group">
               <label>Nombre</label>
               <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Introduce un nombre" className={!name ? 'error' : ''} />
+              {isDuplicate ? (
+                <span className="hint-text">Copia de una regla existente. Ajuste nombre, horario o acciones y pulse Crear copia. No se modifica la original.</span>
+              ) : null}
               {!name && <span className="error-text">Introduce un nombre</span>}
             </div>
 
@@ -733,7 +736,9 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule }) => {
 
           <footer className="modal-footer">
             <button type="button" className="btn btn-secondary" onClick={onClose}>Cancelar</button>
-            <button type="submit" className="btn btn-primary">{rule ? 'Guardar cambios' : 'Crear regla'}</button>
+            <button type="submit" className="btn btn-primary">
+              {isDuplicate ? 'Crear copia' : rule ? 'Guardar cambios' : 'Crear regla'}
+            </button>
           </footer>
         </form>
       </div>
