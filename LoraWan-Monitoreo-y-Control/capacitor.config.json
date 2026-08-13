@@ -1,0 +1,20 @@
+{
+  "appId": "mx.syscom.iot.mobile",
+  "appName": "SYSCOM IoT",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true,
+    "backgroundColor": "#0f172a"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 1200,
+      "backgroundColor": "#0f172a",
+      "showSpinner": false
+    }
+  }
+}

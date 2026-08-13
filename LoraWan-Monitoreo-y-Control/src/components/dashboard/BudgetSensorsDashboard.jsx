@@ -2179,7 +2179,7 @@ function BsdTextWidgetSignalIcon({ className }) {
  * galería «Agregar widget» y persistencia son las mismas para todos los usuarios y equipos;
  * no hay otra copia del grid que deba parchearse aparte.
  *
- * @param {{ variant?: 'panel' | 'device', device?: object | null, preloadedTelemetry?: object | null, embedded?: boolean, loadingExternal?: boolean, onRefresh?: () => void, refreshing?: boolean }} props
+ * @param {{ variant?: 'panel' | 'device', device?: object | null, preloadedTelemetry?: object | null, embedded?: boolean, loadingExternal?: boolean, onRefresh?: () => void, refreshing?: boolean, readOnlyView?: boolean }} props
  */
 export default function BudgetSensorsDashboard({
   variant = 'panel',
@@ -2189,8 +2189,10 @@ export default function BudgetSensorsDashboard({
   loadingExternal = false,
   onRefresh,
   refreshing = false,
+  readOnlyView = false,
 }) {
-  const { credentials, token, hasNavPage, canEditDashboard, user, userProfile } = useAuth();
+  const { credentials, token, hasNavPage, canEditDashboard: canEditFromAuth, user, userProfile } = useAuth();
+  const canEditDashboard = canEditFromAuth && !readOnlyView;
   const canSendLnsCommands = Boolean(
     token && (hasNavPage('Devices') || variant === 'device' || variant === 'panel')
   );

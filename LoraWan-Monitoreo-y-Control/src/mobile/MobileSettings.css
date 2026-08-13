@@ -1,0 +1,90 @@
+.mobile-settings {
+  flex: 1;
+  padding: 1rem;
+  background: #f1f5f9;
+  overflow: auto;
+}
+
+.mobile-settings > h2 {
+  margin: 0 0 1rem;
+  font-size: 1.35rem;
+  color: #0f172a;
+}
+
+.mobile-settings__card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 1rem;
+  margin-bottom: 0.85rem;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
+}
+
+.mobile-settings__card h3 {
+  margin: 0 0 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.95rem;
+  color: #334155;
+}
+
+.mobile-settings__email {
+  margin: 0;
+  font-weight: 600;
+  color: #0f172a;
+  word-break: break-all;
+}
+
+.mobile-settings__meta {
+  margin: 0.35rem 0 0;
+  font-size: 0.88rem;
+  color: #64748b;
+}
+
+.mobile-settings__card input {
+  width: 100%;
+  border: 1.5px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 0.75rem;
+  font-size: 0.95rem;
+  margin-bottom: 0.65rem;
+}
+
+.mobile-settings__save {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  border: none;
+  background: #2563eb;
+  color: #fff;
+  padding: 0.65rem 1rem;
+  border-radius: 12px;
+  font-weight: 600;
+}
+
+.mobile-settings__logout {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border: none;
+  background: #fff;
+  color: #b91c1c;
+  padding: 0.85rem;
+  border-radius: 14px;
+  font-weight: 600;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
+}
+
+.mobile-settings__error {
+  color: #b91c1c;
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem;
+}
+
+.mobile-settings__ok {
+  color: #15803d;
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem;
+}

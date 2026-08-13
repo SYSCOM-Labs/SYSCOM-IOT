@@ -1,3 +1,5 @@
+import { getMobileServerApiBase, getMobileServerOrigin, isMobileApp } from '../utils/mobilePlatform.js';
+
 /**
  * Asegura que la base absoluta termine en `/api` (Express monta rutas bajo `/api/...`).
  * @param {string} base
@@ -31,6 +33,10 @@ export function normalizeApiBase(base) {
  * - Opcional: VITE_API_BASE=https://tu-api.com/api (si solo pone el host, se añade `/api` automáticamente).
  */
 export function getApiBase() {
+  if (isMobileApp()) {
+    const mobile = getMobileServerApiBase();
+    if (mobile) return normalizeApiBase(mobile);
+  }
   const raw = import.meta.env.VITE_API_BASE;
   if (raw != null && String(raw).trim() !== '') {
     return normalizeApiBase(String(raw).trim());
@@ -40,8 +46,15 @@ export function getApiBase() {
 
 /** Origen público para URLs de ingesta (Ajustes / gateway). Mismo host que la página en despliegue típico. */
 export function getPublicServerOrigin() {
+  if (isMobileApp()) {
+    const mo = getMobileServerOrigin();
+    if (mo) return mo;
+  }
   if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin.replace(/\/$/, '');
+    const origin = window.location.origin.replace(/\/$/, '');
+    if (origin && !/^capacitor:/i.test(origin) && origin !== 'https://localhost') {
+      return origin;
+    }
   }
   const o = import.meta.env.VITE_PUBLIC_ORIGIN;
   if (o != null && String(o).trim() !== '') {
@@ -63,6 +76,10 @@ export function getEventsStreamUrl(token) {
   const enc = encodeURIComponent(token || '');
   if (base.startsWith('http://') || base.startsWith('https://')) {
     return `${base}/events/stream?token=${enc}`;
+  }
+  if (isMobileApp()) {
+    const mobile = getMobileServerApiBase();
+    if (mobile) return `${mobile.replace(/\/$/, '')}/events/stream?token=${enc}`;
   }
   if (typeof window === 'undefined') return `${base}/events/stream?token=${enc}`;
 

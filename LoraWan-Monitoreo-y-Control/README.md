@@ -17,6 +17,19 @@ Este directorio es la aplicación **SYSCOM IoT** dentro del repositorio [SYSCOM-
 
 No hay otros runtimes obligatorios en este subproyecto (sin Dockerfile ni compose en su raíz).
 
+## App Android (APK)
+
+Para instalar la app móvil en dispositivos Android (login + tablero BSD por dispositivo), ver **[docs/ANDROID-APK.md](docs/ANDROID-APK.md)**.
+
+Resumen rápido:
+
+```bash
+npm install
+npm run dev:mobile          # probar UI móvil en navegador
+npm run android:sync        # build + sincronizar con Android Studio
+npm run android:open        # abrir proyecto y generar APK
+```
+
 ## Instalación
 
 Desde **esta carpeta** (`LoraWan-Monitoreo-y-Control`, donde vive `package.json`):

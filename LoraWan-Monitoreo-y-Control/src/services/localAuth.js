@@ -1,28 +1,30 @@
 import { getApiBase, getPublicServerOrigin } from '../config/apiBase';
 import { clearPrimedDeviceSharedPresets } from './deviceTemplates';
+import { isMobileApp } from '../utils/mobilePlatform';
 
 // Local auth service — replaces Firebase Auth + Firestore
 
-const API = getApiBase();
+const authApi = () => getApiBase();
 
 /** Origen del servidor (sin /api) para mostrar URLs de ingesta al gateway. */
 export const getServerOrigin = () => getPublicServerOrigin();
 
-/** JWT de sesión web: solo `sessionStorage` (se borra al cerrar pestaña/navegador). */
-const TOKEN_KEY = 'local_token';
-
+/** JWT: sessionStorage en web; localStorage persistente en app móvil (APK). */
 const authStorage = () => {
   if (typeof window === 'undefined') return null;
   try {
-    return window.sessionStorage;
+    return isMobileApp() ? window.localStorage : window.sessionStorage;
   } catch {
     return null;
   }
 };
 
-/** Elimina tokens heredados en localStorage (sesión persistente antigua). */
+/** JWT de sesión: clave compartida entre web y móvil. */
+const TOKEN_KEY = 'local_token';
+
+/** Elimina tokens heredados en localStorage (sesión persistente antigua en web). */
 function purgeLegacyPersistentToken() {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined' || isMobileApp()) return;
   try {
     window.localStorage.removeItem(TOKEN_KEY);
   } catch {
@@ -114,7 +116,7 @@ const handle = async (res) => {
 
 // ── Auth ───────────────────────────────────────────────────
 export const localLogin = async (email, password) => {
-  const data = await handle(await fetch(`${API}/auth/login`, {
+  const data = await handle(await fetch(`${authApi()}/auth/login`, {
     method: 'POST', headers: headers(),
     body: JSON.stringify({ email, password })
   }));
@@ -128,7 +130,7 @@ export const localLogin = async (email, password) => {
  */
 export const checkEmailRegistered = async (email) => {
   const norm = String(email || '').trim().toLowerCase();
-  const res = await fetch(`${API}/auth/check-email`, {
+  const res = await fetch(`${authApi()}/auth/check-email`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email: norm }),
@@ -149,16 +151,16 @@ export const localLogout = () => {
 };
 
 export const getMe = async () => {
-  return handle(await fetchWithTimeout(`${API}/auth/me`, { headers: headers() }, 8000));
+  return handle(await fetchWithTimeout(`${authApi()}/auth/me`, { headers: headers() }, 8000));
 };
 
 export const checkSetup = async () => {
-  const res = await fetchWithTimeout(`${API}/setup/status`, { cache: 'no-store' }, 6000);
+  const res = await fetchWithTimeout(`${authApi()}/setup/status`, { cache: 'no-store' }, 6000);
   return handle(res);
 };
 
 export const createAdmin = async (email, password, profileName) => {
-  return handle(await fetch(`${API}/setup`, {
+  return handle(await fetch(`${authApi()}/setup`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password, profileName }),
@@ -167,7 +169,7 @@ export const createAdmin = async (email, password, profileName) => {
 
 export const completeFirstPassword = async (newPassword) => {
   const data = await handle(
-    await fetch(`${API}/auth/first-password`, {
+    await fetch(`${authApi()}/auth/first-password`, {
       method: 'POST',
       headers: headers(),
       body: JSON.stringify({ newPassword }),
@@ -194,7 +196,7 @@ export const refreshSession = async () => {
     try {
       const data = await handle(
         await fetchWithTimeout(
-          `${API}/auth/refresh`,
+          `${authApi()}/auth/refresh`,
           {
             method: 'POST',
             headers: headers(),
@@ -240,7 +242,7 @@ export const startImpersonationSession = async (targetUserId) => {
   const id = String(targetUserId || '').trim();
   if (!id) throw new Error('Usuario destino requerido');
   const data = await handle(
-    await fetch(`${API}/auth/impersonate/${encodeURIComponent(id)}`, {
+    await fetch(`${authApi()}/auth/impersonate/${encodeURIComponent(id)}`, {
       method: 'POST',
       headers: headers(),
     })
@@ -252,7 +254,7 @@ export const startImpersonationSession = async (targetUserId) => {
 /** Vuelve al JWT del superadmin que abrió el modo soporte. */
 export const stopImpersonationSession = async () => {
   const data = await handle(
-    await fetch(`${API}/auth/impersonate/stop`, {
+    await fetch(`${authApi()}/auth/impersonate/stop`, {
       method: 'POST',
       headers: headers(),
     })
@@ -263,32 +265,32 @@ export const stopImpersonationSession = async () => {
 
 // ── User management ────────────────────────────────────────
 export const getUsers = async () => {
-  return handle(await fetch(`${API}/users`, { headers: headers() }));
+  return handle(await fetch(`${authApi()}/users`, { headers: headers() }));
 };
 
 export const createUser = async (userData) => {
-  return handle(await fetch(`${API}/users`, {
+  return handle(await fetch(`${authApi()}/users`, {
     method: 'POST', headers: headers(),
     body: JSON.stringify(userData)
   }));
 };
 
 export const updateUser = async (id, updates) => {
-  return handle(await fetch(`${API}/users/${id}`, {
+  return handle(await fetch(`${authApi()}/users/${id}`, {
     method: 'PUT', headers: headers(),
     body: JSON.stringify(updates)
   }));
 };
 
 export const deleteUser = async (id) => {
-  return handle(await fetch(`${API}/users/${id}`, {
+  return handle(await fetch(`${authApi()}/users/${id}`, {
     method: 'DELETE', headers: headers()
   }));
 };
 
 /** Lista `user_devices` de un usuario (admin: solo su jerarquía; super admin: cualquiera). */
 export const getUserDevices = async (userId) => {
-  return handle(await fetch(`${API}/users/${encodeURIComponent(userId)}/devices`, { headers: headers() }));
+  return handle(await fetch(`${authApi()}/users/${encodeURIComponent(userId)}/devices`, { headers: headers() }));
 };
 
 // ── Telemetry ──────────────────────────────────────────────
@@ -304,7 +306,7 @@ export const saveTelemetry = async (deviceId, deviceName, properties) => {
     if (_lastSentProps[key] === newHash) return; // no change, skip
     _lastSentProps[key] = newHash;
 
-    const result = await fetch(`${API}/telemetry`, {
+    const result = await fetch(`${authApi()}/telemetry`, {
       method: 'POST', headers: headers(),
       body: JSON.stringify({ deviceId, deviceName, properties })
     });
@@ -333,7 +335,7 @@ export const queryTelemetry = async (deviceId, propKey, startMs, endMs, limit) =
   }
   return handle(
     await fetchWithTimeout(
-      `${API}/telemetry/${deviceId}?${params.toString()}`,
+      `${authApi()}/telemetry/${deviceId}?${params.toString()}`,
       { headers: headers() },
       12000
     )
@@ -341,5 +343,5 @@ export const queryTelemetry = async (deviceId, propKey, startMs, endMs, limit) =
 };
 
 export const getLatestDeviceData = async () => {
-  return handle(await fetchWithTimeout(`${API}/devices/latest`, { headers: headers() }, 12000));
+  return handle(await fetchWithTimeout(`${authApi()}/devices/latest`, { headers: headers() }, 12000));
 };

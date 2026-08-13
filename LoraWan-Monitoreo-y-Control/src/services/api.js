@@ -3,7 +3,7 @@ import { getApiBase } from '../config/apiBase';
 import { refreshSession, getAuthToken } from './localAuth';
 import { normalizeTemplateLorawanClass } from './deviceTemplates';
 
-const SERVER_API = getApiBase();
+const SERVER_API = () => getApiBase();
 
 /** Tras 401, un intento de renovar JWT y repetir la petición (sesiones largas / kioscos). */
 if (typeof window !== 'undefined' && !window.__SYSCOM_AXIOS_AUTH_RETRY__) {
@@ -44,13 +44,13 @@ const authHeaders = () => ({
 
 /** Lista de dispositivos a partir de telemetría almacenada (ingesta HTTP). */
 export const fetchDevices = async (_credentials, _token) => {
-  const response = await axios.get(`${SERVER_API}/devices`, { headers: authHeaders() });
+  const response = await axios.get(`${SERVER_API()}/devices`, { headers: authHeaders() });
   if (response.data.status !== 'Success') throw new Error(response.data.errMsg || 'Device list failed');
   return response;
 };
 
 export const fetchDeviceProperties = async (deviceId, _credentials, _token) => {
-  const response = await axios.get(`${SERVER_API}/devices/${encodeURIComponent(deviceId)}/properties`, {
+  const response = await axios.get(`${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/properties`, {
     headers: authHeaders(),
   });
   if (response.data.status !== 'Success') throw new Error(response.data.errMsg || 'Failed to fetch properties');
@@ -66,14 +66,14 @@ export const updateDevice = async (deviceData, _credentials, _token) => {
       ? { tag: deviceData.tag }
       : {}),
   };
-  const response = await axios.put(`${SERVER_API}/devices`, payload, { headers: authHeaders() });
+  const response = await axios.put(`${SERVER_API()}/devices`, payload, { headers: authHeaders() });
   if (response.data.status !== 'Success') throw new Error(response.data.errMsg || 'Update failed');
   return response.data;
 };
 
 export const callService = async (deviceId, serviceData, _credentials, _token) => {
   const response = await axios.post(
-    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/services/call`,
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/services/call`,
     serviceData,
     { headers: authHeaders() }
   );
@@ -83,7 +83,7 @@ export const callService = async (deviceId, serviceData, _credentials, _token) =
 export const fetchDeviceHistory = async (deviceId, params, _credentials, _token) => {
   const query = new URLSearchParams({ pageSize: 100, order: 'desc', ...params }).toString();
   const response = await axios.get(
-    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/properties/history?${query}`,
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/properties/history?${query}`,
     { headers: authHeaders() }
   );
   const d = response.data;
@@ -98,7 +98,7 @@ export const fetchDeviceHistory = async (deviceId, params, _credentials, _token)
 };
 
 export const fetchDeviceTsl = async (deviceId, _credentials, _token) => {
-  const response = await axios.get(`${SERVER_API}/devices/${encodeURIComponent(deviceId)}/thing-specification`, {
+  const response = await axios.get(`${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/thing-specification`, {
     headers: authHeaders(),
   });
   if (response.data.status !== 'Success') throw new Error(response.data.errMsg || 'TSL fetch failed');
@@ -107,12 +107,12 @@ export const fetchDeviceTsl = async (deviceId, _credentials, _token) => {
 
 /** Reglas de automatización persistidas en el servidor (por usuario). */
 export const fetchAutomationRules = async () => {
-  const response = await axios.get(`${SERVER_API}/automations`, { headers: authHeaders() });
+  const response = await axios.get(`${SERVER_API()}/automations`, { headers: authHeaders() });
   return response.data.rules || [];
 };
 
 export const saveAutomationRules = async (rules) => {
-  const response = await axios.put(`${SERVER_API}/automations`, { rules }, { headers: authHeaders() });
+  const response = await axios.put(`${SERVER_API()}/automations`, { rules }, { headers: authHeaders() });
   return response.data;
 };
 
@@ -201,24 +201,24 @@ export async function importDatabaseBackupFile(file) {
 }
 
 export const fetchBackupConfig = async () => {
-  const response = await axios.get(`${SERVER_API}/admin/backup-config`, { headers: authHeaders() });
+  const response = await axios.get(`${SERVER_API()}/admin/backup-config`, { headers: authHeaders() });
   return response.data;
 };
 
 export const saveBackupConfig = async (payload) => {
-  const response = await axios.put(`${SERVER_API}/admin/backup-config`, payload, { headers: authHeaders() });
+  const response = await axios.put(`${SERVER_API()}/admin/backup-config`, payload, { headers: authHeaders() });
   return response.data;
 };
 
 /** Zona horaria del servidor (reglas por horario, etc.). */
 export const fetchAppTimezone = async () => {
-  const response = await axios.get(`${SERVER_API}/settings/app-timezone`, { headers: authHeaders() });
+  const response = await axios.get(`${SERVER_API()}/settings/app-timezone`, { headers: authHeaders() });
   return response.data;
 };
 
 export const saveAppTimezone = async (timezone) => {
   const response = await axios.put(
-    `${SERVER_API}/settings/app-timezone`,
+    `${SERVER_API()}/settings/app-timezone`,
     { timezone },
     { headers: authHeaders() }
   );
@@ -227,13 +227,13 @@ export const saveAppTimezone = async (timezone) => {
 
 /** Estado SMTP (sin contraseña). */
 export const fetchSmtpSettings = async () => {
-  const response = await axios.get(`${SERVER_API}/settings/smtp`, { headers: authHeaders() });
+  const response = await axios.get(`${SERVER_API()}/settings/smtp`, { headers: authHeaders() });
   return response.data;
 };
 
 /** Guardar cuenta saliente SMTP (superadmin). Contraseña opcional si ya está en .env. */
 export const saveSmtpSettings = async (payload) => {
-  const response = await axios.put(`${SERVER_API}/settings/smtp`, payload, { headers: authHeaders() });
+  const response = await axios.put(`${SERVER_API()}/settings/smtp`, payload, { headers: authHeaders() });
   return response.data;
 };
 
@@ -245,7 +245,7 @@ export const testSmtpSettings = async (payload) => {
       : payload && typeof payload === 'object'
         ? payload
         : {};
-  const response = await axios.post(`${SERVER_API}/settings/smtp/test`, body, {
+  const response = await axios.post(`${SERVER_API()}/settings/smtp/test`, body, {
     headers: authHeaders(),
   });
   return response.data;
@@ -253,14 +253,14 @@ export const testSmtpSettings = async (payload) => {
 
 /** Alta de dispositivo en el sistema (solo super administrador). */
 export const registerUserDevice = async (payload) => {
-  const response = await axios.post(`${SERVER_API}/user-devices`, payload, { headers: authHeaders() });
+  const response = await axios.post(`${SERVER_API()}/user-devices`, payload, { headers: authHeaders() });
   return response.data;
 };
 
 /** Actualiza la clase LoRaWAN (A/B/C) del dispositivo y sincroniza la sesión LNS si existe. Solo super administrador. */
 export const patchUserDeviceLorawanClass = async (deviceId, lorawanClass) => {
   const response = await axios.patch(
-    `${SERVER_API}/user-devices/${encodeURIComponent(deviceId)}`,
+    `${SERVER_API()}/user-devices/${encodeURIComponent(deviceId)}`,
     { lorawanClass },
     { headers: authHeaders() }
   );
@@ -269,20 +269,20 @@ export const patchUserDeviceLorawanClass = async (deviceId, lorawanClass) => {
 
 /** Avisos de licencia por vencer (≤7 días) para dispositivos asignados a la cuenta. */
 export const fetchLicenseWarnings = async () => {
-  const response = await axios.get(`${SERVER_API}/auth/license-warnings`, { headers: authHeaders() });
+  const response = await axios.get(`${SERVER_API()}/auth/license-warnings`, { headers: authHeaders() });
   return response.data?.warnings ?? [];
 };
 
 /** Último estado por dispositivo para analítica/resumen en UI. */
 export const getLatestDeviceData = async () => {
-  const response = await axios.get(`${SERVER_API}/devices/latest`, { headers: authHeaders() });
+  const response = await axios.get(`${SERVER_API()}/devices/latest`, { headers: authHeaders() });
   return response.data;
 };
 
 /** Extiende la vigencia un año (solo super administrador). */
 export const renewDeviceLicense = async (deviceId) => {
   const response = await axios.post(
-    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/license/renew`,
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/license/renew`,
     {},
     { headers: authHeaders() }
   );
@@ -292,7 +292,7 @@ export const renewDeviceLicense = async (deviceId) => {
 /** Quita el dispositivo solo de la cuenta del usuario autenticado (no borra el equipo ni a otros asignados). */
 export const unassignMyDevice = async (deviceId) => {
   const response = await axios.delete(
-    `${SERVER_API}/user-devices/${encodeURIComponent(deviceId)}`,
+    `${SERVER_API()}/user-devices/${encodeURIComponent(deviceId)}`,
     { headers: authHeaders() }
   );
   return response.data;
@@ -304,7 +304,7 @@ export const unassignMyDevice = async (deviceId) => {
  */
 export const unassignDeviceFromUser = async (targetUserId, deviceId) => {
   const response = await axios.delete(
-    `${SERVER_API}/users/${encodeURIComponent(String(targetUserId || '').trim())}/devices/${encodeURIComponent(String(deviceId || '').trim())}`,
+    `${SERVER_API()}/users/${encodeURIComponent(String(targetUserId || '').trim())}/devices/${encodeURIComponent(String(deviceId || '').trim())}`,
     { headers: authHeaders() }
   );
   return response.data;
@@ -313,7 +313,7 @@ export const unassignDeviceFromUser = async (targetUserId, deviceId) => {
 /** Borrado definitivo en base de datos (solo super administrador). */
 export const purgeDeviceFromSystem = async (deviceId) => {
   const response = await axios.delete(
-    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/permanent`,
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/permanent`,
     { headers: authHeaders() }
   );
   return response.data;
@@ -321,7 +321,7 @@ export const purgeDeviceFromSystem = async (deviceId) => {
 
 export const assignDeviceToUser = async (deviceId, assigneeEmail) => {
   const response = await axios.post(
-    `${SERVER_API}/devices/assign`,
+    `${SERVER_API()}/devices/assign`,
     { deviceId, assigneeEmail },
     { headers: authHeaders() }
   );
@@ -330,7 +330,7 @@ export const assignDeviceToUser = async (deviceId, assigneeEmail) => {
 
 export const fetchDeviceBsdPreferences = async (deviceId) => {
   const response = await axios.get(
-    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/bsd-preferences`,
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/bsd-preferences`,
     { headers: authHeaders() }
   );
   return response.data;
@@ -338,7 +338,7 @@ export const fetchDeviceBsdPreferences = async (deviceId) => {
 
 export const putDeviceBsdPreferences = async (deviceId, prefs) => {
   const response = await axios.put(
-    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/bsd-preferences`,
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/bsd-preferences`,
     prefs,
     { headers: authHeaders() }
   );
@@ -349,7 +349,7 @@ export const fetchPanelBsdPreferences = async (segment, panelId) => {
   const params = new URLSearchParams();
   params.set('panelId', panelId != null && String(panelId).trim() ? String(panelId).trim() : 'main');
   params.set('segment', segment != null ? String(segment) : '');
-  const response = await axios.get(`${SERVER_API}/me/panel-bsd-preferences?${params.toString()}`, {
+  const response = await axios.get(`${SERVER_API()}/me/panel-bsd-preferences?${params.toString()}`, {
     headers: authHeaders(),
   });
   return response.data;
@@ -357,7 +357,7 @@ export const fetchPanelBsdPreferences = async (segment, panelId) => {
 
 export const putPanelBsdPreferences = async (segment, panelId, prefs) => {
   const response = await axios.put(
-    `${SERVER_API}/me/panel-bsd-preferences`,
+    `${SERVER_API()}/me/panel-bsd-preferences`,
     {
       ...(prefs && typeof prefs === 'object' ? prefs : {}),
       segment: segment != null ? String(segment) : '',
@@ -370,7 +370,7 @@ export const putPanelBsdPreferences = async (segment, panelId, prefs) => {
 
 export const fetchDeviceDecodeConfig = async (deviceId) => {
   const response = await axios.get(
-    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/decode-config`,
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/decode-config`,
     { headers: authHeaders() }
   );
   return response.data;
@@ -379,7 +379,7 @@ export const fetchDeviceDecodeConfig = async (deviceId) => {
 /** Canal (FPort) y clase LoRaWAN persistidos para el dispositivo (usuario con dispositivo asignado). */
 export const fetchDeviceLoraProfile = async (deviceId) => {
   const response = await axios.get(
-    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/lora-profile`,
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/lora-profile`,
     { headers: authHeaders() }
   );
   return response.data;
@@ -390,7 +390,7 @@ const DECODE_CONFIG_PUT_TIMEOUT_MS = 120000;
 
 export const saveDeviceDecodeConfig = async (deviceId, payload) => {
   const response = await axios.put(
-    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/decode-config`,
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/decode-config`,
     payload,
     { headers: authHeaders(), timeout: DECODE_CONFIG_PUT_TIMEOUT_MS }
   );
@@ -399,13 +399,13 @@ export const saveDeviceDecodeConfig = async (deviceId, payload) => {
 
 /** Gateways LoRaWAN registrados por cuenta (alta: admin/superadmin). */
 export const fetchLorawanGateways = async () => {
-  const response = await axios.get(`${SERVER_API}/lorawan-gateways`, { headers: authHeaders() });
+  const response = await axios.get(`${SERVER_API()}/lorawan-gateways`, { headers: authHeaders() });
   return Array.isArray(response.data) ? response.data : [];
 };
 
 export const createLorawanGateway = async ({ name, gatewayEui, frequencyBand }) => {
   const response = await axios.post(
-    `${SERVER_API}/lorawan-gateways`,
+    `${SERVER_API()}/lorawan-gateways`,
     { name, gatewayEui, frequencyBand },
     { headers: authHeaders() }
   );
@@ -414,7 +414,7 @@ export const createLorawanGateway = async ({ name, gatewayEui, frequencyBand }) 
 
 export const deleteLorawanGateway = async (id) => {
   const response = await axios.delete(
-    `${SERVER_API}/lorawan-gateways/${encodeURIComponent(id)}`,
+    `${SERVER_API()}/lorawan-gateways/${encodeURIComponent(id)}`,
     { headers: authHeaders() }
   );
   return response.data;
@@ -425,7 +425,7 @@ export const SYSCOM_LNS_DOWNLINK_SENT_EVENT = 'syscom-lns-downlink-sent';
 
 export const fetchLnsUiEventsAfterId = async (afterId = 0) => {
   const q = new URLSearchParams({ afterId: String(afterId ?? 0) }).toString();
-  const response = await axios.get(`${SERVER_API}/lns/ui-events?${q}`, { headers: authHeaders() });
+  const response = await axios.get(`${SERVER_API()}/lns/ui-events?${q}`, { headers: authHeaders() });
   if (response.data?.status !== 'Success') {
     throw new Error(response.data?.errMsg || 'ui-events failed');
   }
@@ -474,7 +474,7 @@ export const sendDownlink = async (deviceId, hex, _credentials, _token, opts = {
         if (g.length === 16) body.gatewayEui = g;
       }
       const response = await axios.post(
-        `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/downlink`,
+        `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/downlink`,
         body,
         { headers: authHeaders() }
       );
@@ -518,7 +518,7 @@ export const sendDownlink = async (deviceId, hex, _credentials, _token, opts = {
   }
 
   const serviceResp = await axios.post(
-    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/services/call`,
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/services/call`,
     { serviceId: asServiceId, inputs: {} },
     { headers: authHeaders() }
   );
@@ -530,12 +530,12 @@ export const sendDownlink = async (deviceId, hex, _credentials, _token, opts = {
 
 /** Catálogo global de plantillas (lectura: cualquier usuario autenticado; escritura: solo superadmin vía PUT). */
 export const fetchDeviceTemplatesCatalog = async () => {
-  const response = await axios.get(`${SERVER_API}/device-templates`, { headers: authHeaders() });
+  const response = await axios.get(`${SERVER_API()}/device-templates`, { headers: authHeaders() });
   return response.data;
 };
 
 export const putDeviceTemplatesCatalog = async (body) => {
-  const response = await axios.put(`${SERVER_API}/device-templates`, body, {
+  const response = await axios.put(`${SERVER_API()}/device-templates`, body, {
     headers: authHeaders(),
     timeout: 180000,
   });
@@ -545,7 +545,7 @@ export const putDeviceTemplatesCatalog = async (body) => {
 /** Dispositivos con presets que referencian la plantilla: todos si tiene módulo Dispositivos; si no, solo los asignados a su cuenta. */
 export const fetchAssignedDeviceIdsForTemplate = async (templateId) => {
   const q = encodeURIComponent(String(templateId || '').trim());
-  const response = await axios.get(`${SERVER_API}/device-templates/assigned-device-ids?templateId=${q}`, {
+  const response = await axios.get(`${SERVER_API()}/device-templates/assigned-device-ids?templateId=${q}`, {
     headers: authHeaders(),
     timeout: 45000,
   });
@@ -554,7 +554,7 @@ export const fetchAssignedDeviceIdsForTemplate = async (templateId) => {
 
 export const fetchDeviceDownlinkPresets = async (deviceId) => {
   const response = await axios.get(
-    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/downlink-presets`,
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/downlink-presets`,
     { headers: authHeaders() }
   );
   return response.data;
@@ -562,7 +562,7 @@ export const fetchDeviceDownlinkPresets = async (deviceId) => {
 
 export const putDeviceDownlinkPresets = async (deviceId, presets) => {
   const response = await axios.put(
-    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/downlink-presets`,
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/downlink-presets`,
     presets,
     { headers: authHeaders() }
   );
@@ -572,7 +572,7 @@ export const putDeviceDownlinkPresets = async (deviceId, presets) => {
 /** Borra sesión OTAA del LNS integrado para este deviceId (requiere JWT). Útil si el servidor rechaza uplinks (MIC inválido). */
 export const deleteLnsSession = async (deviceId) => {
   const response = await axios.delete(
-    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/lns/session`,
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/lns/session`,
     { headers: authHeaders() }
   );
   if (response.data?.status !== 'Success') {
@@ -584,7 +584,7 @@ export const deleteLnsSession = async (deviceId) => {
 /** AppKey / Join EUI (App EUI) en `user_devices` para OTAA con el LNS integrado (staff + dispositivo asignado). */
 export const patchDeviceLoraCredentials = async (deviceId, body) => {
   const response = await axios.patch(
-    `${SERVER_API}/devices/${encodeURIComponent(deviceId)}/lora-credentials`,
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/lora-credentials`,
     body,
     { headers: authHeaders() }
   );
