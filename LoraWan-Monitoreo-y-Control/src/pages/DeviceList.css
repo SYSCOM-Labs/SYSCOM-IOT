@@ -765,6 +765,31 @@ input.mono,
   font-weight: 600;
   font-size: 0.95rem;
   color: var(--text-primary);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.assign-user-badge {
+  font-weight: 600;
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: rgba(16, 185, 129, 0.16);
+  color: #34d399;
+}
+
+.device-assign-unassign-btn {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  color: #fca5a5;
+}
+
+.device-assign-unassign-btn:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.22);
 }
 
 .assign-user-meta {

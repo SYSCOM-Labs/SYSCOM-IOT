@@ -32,6 +32,7 @@ import {
   registerUserDevice,
   purgeDeviceFromSystem,
   unassignMyDevice,
+  unassignDeviceFromUser,
   assignDeviceToUser,
   fetchDeviceAssignCandidates,
   putDeviceBsdPreferences,
@@ -293,6 +294,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
   const [blockingAlert, setBlockingAlert] = useState(null);
   /** Confirmación modal (sustituye `window.confirm`) antes de purgar o renovar licencia. */
   const [purgeConfirmDevice, setPurgeConfirmDevice] = useState(null);
+  const [unassignConfirmUser, setUnassignConfirmUser] = useState(null);
   const [licenseRenewConfirmDevice, setLicenseRenewConfirmDevice] = useState(null);
   const [deviceTablePage, setDeviceTablePage] = useState(1);
   const [devicePageSize, setDevicePageSize] = useState(10);
@@ -828,6 +830,33 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
     }
   };
 
+  const candidateIsAssigned = (u) => u != null && u.assignmentPermissions != null;
+
+  const refreshAssignCandidates = async (deviceId) => {
+    const list = await fetchDeviceAssignCandidates(deviceId);
+    setUsersForAssign(Array.isArray(list) ? list : []);
+    return Array.isArray(list) ? list : [];
+  };
+
+  const executeUnassignFromModal = async () => {
+    const target = unassignConfirmUser;
+    const device = assignForDevice;
+    if (!target?.id || !device?.deviceId) return;
+    setSavingDevice(true);
+    try {
+      await unassignDeviceFromUser(target.id, device.deviceId);
+      const list = await refreshAssignCandidates(device.deviceId);
+      const still = list.find((u) => String(u.id) === String(target.id));
+      setAssignSelectedUser(still || null);
+      setAssignPerms(emptyDeviceAssignmentPermissions());
+      setUnassignConfirmUser(null);
+    } catch (err) {
+      setBlockingAlert(err.response?.data?.error || err.message || t('common.error'));
+    } finally {
+      setSavingDevice(false);
+    }
+  };
+
   const closeCreateDeviceModal = () => {
     if (savingDevice) return;
     setShowCreateDevice(false);
@@ -891,6 +920,21 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
         confirmDanger
         onClose={() => setPurgeConfirmDevice(null)}
         onConfirm={() => executePurgeDevice(purgeConfirmDevice)}
+      />
+      <CenteredAlertModal
+        open={Boolean(unassignConfirmUser)}
+        title="Quitar asignación"
+        variant="error"
+        message={
+          unassignConfirmUser && assignForDevice
+            ? `¿Quitar **${assignForDevice.name || assignForDevice.deviceId}** de la cuenta de **${unassignConfirmUser.email}**?\n\nEl dispositivo seguirá en su cuenta de administrador. Esa persona dejará de verlo hasta que lo vuelva a asignar.`
+            : ''
+        }
+        cancelLabel="Cancelar"
+        confirmLabel="Sí, quitar de su cuenta"
+        confirmDanger
+        onClose={() => !savingDevice && setUnassignConfirmUser(null)}
+        onConfirm={() => executeUnassignFromModal()}
       />
       <CenteredAlertModal
         open={Boolean(licenseRenewConfirmDevice)}
@@ -1526,7 +1570,8 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
             </div>
             <p className="um-modal-hint device-assign-modal-hint">
               Dispositivo: <strong>{assignForDevice.name || assignForDevice.deviceId}</strong>. Busca por correo o nombre y selecciona un usuario.
-              El dispositivo aparecerá en su cuenta al confirmar. Marque qué acciones podrá realizar sobre este equipo.
+              <strong> Asignar</strong> lo deja en su cuenta (con los permisos marcados).
+              Si ya lo tiene, use <strong>Quitar de esta cuenta</strong> para desasignarlo sin borrar el equipo.
             </p>
             <form onSubmit={handleAssignConfirm} className="device-create-form device-assign-modal-form">
               <label className="device-modal-field device-assign-search-field" htmlFor="device-assign-user-search">
@@ -1560,7 +1605,12 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                         );
                       }}
                     >
-                      <span className="assign-user-email">{u.email}</span>
+                      <span className="assign-user-email">
+                        {u.email}
+                        {candidateIsAssigned(u) ? (
+                          <span className="assign-user-badge">Ya asignado</span>
+                        ) : null}
+                      </span>
                       <span className="assign-user-meta">
                         {u.profileName || '—'} · {u.role === 'superadmin' ? 'Super admin' : 'Usuario'}
                       </span>
@@ -1591,8 +1641,18 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                 <button type="button" className="btn btn-secondary" disabled={savingDevice} onClick={() => setAssignForDevice(null)}>
                   Cancelar
                 </button>
+                {candidateIsAssigned(assignSelectedUser) ? (
+                  <button
+                    type="button"
+                    className="btn device-assign-unassign-btn"
+                    disabled={savingDevice}
+                    onClick={() => setUnassignConfirmUser(assignSelectedUser)}
+                  >
+                    {savingDevice ? 'Quitando…' : 'Quitar de esta cuenta'}
+                  </button>
+                ) : null}
                 <button type="submit" className="btn btn-primary" disabled={savingDevice || !assignSelectedUser}>
-                  {savingDevice ? 'Asignando…' : 'Asignar'}
+                  {savingDevice ? 'Asignando…' : candidateIsAssigned(assignSelectedUser) ? 'Actualizar permisos' : 'Asignar'}
                 </button>
               </div>
             </form>

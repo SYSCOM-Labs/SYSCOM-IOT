@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { getUsers, createUser, updateUser, deleteUser, getServerOrigin, getUserDevices } from '../services/localAuth';
+import { unassignDeviceFromUser } from '../services/api';
 import { validatePasswordStrength, PASSWORD_POLICY_HINT } from '../utils/passwordPolicy';
 import {
   Users,
@@ -23,6 +24,7 @@ import {
 } from 'lucide-react';
 import { NAV_MODULE_DEFS } from '../config/navConfig';
 import FormToast from '../components/FormToast';
+import CenteredAlertModal from '../components/CenteredAlertModal';
 import { getDuplicateEntityNotice } from '../utils/duplicateEntityNotice';
 import './DeviceList.css';
 import '../styles/premiumPageShell.css';
@@ -175,6 +177,8 @@ const UserManagement = ({ onAfterEnterSupport }) => {
   const [confirmNewPass, setConfirmNewPass] = useState('');
   /** @type {null | { user: object, devices: object[], loading: boolean, error: string|null }} */
   const [devicesModal, setDevicesModal] = useState(null);
+  const [unassignBusy, setUnassignBusy] = useState(false);
+  const [unassignConfirm, setUnassignConfirm] = useState(null);
   /** Confirmación visual antes de entrar en modo soporte (sustituye `window.confirm`). */
   const [supportTarget, setSupportTarget] = useState(null);
   const [supportBusy, setSupportBusy] = useState(false);
@@ -271,7 +275,11 @@ const UserManagement = ({ onAfterEnterSupport }) => {
     setActiveUser(null);
   };
 
-  const closeDevicesModal = () => setDevicesModal(null);
+  const closeDevicesModal = () => {
+    if (unassignBusy) return;
+    setDevicesModal(null);
+    setUnassignConfirm(null);
+  };
 
   const openDevicesList = async (u) => {
     setDevicesModal({ user: u, devices: [], loading: true, error: null });
@@ -290,6 +298,47 @@ const UserManagement = ({ onAfterEnterSupport }) => {
         loading: false,
         error: e.message || 'No se pudo cargar el listado',
       });
+    }
+  };
+
+  const executeUnassignFromUser = async () => {
+    const target = devicesModal?.user;
+    if (!target?.id || !unassignConfirm) return;
+    const ids =
+      unassignConfirm === 'all'
+        ? (devicesModal.devices || []).map((d) => d.deviceId).filter(Boolean)
+        : [unassignConfirm].filter(Boolean);
+    if (ids.length === 0) {
+      setUnassignConfirm(null);
+      return;
+    }
+    setUnassignBusy(true);
+    try {
+      const errors = [];
+      for (const deviceId of ids) {
+        try {
+          await unassignDeviceFromUser(target.id, deviceId);
+        } catch (e) {
+          errors.push(`${deviceId}: ${e.response?.data?.error || e.message || 'error'}`);
+        }
+      }
+      const data = await getUserDevices(target.id);
+      setDevicesModal({
+        user: target,
+        devices: Array.isArray(data.devices) ? data.devices : [],
+        loading: false,
+        error: null,
+      });
+      setUnassignConfirm(null);
+      if (errors.length) {
+        showToast('error', `Algunos equipos no se pudieron quitar: ${errors.join('; ')}`);
+      } else {
+        showToast('success', ids.length > 1 ? 'Se quitaron todos los dispositivos de esta cuenta.' : 'Dispositivo quitado de esta cuenta.');
+      }
+    } catch (e) {
+      showToast('error', e.message || 'No se pudo quitar la asignación');
+    } finally {
+      setUnassignBusy(false);
     }
   };
 
@@ -852,9 +901,12 @@ const UserManagement = ({ onAfterEnterSupport }) => {
               </button>
             </div>
             <p className="um-devices-sub">
-              Equipos en <strong>user_devices</strong> para{' '}
+              Equipos en la cuenta de{' '}
               <strong>{devicesModal.user.email}</strong>
-              {devicesModal.user.profileName ? ` · ${devicesModal.user.profileName}` : ''}
+              {devicesModal.user.profileName ? ` · ${devicesModal.user.profileName}` : ''}.
+              {String(devicesModal.user.id) !== String(user?.id)
+                ? ' Quitar los deja en el administrador; no borra el inventario.'
+                : ''}
             </p>
             {devicesModal.loading ? (
               <div className="um-devices-loading">
@@ -874,6 +926,7 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                       <th>DevEUI</th>
                       <th>Clase</th>
                       <th>Etiqueta</th>
+                      {String(devicesModal.user.id) !== String(user?.id) ? <th>Acción</th> : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -884,6 +937,19 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                         <td className="mono">{d.devEUI || '—'}</td>
                         <td>{d.lorawanClass || '—'}</td>
                         <td>{d.tag || '—'}</td>
+                        {String(devicesModal.user.id) !== String(user?.id) ? (
+                          <td>
+                            <button
+                              type="button"
+                              className="device-action-pill device-action-pill--danger"
+                              title="Quitar de esta cuenta"
+                              disabled={unassignBusy}
+                              onClick={() => setUnassignConfirm(d.deviceId)}
+                            >
+                              <Trash2 size={16} strokeWidth={2} />
+                            </button>
+                          </td>
+                        ) : null}
                       </tr>
                     ))}
                   </tbody>
@@ -891,9 +957,19 @@ const UserManagement = ({ onAfterEnterSupport }) => {
               </div>
             )}
             <div className="modal-footer">
-              <button type="button" className="btn btn-secondary" onClick={closeDevicesModal}>
+              <button type="button" className="btn btn-secondary" onClick={closeDevicesModal} disabled={unassignBusy}>
                 Cerrar
               </button>
+              {String(devicesModal.user.id) !== String(user?.id) && devicesModal.devices.length > 0 ? (
+                <button
+                  type="button"
+                  className="btn device-assign-unassign-btn"
+                  disabled={unassignBusy}
+                  onClick={() => setUnassignConfirm('all')}
+                >
+                  {unassignBusy ? 'Quitando…' : 'Quitar todos de esta cuenta'}
+                </button>
+              ) : null}
             </div>
           </div>
         </div>
@@ -1023,6 +1099,23 @@ const UserManagement = ({ onAfterEnterSupport }) => {
           </div>
         </div>
       )}
+      <CenteredAlertModal
+        open={Boolean(unassignConfirm)}
+        title="Quitar asignación"
+        variant="error"
+        message={
+          unassignConfirm === 'all' && devicesModal?.user
+            ? `¿Quitar **todos** los dispositivos de **${devicesModal.user.email}**?\n\nSeguirán en su cuenta de administrador. Esta persona dejará de verlos hasta que los vuelva a asignar.`
+            : unassignConfirm && devicesModal?.user
+              ? `¿Quitar este dispositivo de **${devicesModal.user.email}**?\n\nSeguirá en su cuenta de administrador.`
+              : ''
+        }
+        cancelLabel="Cancelar"
+        confirmLabel={unassignConfirm === 'all' ? 'Sí, quitar todos' : 'Sí, quitar'}
+        confirmDanger
+        onClose={() => !unassignBusy && setUnassignConfirm(null)}
+        onConfirm={() => executeUnassignFromUser()}
+      />
     </div>
   );
 };
