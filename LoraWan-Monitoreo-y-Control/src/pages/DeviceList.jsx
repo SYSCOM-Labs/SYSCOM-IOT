@@ -1179,13 +1179,14 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                         {rowPerms.delete && (
                           <button
                             type="button"
-                            className="device-action-pill device-action-pill--danger"
-                            title={isSuperAdmin ? 'Eliminar del sistema' : 'Quitar de mi cuenta'}
-                            aria-label={isSuperAdmin ? 'Eliminar del sistema' : 'Quitar de mi cuenta'}
+                            className={`device-action-pill device-action-pill--danger${isImpersonating ? ' device-action-pill--unassign-label' : ''}`}
+                            title={isSuperAdmin ? 'Eliminar del sistema' : 'Quitar de esta cuenta'}
+                            aria-label={isSuperAdmin ? 'Eliminar del sistema' : 'Quitar de esta cuenta'}
                             disabled={purgeConfirmDevice?.deviceId === device.deviceId}
                             onClick={() => setPurgeConfirmDevice(device)}
                           >
                             <Trash2 size={18} strokeWidth={2} />
+                            {isImpersonating ? <span>Quitar</span> : null}
                           </button>
                         )}
                       </div>
@@ -1639,21 +1640,21 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                   ))}
                 </div>
               </fieldset>
-              {assignSelectedUser ? (
-                <button
-                  type="button"
-                  className="btn device-assign-unassign-btn"
-                  disabled={savingDevice}
-                  onClick={() => setUnassignConfirmUser(assignSelectedUser)}
-                >
-                  <Trash2 size={16} strokeWidth={2} aria-hidden />
-                  {savingDevice ? 'Quitando…' : `Quitar de la cuenta de ${assignSelectedUser.email}`}
-                </button>
-              ) : null}
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" disabled={savingDevice} onClick={() => setAssignForDevice(null)}>
                   Cancelar
                 </button>
+                {assignSelectedUser ? (
+                  <button
+                    type="button"
+                    className="btn device-assign-unassign-btn"
+                    disabled={savingDevice}
+                    onClick={() => setUnassignConfirmUser(assignSelectedUser)}
+                  >
+                    <Trash2 size={16} strokeWidth={2} aria-hidden />
+                    {savingDevice ? 'Quitando…' : 'Quitar de esta cuenta'}
+                  </button>
+                ) : null}
                 <button type="submit" className="btn btn-primary" disabled={savingDevice || !assignSelectedUser}>
                   {savingDevice ? 'Asignando…' : candidateIsAssigned(assignSelectedUser) ? 'Actualizar permisos' : 'Asignar'}
                 </button>

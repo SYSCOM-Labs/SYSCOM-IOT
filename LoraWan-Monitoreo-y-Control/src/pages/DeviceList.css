@@ -1097,6 +1097,21 @@ body.theme-dark .device-license-grace-badge {
     0 4px 14px -3px rgb(225 29 72 / 0.4);
 }
 
+.device-action-pill--unassign-label {
+  width: auto;
+  min-width: 2.5rem;
+  padding: 0 12px;
+  gap: 6px;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.um-modal-shell.device-assign-modal .modal-footer .device-assign-unassign-btn {
+  width: auto;
+  flex: 1 1 auto;
+  min-width: 12rem;
+}
+
 @media (max-width: 1024px) {
   .device-table th:nth-child(2),
   .device-table td:nth-child(2),

@@ -5129,6 +5129,7 @@ if (fs.existsSync(distPath)) {
   app.use(express.static(distPath, distStaticOpts));
   app.get('*', (req, res, next) => {
     if (req.path.startsWith('/api')) return next();
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.sendFile(path.join(distPath, 'index.html'));
   });
 } else if (fs.existsSync(publicPath)) {
