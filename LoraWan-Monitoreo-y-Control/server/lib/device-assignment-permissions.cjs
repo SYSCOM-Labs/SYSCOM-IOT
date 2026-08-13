@@ -84,6 +84,13 @@ function requireDevicePermission(store, key) {
     if (!did) return res.status(400).json({ error: 'deviceId requerido' });
     const ud = store.getUserDevice(actor.id, did);
     if (!ud) return res.status(403).json({ error: 'Dispositivo no asignado a su cuenta' });
+    const impId = req.user && req.user.impersonatorId != null ? String(req.user.impersonatorId).trim() : '';
+    if (impId && key === 'delete') {
+      const impersonator = store.getUserById(impId);
+      if (impersonator && String(impersonator.role || '').toLowerCase() === 'superadmin') {
+        return next();
+      }
+    }
     if (!actorHasDevicePermission(actor, ud, key)) {
       return res.status(403).json({ error: 'Sin permiso en este dispositivo para esta acción' });
     }

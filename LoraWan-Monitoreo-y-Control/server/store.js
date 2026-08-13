@@ -3542,22 +3542,7 @@ class Store {
   getUserDevice(userId, deviceId) {
     const r = this.st.udGet.get(userId, String(deviceId));
     if (!r) return null;
-    return {
-      id: r.id,
-      userId: r.user_id,
-      deviceId: r.device_id,
-      displayName: r.display_name,
-      devEUI: r.dev_eui || '',
-      notes: r.notes || '',
-      appEui: r.app_eui || '',
-      appKey: r.app_key || '',
-      tag: r.tag || '',
-      productModel: r.product_model != null ? String(r.product_model) : '',
-      lorawanClass: r.lorawan_class || '',
-      deviceSerialHex: r.device_serial_hex || '',
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-    };
+    return this._rowToUserDeviceRecord(r);
   }
 
   /** Misma cuenta: buscar fila por DevEUI normalizado (16 hex), p. ej. uplink LNS con deviceId = DevEUI. */
@@ -3590,22 +3575,7 @@ class Store {
     if (userId === undefined || userId === null) return [];
     const uid = String(userId).trim();
     if (!uid) return [];
-    return this.st.udList.all(uid).map((r) => ({
-      id: r.id,
-      userId: r.user_id,
-      deviceId: r.device_id,
-      displayName: r.display_name,
-      devEUI: r.dev_eui || '',
-      notes: r.notes || '',
-      appEui: r.app_eui || '',
-      appKey: r.app_key || '',
-      tag: r.tag || '',
-      productModel: r.product_model != null ? String(r.product_model) : '',
-      lorawanClass: r.lorawan_class || '',
-      deviceSerialHex: r.device_serial_hex || '',
-      createdAt: r.created_at,
-      updatedAt: r.updated_at,
-    }));
+    return this.st.udList.all(uid).map((r) => this._rowToUserDeviceRecord(r));
   }
 
   /**

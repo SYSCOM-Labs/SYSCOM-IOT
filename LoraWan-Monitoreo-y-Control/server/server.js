@@ -3581,6 +3581,7 @@ app.get('/api/devices/:deviceId/assign-candidates', authMiddleware, requireDevic
         email: u.email,
         profileName: u.profileName || '',
         role: u.role,
+        assigned: Boolean(ud),
         assignmentPermissions: ud ? ud.assignmentPermissions : null,
       };
     });

@@ -265,7 +265,7 @@ function mergeDeviceRowWithLatestTelemetry(dev, localUpdate) {
 }
 
 const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
-  const { credentials, token, user, userProfile, hasNavPage, isSuperAdmin, canCreateDevices } = useAuth();
+  const { credentials, token, user, userProfile, hasNavPage, isSuperAdmin, canCreateDevices, isImpersonating } = useAuth();
   const { t } = useLanguage();
   const canAssignDevice = isSuperAdmin || (hasNavPage('Users') && hasNavPage('Devices'));
   const hasDevicesNav = hasNavPage('Devices');
@@ -830,7 +830,8 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
     }
   };
 
-  const candidateIsAssigned = (u) => u != null && u.assignmentPermissions != null;
+  const candidateIsAssigned = (u) =>
+    Boolean(u && (u.assigned === true || u.assignmentPermissions != null));
 
   const refreshAssignCandidates = async (deviceId) => {
     const list = await fetchDeviceAssignCandidates(deviceId);
@@ -1041,6 +1042,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                 isSuperAdmin,
                 hasDevicesNav,
                 canAssignNav: canAssignDevice,
+                isImpersonating,
               });
               const showRowActions =
                 isSuperAdmin ||
@@ -1641,7 +1643,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                 <button type="button" className="btn btn-secondary" disabled={savingDevice} onClick={() => setAssignForDevice(null)}>
                   Cancelar
                 </button>
-                {candidateIsAssigned(assignSelectedUser) ? (
+                {assignSelectedUser ? (
                   <button
                     type="button"
                     className="btn device-assign-unassign-btn"

@@ -31,16 +31,20 @@ export function sanitizeDeviceAssignmentPermissions(input) {
  */
 export function deviceActionPermissions(
   device,
-  { isSuperAdmin = false, hasDevicesNav = false, canAssignNav = false } = {}
+  { isSuperAdmin = false, hasDevicesNav = false, canAssignNav = false, isImpersonating = false } = {}
 ) {
   if (isSuperAdmin) return allDeviceAssignmentPermissions();
+  let perms;
   if (device && device.assignmentPermissions && typeof device.assignmentPermissions === 'object') {
-    return sanitizeDeviceAssignmentPermissions(device.assignmentPermissions);
+    perms = sanitizeDeviceAssignmentPermissions(device.assignmentPermissions);
+  } else {
+    perms = {
+      edit: Boolean(hasDevicesNav),
+      delete: false,
+      downlink: Boolean(hasDevicesNav),
+      assign: Boolean(canAssignNav),
+    };
   }
-  return {
-    edit: Boolean(hasDevicesNav),
-    delete: false,
-    downlink: Boolean(hasDevicesNav),
-    assign: Boolean(canAssignNav),
-  };
+  if (isImpersonating) perms = { ...perms, delete: true };
+  return perms;
 }
