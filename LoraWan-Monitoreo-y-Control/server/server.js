@@ -3575,7 +3575,13 @@ app.get('/api/devices/:deviceId/assign-candidates', authMiddleware, requireDevic
   const out = (Array.isArray(raw) ? raw : [])
     .filter((u) => String(u.id) !== String(actor.id))
     .map((u) => {
-      const ud = store.getUserDevice(u.id, did);
+      let ud = store.getUserDevice(u.id, did);
+      if (!ud) {
+        const eui = String(did).replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+        if (eui.length === 16 && typeof store.getUserDeviceByDevEuiNorm === 'function') {
+          ud = store.getUserDeviceByDevEuiNorm(u.id, eui);
+        }
+      }
       return {
         id: u.id,
         email: u.email,
@@ -3620,12 +3626,19 @@ app.delete('/api/users/:targetUserId/devices/:deviceId', authMiddleware, (req, r
   if (!canUnassignOther) {
     return res.status(403).json({ error: 'Sin permiso para quitar este dispositivo a ese usuario' });
   }
-  if (!store.getUserDevice(targetUserId, did)) {
+  let ud = store.getUserDevice(targetUserId, did);
+  if (!ud) {
+    const eui = String(did).replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+    if (eui.length === 16 && typeof store.getUserDeviceByDevEuiNorm === 'function') {
+      ud = store.getUserDeviceByDevEuiNorm(targetUserId, eui);
+    }
+  }
+  if (!ud) {
     return res.status(404).json({ error: 'El usuario no tiene este dispositivo asignado' });
   }
-  store.deleteUserDevice(targetUserId, did);
+  store.deleteUserDevice(targetUserId, ud.deviceId);
   invalidateDevicesListCache();
-  res.json({ ok: true, unassignedUserId: targetUserId, deviceId: did });
+  res.json({ ok: true, unassignedUserId: targetUserId, deviceId: ud.deviceId });
 });
 
 app.get('/api/user-devices', authMiddleware, (req, res) => {

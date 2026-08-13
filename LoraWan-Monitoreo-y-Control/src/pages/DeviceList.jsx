@@ -1639,20 +1639,21 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                   ))}
                 </div>
               </fieldset>
+              {assignSelectedUser ? (
+                <button
+                  type="button"
+                  className="btn device-assign-unassign-btn"
+                  disabled={savingDevice}
+                  onClick={() => setUnassignConfirmUser(assignSelectedUser)}
+                >
+                  <Trash2 size={16} strokeWidth={2} aria-hidden />
+                  {savingDevice ? 'Quitando…' : `Quitar de la cuenta de ${assignSelectedUser.email}`}
+                </button>
+              ) : null}
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" disabled={savingDevice} onClick={() => setAssignForDevice(null)}>
                   Cancelar
                 </button>
-                {assignSelectedUser ? (
-                  <button
-                    type="button"
-                    className="btn device-assign-unassign-btn"
-                    disabled={savingDevice}
-                    onClick={() => setUnassignConfirmUser(assignSelectedUser)}
-                  >
-                    {savingDevice ? 'Quitando…' : 'Quitar de esta cuenta'}
-                  </button>
-                ) : null}
                 <button type="submit" className="btn btn-primary" disabled={savingDevice || !assignSelectedUser}>
                   {savingDevice ? 'Asignando…' : candidateIsAssigned(assignSelectedUser) ? 'Actualizar permisos' : 'Asignar'}
                 </button>
