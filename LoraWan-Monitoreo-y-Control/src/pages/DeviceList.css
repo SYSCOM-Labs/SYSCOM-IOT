@@ -42,7 +42,7 @@
 
 /* Asignar dispositivo: misma cápsula premium que Usuarios / Plantillas (um-modal-shell) */
 .modal-content.um-modal-shell.device-assign-modal {
-  max-width: min(460px, 94vw);
+  max-width: min(520px, 94vw);
   width: 100%;
   padding: 0;
 }
@@ -82,6 +82,61 @@ body.theme-dark .um-modal-shell.device-assign-modal .assign-user-list {
 
 .um-modal-shell.device-assign-modal input.device-modal-input--search {
   border-radius: 12px;
+}
+
+.device-assign-perms {
+  margin: 0;
+  padding: 12px 14px 10px;
+  border-radius: 14px;
+  border: 1px solid rgba(99, 102, 241, 0.22);
+  background: rgba(99, 102, 241, 0.05);
+  min-width: 0;
+}
+
+.device-assign-perms:disabled {
+  opacity: 0.55;
+}
+
+.device-assign-perms__legend {
+  padding: 0 6px;
+  font-size: 0.82rem;
+  font-weight: 650;
+  color: var(--text-primary);
+}
+
+.device-assign-perms__hint {
+  margin: 0 0 10px;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.device-assign-perms__list {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+}
+
+.device-assign-perm-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.88rem;
+  color: var(--text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.device-assign-perm-item input {
+  width: 16px;
+  height: 16px;
+  accent-color: #4f46e5;
+  flex-shrink: 0;
+}
+
+body.theme-dark .device-assign-perms {
+  background: rgba(99, 102, 241, 0.1);
+  border-color: rgba(129, 140, 248, 0.3);
 }
 
 .device-create-hint {

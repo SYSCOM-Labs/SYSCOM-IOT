@@ -31,7 +31,9 @@ import {
   sendDownlink,
   registerUserDevice,
   purgeDeviceFromSystem,
+  unassignMyDevice,
   assignDeviceToUser,
+  fetchDeviceAssignCandidates,
   putDeviceBsdPreferences,
   saveDeviceDecodeConfig,
   renewDeviceLicense,
@@ -48,12 +50,18 @@ import {
   primeDeviceSharedPresetsFromDeviceRows,
   getDownlinkSendOptionsForDevice,
 } from '../services/deviceTemplates';
-import { getLatestDeviceData, getUsers } from '../services/localAuth';
+import { getLatestDeviceData } from '../services/localAuth';
 import {
   applyStaleOfflineConnectStatus,
   isDeviceJoinPendingOnly,
   isDeviceVisuallyOnline,
 } from '../utils/deviceConnectionStatus';
+import {
+  deviceActionPermissions,
+  emptyDeviceAssignmentPermissions,
+  DEVICE_ASSIGNMENT_PERM_KEYS,
+  sanitizeDeviceAssignmentPermissions,
+} from '../utils/deviceAssignmentPermissions';
 import { isJoinOnlyTelemetryProperties } from '../utils/joinOnlyTelemetry';
 import { APP_UPLINK_STALE_MS, isLastDbIngestStaleForDisplay } from '../constants/commsStaleOfflineMs';
 import { pushAppActivityLog } from '../utils/appActivityLog';
@@ -246,6 +254,7 @@ function mergeDeviceRowWithLatestTelemetry(dev, localUpdate) {
     devEUI: dev.devEUI || dev.devEui || p.devEUI || p.devEui,
     connectStatus,
     electricity: p.electricity !== undefined ? p.electricity : dev.electricity,
+    assignmentPermissions: dev.assignmentPermissions,
     lastUpdateTime:
       localUpdate.timestamp > (dev.lastUpdateTime || 0) ? localUpdate.timestamp : dev.lastUpdateTime,
   };
@@ -258,7 +267,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
   const { credentials, token, user, userProfile, hasNavPage, isSuperAdmin, canCreateDevices } = useAuth();
   const { t } = useLanguage();
   const canAssignDevice = isSuperAdmin || (hasNavPage('Users') && hasNavPage('Devices'));
-  const showDeviceRowActions = hasNavPage('Devices') || isSuperAdmin;
+  const hasDevicesNav = hasNavPage('Devices');
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -273,6 +282,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
   const [assignForDevice, setAssignForDevice] = useState(null);
   const [assignSearch, setAssignSearch] = useState('');
   const [assignSelectedUser, setAssignSelectedUser] = useState(null);
+  const [assignPerms, setAssignPerms] = useState(emptyDeviceAssignmentPermissions);
   const [usersForAssign, setUsersForAssign] = useState([]);
   const [createForm, setCreateForm] = useState(EMPTY_CREATE);
   const [savingDevice, setSavingDevice] = useState(false);
@@ -448,11 +458,11 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
   }, []);
 
   useEffect(() => {
-    if (!assignForDevice || !canAssignDevice) return;
+    if (!assignForDevice) return;
     let cancelled = false;
     (async () => {
       try {
-        const list = await getUsers();
+        const list = await fetchDeviceAssignCandidates(assignForDevice.deviceId);
         if (!cancelled) setUsersForAssign(Array.isArray(list) ? list : []);
       } catch {
         if (!cancelled) setUsersForAssign([]);
@@ -461,7 +471,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
     return () => {
       cancelled = true;
     };
-  }, [assignForDevice, canAssignDevice]);
+  }, [assignForDevice]);
 
   const templatesForPicker = useMemo(
     () => filterDeviceTemplatesByQuery(templatePickQuery),
@@ -529,6 +539,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
     setAssignForDevice(device);
     setAssignSelectedUser(null);
     setAssignSearch('');
+    setAssignPerms(emptyDeviceAssignmentPermissions());
   };
 
   const handleSaveDeviceEdit = async (deviceId, newName, newTag) => {
@@ -800,10 +811,15 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
           }
         }
       }
-      await assignDeviceToUser(assignForDevice.deviceId, assignSelectedUser.email.trim().toLowerCase());
+      await assignDeviceToUser(
+        assignForDevice.deviceId,
+        assignSelectedUser.email.trim().toLowerCase(),
+        assignPerms
+      );
       setAssignForDevice(null);
       setAssignSelectedUser(null);
       setAssignSearch('');
+      setAssignPerms(emptyDeviceAssignmentPermissions());
       await loadDevices();
     } catch (err) {
       setBlockingAlert(err.response?.data?.error || err.message || t('common.error'));
@@ -838,7 +854,11 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
   const executePurgeDevice = async (d) => {
     if (!d) return;
     try {
-      await purgeDeviceFromSystem(d.deviceId);
+      if (isSuperAdmin) {
+        await purgeDeviceFromSystem(d.deviceId);
+      } else {
+        await unassignMyDevice(d.deviceId);
+      }
       await loadDevices();
     } catch (err) {
       setBlockingAlert(err.response?.data?.error || err.message || t('common.error'));
@@ -857,15 +877,17 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
       />
       <CenteredAlertModal
         open={Boolean(purgeConfirmDevice)}
-        title="Eliminar dispositivo"
+        title={isSuperAdmin ? 'Eliminar dispositivo' : 'Quitar dispositivo'}
         variant="error"
         message={
           purgeConfirmDevice
-            ? `¿Está seguro de que desea **eliminar** el dispositivo de forma definitiva?\n\nSe borrarán telemetría, asignaciones y tableros. **Esta acción no se puede deshacer.**\n\n**Dispositivo:** ${purgeConfirmDevice.name || purgeConfirmDevice.deviceId}`
+            ? isSuperAdmin
+              ? `¿Está seguro de que desea **eliminar** el dispositivo de forma definitiva?\n\nSe borrarán telemetría, asignaciones y tableros. **Esta acción no se puede deshacer.**\n\n**Dispositivo:** ${purgeConfirmDevice.name || purgeConfirmDevice.deviceId}`
+              : `¿Quitar **${purgeConfirmDevice.name || purgeConfirmDevice.deviceId}** de su cuenta?\n\nEl dispositivo dejará de aparecerle a usted. **Seguirá en la cuenta del administrador** y de otros usuarios a los que esté asignado.`
             : ''
         }
         cancelLabel="Cancelar"
-        confirmLabel="Sí, eliminar"
+        confirmLabel={isSuperAdmin ? 'Sí, eliminar' : 'Sí, quitar de mi cuenta'}
         confirmDanger
         onClose={() => setPurgeConfirmDevice(null)}
         onConfirm={() => executePurgeDevice(purgeConfirmDevice)}
@@ -971,6 +993,18 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
               const joinPendingOnly = isDeviceJoinPendingOnly(device);
               const visuallyOnline = isDeviceVisuallyOnline(device);
               const power = formatDevicePowerCell(device);
+              const rowPerms = deviceActionPermissions(device, {
+                isSuperAdmin,
+                hasDevicesNav,
+                canAssignNav: canAssignDevice,
+              });
+              const showRowActions =
+                isSuperAdmin ||
+                hasDevicesNav ||
+                rowPerms.edit ||
+                rowPerms.delete ||
+                rowPerms.downlink ||
+                rowPerms.assign;
               return (
               <tr key={device.deviceId}>
                 <td>
@@ -1024,7 +1058,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                 </td>
                 <td className="device-actions-col">
                   <div className="actions">
-                    {showDeviceRowActions && (
+                    {showRowActions && (
                       <div className="device-row-actions-icons" role="group" aria-label="Acciones del dispositivo">
                         {isSuperAdmin && (
                           <button
@@ -1045,13 +1079,12 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                             Renovación de licencia
                           </button>
                         )}
-                        {hasNavPage('Devices') && (
-                          <>
+                        {rowPerms.edit && (
                         <button
                           type="button"
                           className="device-action-pill"
-                          title="Editar"
-                          aria-label="Editar"
+                          title={t('devices.perm_edit')}
+                          aria-label={t('devices.perm_edit')}
                           onClick={() => {
                             setActiveDevice(device);
                             setModalType('edit');
@@ -1059,6 +1092,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                         >
                           <Edit2 size={18} strokeWidth={2} />
                         </button>
+                        )}
                         <button
                           type="button"
                           className="device-action-pill"
@@ -1071,11 +1105,12 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                         >
                           <Database size={18} strokeWidth={2} />
                         </button>
+                        {rowPerms.downlink && (
                         <button
                           type="button"
                           className="device-action-pill"
-                          title="Downlink"
-                          aria-label="Downlink"
+                          title={t('devices.perm_downlink')}
+                          aria-label={t('devices.perm_downlink')}
                           onClick={() => {
                             setActiveDevice(device);
                             setModalType('downlink');
@@ -1083,25 +1118,24 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                         >
                           <Play size={18} strokeWidth={2} />
                         </button>
-                          </>
                         )}
-                        {canAssignDevice && (
+                        {rowPerms.assign && (
                         <button
                           type="button"
                           className="device-action-pill"
-                          title="Asignar dispositivo"
-                          aria-label="Asignar dispositivo"
+                          title={t('devices.perm_assign')}
+                          aria-label={t('devices.perm_assign')}
                           onClick={() => openAssignModal(device)}
                         >
                           <UserPlus size={18} strokeWidth={2} />
                         </button>
                         )}
-                        {isSuperAdmin && (
+                        {rowPerms.delete && (
                           <button
                             type="button"
                             className="device-action-pill device-action-pill--danger"
-                            title="Eliminar del sistema"
-                            aria-label="Eliminar del sistema"
+                            title={isSuperAdmin ? 'Eliminar del sistema' : 'Quitar de mi cuenta'}
+                            aria-label={isSuperAdmin ? 'Eliminar del sistema' : 'Quitar de mi cuenta'}
                             disabled={purgeConfirmDevice?.deviceId === device.deviceId}
                             onClick={() => setPurgeConfirmDevice(device)}
                           >
@@ -1492,7 +1526,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
             </div>
             <p className="um-modal-hint device-assign-modal-hint">
               Dispositivo: <strong>{assignForDevice.name || assignForDevice.deviceId}</strong>. Busca por correo o nombre y selecciona un usuario.
-              El dispositivo aparecerá en su cuenta al confirmar.
+              El dispositivo aparecerá en su cuenta al confirmar. Marque qué acciones podrá realizar sobre este equipo.
             </p>
             <form onSubmit={handleAssignConfirm} className="device-create-form device-assign-modal-form">
               <label className="device-modal-field device-assign-search-field" htmlFor="device-assign-user-search">
@@ -1517,7 +1551,14 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                       key={u.id}
                       type="button"
                       className={`assign-user-row ${assignSelectedUser?.id === u.id ? 'selected' : ''}`}
-                      onClick={() => setAssignSelectedUser(u)}
+                      onClick={() => {
+                        setAssignSelectedUser(u);
+                        setAssignPerms(
+                          u.assignmentPermissions
+                            ? sanitizeDeviceAssignmentPermissions(u.assignmentPermissions)
+                            : emptyDeviceAssignmentPermissions()
+                        );
+                      }}
                     >
                       <span className="assign-user-email">{u.email}</span>
                       <span className="assign-user-meta">
@@ -1527,6 +1568,25 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                   ))
                 )}
               </div>
+              <fieldset className="device-assign-perms" disabled={!assignSelectedUser || savingDevice}>
+                <legend className="device-assign-perms__legend">{t('devices.assign_permissions_title')}</legend>
+                <p className="device-assign-perms__hint">{t('devices.assign_permissions_hint')}</p>
+                <div className="device-assign-perms__list">
+                  {DEVICE_ASSIGNMENT_PERM_KEYS.map(({ key, labelKey }) => (
+                    <label key={key} className="device-assign-perm-item">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(assignPerms[key])}
+                        onChange={(e) => {
+                          const on = e.target.checked;
+                          setAssignPerms((prev) => ({ ...prev, [key]: on }));
+                        }}
+                      />
+                      <span>{t(labelKey)}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
               <div className="modal-footer">
                 <button type="button" className="btn btn-secondary" disabled={savingDevice} onClick={() => setAssignForDevice(null)}>
                   Cancelar

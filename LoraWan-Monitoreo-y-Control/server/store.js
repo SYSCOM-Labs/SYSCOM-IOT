@@ -23,6 +23,7 @@ const {
   needsMergedTelemetryForList,
 } = require(path.join(__dirname, 'lib', 'vs133-telemetry-aliases.js'));
 const navPerm = require('./navPermissions');
+const deviceAssignPerm = require('./lib/device-assignment-permissions.cjs');
 
 /** JSON PULL_RESP de Join-Accept OTAA (`lorawan-lns-engine` marca `_syscomLnsKind`). */
 function pullRespJsonIsJoinAccept(raw) {
@@ -473,6 +474,9 @@ class Store {
       if (!names.has('device_serial_hex'))
         this.db.exec('ALTER TABLE user_devices ADD COLUMN device_serial_hex TEXT');
       if (!names.has('product_model')) this.db.exec('ALTER TABLE user_devices ADD COLUMN product_model TEXT');
+      if (!names.has('assignment_permissions_json')) {
+        this.db.exec('ALTER TABLE user_devices ADD COLUMN assignment_permissions_json TEXT');
+      }
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS device_license (
           device_id TEXT PRIMARY KEY,
@@ -1095,8 +1099,8 @@ class Store {
         LIMIT 1
       `),
       udUpsert: this.db.prepare(`
-        INSERT INTO user_devices (id, user_id, device_id, display_name, dev_eui, notes, app_eui, app_key, tag, product_model, lorawan_class, device_serial_hex, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO user_devices (id, user_id, device_id, display_name, dev_eui, notes, app_eui, app_key, tag, product_model, lorawan_class, device_serial_hex, created_at, updated_at, assignment_permissions_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(user_id, device_id) DO UPDATE SET
           display_name = excluded.display_name,
           dev_eui = excluded.dev_eui,
@@ -1107,7 +1111,8 @@ class Store {
           product_model = excluded.product_model,
           lorawan_class = excluded.lorawan_class,
           device_serial_hex = coalesce(nullif(trim(excluded.device_serial_hex), ''), user_devices.device_serial_hex),
-          updated_at = excluded.updated_at
+          updated_at = excluded.updated_at,
+          assignment_permissions_json = coalesce(excluded.assignment_permissions_json, user_devices.assignment_permissions_json)
       `),
       decodeGet: this.db.prepare(
         'SELECT device_id, decoder_script, channel, lorawan_class, product_model, updated_at FROM device_decode_config WHERE device_id = ?'
@@ -3656,6 +3661,10 @@ class Store {
       row.productModel != null && String(row.productModel).trim() !== ''
         ? String(row.productModel).trim().slice(0, 200)
         : '';
+    let permJson = null;
+    if (row.replaceAssignmentPermissions) {
+      permJson = deviceAssignPerm.toJson(row.assignmentPermissions);
+    }
     this.st.udUpsert.run(
       row.id,
       row.userId,
@@ -3670,7 +3679,8 @@ class Store {
       lorawanClass || null,
       serialHex,
       row.createdAt,
-      row.updatedAt
+      row.updatedAt,
+      permJson
     );
   }
 
@@ -4150,6 +4160,7 @@ class Store {
   }
 
   _rowToUserDeviceRecord(r) {
+    const assignmentPermissions = deviceAssignPerm.parsePermissionsJson(r.assignment_permissions_json);
     return {
       id: r.id,
       userId: r.user_id,
@@ -4163,6 +4174,8 @@ class Store {
       productModel: r.product_model != null ? String(r.product_model) : '',
       lorawanClass: r.lorawan_class || '',
       deviceSerialHex: r.device_serial_hex || '',
+      assignmentPermissions,
+      assignmentPermissionsJson: r.assignment_permissions_json != null ? String(r.assignment_permissions_json) : null,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     };

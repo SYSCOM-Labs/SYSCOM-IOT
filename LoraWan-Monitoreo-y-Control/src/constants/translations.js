@@ -56,7 +56,13 @@ export const translations = {
       signal: "Signal",
       active_sensors: "Active Sensors",
       no_sensors: "No active sensors found.",
-      send_downlink: "Send Downlink"
+      send_downlink: "Send Downlink",
+      perm_edit: "Edit",
+      perm_delete: "Delete",
+      perm_downlink: "Send downlinks",
+      perm_assign: "Assign to another user",
+      assign_permissions_title: "Permissions on this device",
+      assign_permissions_hint: "The user will see the device. They can only perform the checked actions."
     },
     history: {
       title: "Historical Data",
@@ -314,7 +320,13 @@ export const translations = {
       signal: "Señal",
       active_sensors: "Sensores Activos",
       no_sensors: "No hay sensores activos.",
-      send_downlink: "Enviar Downlink"
+      send_downlink: "Enviar Downlink",
+      perm_edit: "Editar",
+      perm_delete: "Eliminar",
+      perm_downlink: "Enviar downlinks",
+      perm_assign: "Asignar a otro usuario",
+      assign_permissions_title: "Permisos en este dispositivo",
+      assign_permissions_hint: "El usuario verá el dispositivo. Solo podrá realizar las acciones marcadas."
     },
     history: {
       title: "Datos Históricos",

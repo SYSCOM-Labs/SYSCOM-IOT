@@ -59,6 +59,7 @@ const {
   isLastDbIngestStale,
 } = require('./comms-stale-policy');
 const { joinOnlyTelemetryHint, inferFreshOnlineConnectStatus } = require('./lib/device-connect-status-infer');
+const deviceAssignPerm = require('./lib/device-assignment-permissions.cjs');
 
 const realtimeSseContract = require(path.join(__dirname, '..', 'shared', 'realtime-sse-contract.json'));
 
@@ -774,6 +775,7 @@ function resolvedDeviceProductModelFast(deviceId, reg, decodeMap) {
  * No se listan equipos que solo tengan telemetría huérfana bajo su user_id.
  */
 function buildDevicesContentAssignedOnly(userId) {
+  const actor = store.getUserById(userId) || { id: userId, role: 'user' };
   const labels = store.getDeviceLabels(userId);
   const labelById = Object.fromEntries(labels.map((l) => [l.deviceId, l.displayName]));
   const registered = store.listUserDevices(userId);
@@ -805,6 +807,7 @@ function buildDevicesContentAssignedOnly(userId) {
       row.registered = true;
       attachLicenseFieldsToDeviceRow(row, licenseMap[reg.deviceId]);
       row.lorawanClass = resolveLorawanClassForDeviceRow(reg.deviceId, reg, null, decodeMap[reg.deviceId]);
+      row.assignmentPermissions = assignmentPermissionsForListActor(actor, reg);
       content.push(row);
     } else {
       const tplModel = resolvedDeviceProductModelFast(reg.deviceId, reg, decodeMap);
@@ -824,6 +827,7 @@ function buildDevicesContentAssignedOnly(userId) {
       };
       attachLicenseFieldsToDeviceRow(row, licenseMap[reg.deviceId]);
       row.lorawanClass = resolveLorawanClassForDeviceRow(reg.deviceId, reg, null, decodeMap[reg.deviceId]);
+      row.assignmentPermissions = assignmentPermissionsForListActor(actor, reg);
       content.push(row);
     }
   }
@@ -939,6 +943,7 @@ function buildDevicesContentSuperadmin() {
     row.superadminGlobalView = true;
     attachLicenseFieldsToDeviceRow(row, licenseMap[deviceId]);
     row.lorawanClass = resolveLorawanClassForDeviceRow(deviceId, anyUd, assigns, decCfg);
+    row.assignmentPermissions = deviceAssignPerm.allPermissions();
     content.push(row);
   }
   content.sort((a, b) => String(a.deviceId).localeCompare(String(b.deviceId)));
@@ -983,6 +988,42 @@ function assertDeviceAssignedToUser(req, res, deviceIdParam) {
 function deviceAssignmentMiddleware(req, res, next) {
   if (!assertDeviceAssignedToUser(req, res, req.params.deviceId)) return;
   next();
+}
+
+const requireDeviceEditPermission = deviceAssignPerm.requireDevicePermission(store, 'edit');
+const requireDeviceDeletePermission = deviceAssignPerm.requireDevicePermission(store, 'delete');
+const requireDeviceDownlinkPermission = deviceAssignPerm.requireDevicePermission(store, 'downlink');
+
+function requireDeviceAssignPermission(req, res, next) {
+  const actor = store.getUserById(req.user && req.user.id);
+  if (!actor) return res.status(401).json({ error: 'Usuario no encontrado' });
+  if (String(actor.role || '').toLowerCase() === 'superadmin') return next();
+  const did = String(
+    (req.params && req.params.deviceId != null ? decodeURIComponent(String(req.params.deviceId)) : '') ||
+      (req.body && req.body.deviceId) ||
+      ''
+  ).trim();
+  if (!did) return res.status(400).json({ error: 'deviceId requerido' });
+  const ud = store.getUserDevice(actor.id, did);
+  if (!ud) return res.status(403).json({ error: 'Dispositivo no asignado a su cuenta' });
+  if (deviceAssignPerm.actorHasDevicePermission(actor, ud, 'assign')) return next();
+  const jsonMissing =
+    ud.assignmentPermissionsJson == null || String(ud.assignmentPermissionsJson).trim() === '';
+  if (jsonMissing && navPerm.userHasNav(actor, 'Users') && navPerm.userHasNav(actor, 'Devices')) {
+    return next();
+  }
+  return res.status(403).json({ error: 'Sin permiso en este dispositivo para asignar' });
+}
+
+function assignmentPermissionsForListActor(actor, reg) {
+  const perms = { ...deviceAssignPerm.effectivePermissionsForActor(actor, reg) };
+  if (actor && String(actor.role || '').toLowerCase() === 'superadmin') return perms;
+  const jsonMissing =
+    !reg || reg.assignmentPermissionsJson == null || String(reg.assignmentPermissionsJson).trim() === '';
+  if (jsonMissing && actor && navPerm.userHasNav(actor, 'Users') && navPerm.userHasNav(actor, 'Devices')) {
+    perms.assign = true;
+  }
+  return perms;
 }
 
 /** Avatar público asociado al correo (Gravatar); muchas cuentas Gmail usan la misma foto allí. */
@@ -2843,6 +2884,7 @@ app.get('/api/users/:id/devices', authMiddleware, adminMiddleware, (req, res) =>
       productModel: d.productModel != null ? String(d.productModel) : '',
       lorawanClass: d.lorawanClass != null ? String(d.lorawanClass) : '',
       notes: d.notes != null ? String(d.notes) : '',
+      assignmentPermissions: d.assignmentPermissions || deviceAssignPerm.parsePermissionsJson(d.assignmentPermissionsJson),
     }));
     res.json({
       userId: targetUserId,
@@ -3418,15 +3460,9 @@ app.put(
   }
 );
 
-app.post('/api/devices/assign', authMiddleware, (req, res) => {
+app.post('/api/devices/assign', authMiddleware, requireDeviceAssignPermission, (req, res) => {
   const actor = store.getUserById(req.user.id);
   if (!actor) return res.status(401).json({ error: 'Usuario no encontrado' });
-  const canAssign =
-    actor.role === 'superadmin' ||
-    (navPerm.userHasNav(actor, 'Devices') && navPerm.userHasNav(actor, 'Users'));
-  if (!canAssign) {
-    return res.status(403).json({ error: 'No tiene permiso para asignar dispositivos' });
-  }
 
   const { deviceId, assigneeEmail } = req.body || {};
   const did = deviceId != null ? String(deviceId).trim() : '';
@@ -3459,6 +3495,18 @@ app.post('/api/devices/assign', authMiddleware, (req, res) => {
     }
   }
 
+  const requested = deviceAssignPerm.sanitizePermissions(
+    req.body.permissions || req.body.assignmentPermissions
+  );
+  let assignmentPermissions = requested;
+  if (actor.role !== 'superadmin') {
+    const actorUd = store.getUserDevice(actor.id, did);
+    assignmentPermissions = deviceAssignPerm.intersectPermissions(
+      requested,
+      deviceAssignPerm.effectivePermissionsForActor(actor, actorUd)
+    );
+  }
+
   const base =
     store.getUserDevice(actor.id, did) || store.getAnyUserDeviceForDeviceId(did) || {
       displayName: did,
@@ -3488,6 +3536,8 @@ app.post('/api/devices/assign', authMiddleware, (req, res) => {
     productModel: productModelMerged,
     lorawanClass: base.lorawanClass || '',
     deviceSerialHex: base.deviceSerialHex || '',
+    assignmentPermissions,
+    replaceAssignmentPermissions: true,
     updatedAt: nowIso,
     createdAt: prevA ? prevA.createdAt : nowIso,
   };
@@ -3508,12 +3558,38 @@ app.post('/api/devices/assign', authMiddleware, (req, res) => {
     console.warn('[devices/assign] BSD prefs / dashboard widgets:', e.message || e);
   }
   invalidateDevicesListCache();
-  res.status(prevA ? 200 : 201).json({ ok: true, userDevice: row });
+  res.status(prevA ? 200 : 201).json({ ok: true, userDevice: row, assignmentPermissions });
+});
+
+app.get('/api/devices/:deviceId/assign-candidates', authMiddleware, requireDeviceAssignPermission, (req, res) => {
+  const actor = store.getUserById(req.user.id);
+  if (!actor) return res.status(401).json({ error: 'Usuario no encontrado' });
+  const did = decodeURIComponent(String(req.params.deviceId || '').trim());
+  if (!did) return res.status(400).json({ error: 'deviceId requerido' });
+  let raw;
+  if (actor.role === 'superadmin') {
+    raw = store.allUsersSanitized();
+  } else {
+    raw = store.listUsersInSubtree(actor.id);
+  }
+  const out = (Array.isArray(raw) ? raw : [])
+    .filter((u) => String(u.id) !== String(actor.id))
+    .map((u) => {
+      const ud = store.getUserDevice(u.id, did);
+      return {
+        id: u.id,
+        email: u.email,
+        profileName: u.profileName || '',
+        role: u.role,
+        assignmentPermissions: ud ? ud.assignmentPermissions : null,
+      };
+    });
+  res.json(out);
 });
 
 /**
  * Borrado definitivo del equipo en SQLite: telemetría, **todas** las asignaciones (incl. superadmin), decode, licencia, etc.
- * Para solo quitar el vínculo de una cuenta: `DELETE /api/user-devices/:deviceId` o `DELETE /api/users/:userId/devices/:deviceId`.
+ * Solo superadmin. Un usuario con permiso «Eliminar» usa `DELETE /api/user-devices/:deviceId` (solo su cuenta).
  */
 app.delete('/api/devices/:deviceId/permanent', authMiddleware, superAdminOnlyMiddleware, (req, res) => {
   const did = decodeURIComponent(req.params.deviceId || '').trim();
@@ -3547,6 +3623,7 @@ app.delete('/api/users/:targetUserId/devices/:deviceId', authMiddleware, (req, r
     return res.status(404).json({ error: 'El usuario no tiene este dispositivo asignado' });
   }
   store.deleteUserDevice(targetUserId, did);
+  invalidateDevicesListCache();
   res.json({ ok: true, unassignedUserId: targetUserId, deviceId: did });
 });
 
@@ -3663,6 +3740,8 @@ app.post('/api/user-devices', authMiddleware, superAdminOnlyMiddleware, (req, re
     productModel: productModelStr,
     lorawanClass: lorawanClass != null ? String(lorawanClass) : prev?.lorawanClass,
     deviceSerialHex: mergedSerialHex.length >= 8 ? mergedSerialHex : prevSerial || '',
+    assignmentPermissions: deviceAssignPerm.allPermissions(),
+    replaceAssignmentPermissions: true,
     updatedAt: nowIso,
     createdAt: prev ? prev.createdAt : nowIso,
   };
@@ -3707,7 +3786,7 @@ app.post('/api/user-devices', authMiddleware, superAdminOnlyMiddleware, (req, re
   res.status(201).json({ ...row, lnsAutoBootstrap });
 });
 
-app.patch('/api/user-devices/:deviceId', authMiddleware, superAdminOnlyMiddleware, (req, res) => {
+app.patch('/api/user-devices/:deviceId', authMiddleware, requireDeviceEditPermission, (req, res) => {
   const did = decodeURIComponent(req.params.deviceId || '').trim();
   if (!did) return res.status(400).json({ error: 'deviceId requerido' });
   const ud = store.getUserDevice(req.user.id, did);
@@ -3823,6 +3902,7 @@ app.put(
   '/api/devices/:deviceId/decode-config',
   authMiddleware,
   deviceAssignmentMiddleware,
+  requireDeviceEditPermission,
   (req, res) => {
     const body = req.body || {};
     const { decoderScript, channel, lorawanClass } = body;
@@ -3877,6 +3957,7 @@ app.patch(
   '/api/devices/:deviceId/lora-credentials',
   authMiddleware,
   deviceAssignmentMiddleware,
+  requireDeviceEditPermission,
   (req, res) => {
     const did = decodeURIComponent(req.params.deviceId || '').trim();
     if (!did) return res.status(400).json({ status: 'Error', errMsg: 'deviceId requerido' });
@@ -3912,15 +3993,17 @@ app.patch(
   }
 );
 
-/** Solo quita el vínculo del JWT actual (`user_devices` + etiquetas/tab BSD de esa cuenta); no afecta a otros asignados. */
+/** Quita el dispositivo solo de la cuenta del JWT. No borra el equipo ni la asignación del administrador u otros. */
 app.delete(
   '/api/user-devices/:deviceId',
   authMiddleware,
   deviceAssignmentMiddleware,
+  requireDeviceDeletePermission,
   (req, res) => {
     const id = decodeURIComponent(req.params.deviceId);
     store.deleteUserDevice(req.user.id, id);
-    res.json({ ok: true });
+    invalidateDevicesListCache();
+    res.json({ ok: true, unassignedOnly: true, deviceId: id });
   }
 );
 
@@ -4330,7 +4413,7 @@ app.get('/api/devices/:deviceId/properties/history', authMiddleware, deviceAssig
   });
 });
 
-app.put('/api/devices', authMiddleware, staffOnlyMiddleware, (req, res) => {
+app.put('/api/devices', authMiddleware, requireDeviceEditPermission, (req, res) => {
   const body = req.body || {};
   const { deviceId, name, tag } = body;
   if (!deviceId) return res.status(400).json({ status: 'Error', errMsg: 'deviceId requerido' });
@@ -4353,7 +4436,7 @@ app.put('/api/devices', authMiddleware, staffOnlyMiddleware, (req, res) => {
   res.json({ status: 'Success' });
 });
 
-app.post('/api/devices/:deviceId/downlink', authMiddleware, deviceAssignmentMiddleware, (req, res) => {
+app.post('/api/devices/:deviceId/downlink', authMiddleware, deviceAssignmentMiddleware, requireDeviceDownlinkPermission, (req, res) => {
   const idStr = req.params.deviceId.toString();
   const { ud, lnsOpts } = downlinkRequestContext(req, idStr);
   if (!ud) return res.status(404).json({ error: 'Dispositivo no encontrado' });
@@ -4826,6 +4909,7 @@ app.post(
   '/api/devices/:deviceId/services/call',
   authMiddleware,
   deviceAssignmentMiddleware,
+  requireDeviceDownlinkPermission,
   (req, res) => {
     const idStr = decodeURIComponent(String(req.params.deviceId || '').trim());
     const serviceId = String(req.body?.serviceId || '').trim();

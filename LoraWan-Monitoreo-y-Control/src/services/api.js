@@ -289,7 +289,7 @@ export const renewDeviceLicense = async (deviceId) => {
   return response.data;
 };
 
-/** Quita el dispositivo solo de la cuenta del usuario autenticado (no borra el equipo ni a otros asignados). */
+/** Quita el dispositivo solo de la cuenta del usuario autenticado (no borra el equipo ni a otros asignados, p. ej. el administrador). */
 export const unassignMyDevice = async (deviceId) => {
   const response = await axios.delete(
     `${SERVER_API()}/user-devices/${encodeURIComponent(deviceId)}`,
@@ -319,10 +319,18 @@ export const purgeDeviceFromSystem = async (deviceId) => {
   return response.data;
 };
 
-export const assignDeviceToUser = async (deviceId, assigneeEmail) => {
+export const assignDeviceToUser = async (deviceId, assigneeEmail, permissions) => {
   const response = await axios.post(
     `${SERVER_API()}/devices/assign`,
-    { deviceId, assigneeEmail },
+    { deviceId, assigneeEmail, permissions },
+    { headers: authHeaders() }
+  );
+  return response.data;
+};
+
+export const fetchDeviceAssignCandidates = async (deviceId) => {
+  const response = await axios.get(
+    `${SERVER_API()}/devices/${encodeURIComponent(String(deviceId || '').trim())}/assign-candidates`,
     { headers: authHeaders() }
   );
   return response.data;
