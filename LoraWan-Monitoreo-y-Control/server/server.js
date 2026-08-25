@@ -3288,6 +3288,60 @@ app.post('/api/lorawan-gateways', authMiddleware, navGatewayMiddleware, (req, re
   res.status(201).json({ ...row, lnsAbpBootstrapRetry });
 });
 
+app.patch('/api/lorawan-gateways/:id', authMiddleware, navGatewayMiddleware, (req, res) => {
+  const existing = store.getLorawanGatewayById(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'No encontrado' });
+  const isSuper = req.user.role === 'superadmin';
+  if (String(existing.userId) !== String(req.user.id) && !isSuper) {
+    return res.status(403).json({ error: 'Sin permiso para editar este gateway' });
+  }
+  const { name, gatewayEui, frequencyBand } = req.body || {};
+  const nameTrim = name != null ? String(name).trim() : '';
+  if (!nameTrim || !gatewayEui || frequencyBand == null || String(frequencyBand).trim() === '') {
+    return res.status(400).json({
+      error: 'Nombre, Gateway EUI y frecuencia son obligatorios.',
+      code: 'GATEWAY_VALIDATION',
+    });
+  }
+  const eui = String(gatewayEui).replace(/[^0-9a-fA-F]/g, '');
+  if (eui.length !== 16) {
+    return res.status(400).json({
+      error: 'Gateway EUI debe tener 16 caracteres hexadecimales (8 bytes).',
+      code: 'GATEWAY_VALIDATION',
+    });
+  }
+  const el = eui.toLowerCase();
+  const bandTrim = String(frequencyBand).trim();
+  const bandUnchanged = bandTrim === String(existing.frequencyBand || '').trim();
+  if (!isAllowedGatewayFrequencyBand(bandTrim) && !bandUnchanged) {
+    return res.status(400).json({
+      error: 'Seleccione una banda de frecuencia válida de la lista.',
+      code: 'GATEWAY_VALIDATION',
+    });
+  }
+  if (store.lorawanGatewayEuiExistsGloballyExceptId(el, existing.id)) {
+    return res.status(409).json({
+      error: 'Ya existe un gateway registrado con este EUI (en el sistema).',
+      code: 'GATEWAY_EXISTS',
+    });
+  }
+  const prevEui = existing.gatewayEui;
+  const ok = store.updateLorawanGateway(existing.id, {
+    name: nameTrim.slice(0, 128),
+    gatewayEui: el,
+    frequencyBand: bandTrim.slice(0, 64),
+  });
+  if (!ok) return res.status(404).json({ error: 'No encontrado' });
+  const updated = store.getLorawanGatewayById(existing.id);
+  store.syncLorawanGatewayEditToSuperadminPool(prevEui, updated);
+  try {
+    retryMilesightAbpBootstrapAll(store, updated.userId || req.user.id);
+  } catch (e) {
+    console.warn('[LNS] Auto Milesight ABP (tras editar gateway):', e.message || e);
+  }
+  res.json(updated);
+});
+
 app.delete('/api/lorawan-gateways/:id', authMiddleware, navGatewayMiddleware, (req, res) => {
   const ok = store.deleteLorawanGateway(req.user.id, req.params.id);
   if (!ok) return res.status(404).json({ error: 'No encontrado' });

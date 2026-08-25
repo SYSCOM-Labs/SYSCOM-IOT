@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
-import { Plus, X, Trash2, RefreshCw, Loader, RadioTower } from 'lucide-react';
+import { Plus, X, Trash2, RefreshCw, Loader, RadioTower, Edit2 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
-import { fetchLorawanGateways, createLorawanGateway, deleteLorawanGateway } from '../services/api';
+import { fetchLorawanGateways, createLorawanGateway, updateLorawanGateway, deleteLorawanGateway } from '../services/api';
 import FormToast from '../components/FormToast';
 import { getDuplicateEntityNotice } from '../utils/duplicateEntityNotice';
 import { LORAWAN_GATEWAY_BAND_OPTIONS, LORAWAN_GATEWAY_BAND_VALUES } from '../constants/lorawanGatewayBands';
@@ -41,6 +41,7 @@ const GatewaysPage = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [modalOpen, setModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState(null);
@@ -69,12 +70,38 @@ const GatewaysPage = () => {
   const gatewayFormOk = useMemo(() => {
     const nameOk = form.name.trim().length >= 1;
     const euiOk = euiHex.length === 16;
-    const bandOk = LORAWAN_GATEWAY_BAND_VALUES.has(String(form.frequencyBand || '').trim());
+    const bandTrim = String(form.frequencyBand || '').trim();
+    const bandOk = LORAWAN_GATEWAY_BAND_VALUES.has(bandTrim) || (Boolean(editingId) && bandTrim.length > 0);
     return nameOk && euiOk && bandOk;
-  }, [form.name, form.frequencyBand, euiHex.length]);
+  }, [form.name, form.frequencyBand, euiHex.length, editingId]);
+
+  const bandOptions = useMemo(() => {
+    const opts = [...LORAWAN_GATEWAY_BAND_OPTIONS];
+    const v = String(form.frequencyBand || '').trim();
+    if (v && !LORAWAN_GATEWAY_BAND_VALUES.has(v)) {
+      opts.push({ value: v, label: labelForBand(v) });
+    }
+    return opts;
+  }, [form.frequencyBand]);
 
   const openModal = () => {
+    setEditingId(null);
     setForm(EMPTY_FORM);
+    setSaveError(null);
+    setNotify(null);
+    setModalOpen(true);
+  };
+
+  const openEdit = (g) => {
+    const storedBand = String(g.frequencyBand || '').trim();
+    setEditingId(g.id);
+    setForm({
+      name: g.name || '',
+      gatewayEui: String(g.gatewayEui || '')
+        .replace(/[^0-9a-fA-F]/g, '')
+        .toUpperCase(),
+      frequencyBand: storedBand || EMPTY_FORM.frequencyBand,
+    });
     setSaveError(null);
     setNotify(null);
     setModalOpen(true);
@@ -83,6 +110,7 @@ const GatewaysPage = () => {
   const closeModal = () => {
     if (saving) return;
     setModalOpen(false);
+    setEditingId(null);
   };
 
   const handleSave = async (e) => {
@@ -97,20 +125,28 @@ const GatewaysPage = () => {
       setSaveError('Gateway EUI: debe tener exactamente 16 caracteres hexadecimales (8 bytes).');
       return;
     }
-    if (!LORAWAN_GATEWAY_BAND_VALUES.has(String(form.frequencyBand || '').trim())) {
+    const bandTrim = String(form.frequencyBand || '').trim();
+    if (!LORAWAN_GATEWAY_BAND_VALUES.has(bandTrim) && !editingId) {
       setSaveError('Seleccione una banda de frecuencia válida.');
       return;
     }
     if (!gatewayFormOk) return;
     setSaving(true);
     try {
-      await createLorawanGateway({
+      const payload = {
         name: form.name.trim(),
         gatewayEui: euiHex,
-        frequencyBand: form.frequencyBand,
-      });
-      setNotify({ type: 'success', message: 'Gateway registrado correctamente.' });
+        frequencyBand: bandTrim,
+      };
+      if (editingId) {
+        await updateLorawanGateway(editingId, payload);
+        setNotify({ type: 'success', message: 'Gateway actualizado correctamente.' });
+      } else {
+        await createLorawanGateway(payload);
+        setNotify({ type: 'success', message: 'Gateway registrado correctamente.' });
+      }
       setModalOpen(false);
+      setEditingId(null);
       setForm(EMPTY_FORM);
       await load();
     } catch (err) {
@@ -226,8 +262,18 @@ const GatewaysPage = () => {
                         <div className="device-row-actions-icons" role="group" aria-label="Acciones del gateway">
                           <button
                             type="button"
+                            className="device-action-pill"
+                            title={t('devices.perm_edit')}
+                            aria-label={t('devices.perm_edit')}
+                            onClick={() => openEdit(g)}
+                          >
+                            <Edit2 size={18} strokeWidth={2} />
+                          </button>
+                          <button
+                            type="button"
                             className="device-action-pill device-action-pill--danger"
                             title={t('common.delete')}
+                            aria-label={t('common.delete')}
                             onClick={() => handleDelete(g.id, g.name)}
                           >
                             <Trash2 size={18} strokeWidth={2} />
@@ -264,7 +310,7 @@ const GatewaysPage = () => {
             onClick={(ev) => ev.stopPropagation()}
           >
             <div className="modal-header">
-              <h2 id="gw-modal-title">Añadir gateway LoRaWAN</h2>
+              <h2 id="gw-modal-title">{editingId ? 'Editar gateway LoRaWAN' : 'Añadir gateway LoRaWAN'}</h2>
               <button type="button" className="btn-icon um-modal-close" onClick={closeModal} aria-label={t('common.close')}>
                 <X size={22} />
               </button>
@@ -272,8 +318,9 @@ const GatewaysPage = () => {
             <form onSubmit={handleSave}>
               <div className="modal-body">
                 <p className="gw-modal-hint">
-                  Registra el EUI del gateway en tu cuenta. El estado Online/Offline se infiere de la telemetría que
-                  referencie ese EUI en la ingesta.
+                  {editingId
+                    ? 'Corrige el nombre o un carácter del Gateway EUI. El estado Online/Offline se infiere de la telemetría que referencie ese EUI.'
+                    : 'Registra el EUI del gateway en tu cuenta. El estado Online/Offline se infiere de la telemetría que referencie ese EUI en la ingesta.'}
                 </p>
                 {notify?.type === 'warning' && (
                   <FormToast
@@ -323,7 +370,7 @@ const GatewaysPage = () => {
                     value={form.frequencyBand}
                     onChange={(e) => setForm((f) => ({ ...f, frequencyBand: e.target.value }))}
                   >
-                    {LORAWAN_GATEWAY_BAND_OPTIONS.map((o) => (
+                    {bandOptions.map((o) => (
                       <option key={o.value} value={o.value}>
                         {o.label}
                       </option>

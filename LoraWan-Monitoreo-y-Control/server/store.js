@@ -860,6 +860,17 @@ class Store {
         VALUES (?, ?, ?, ?, ?, ?)
       `),
       lgwDelete: this.db.prepare('DELETE FROM lorawan_gateways WHERE id = ? AND user_id = ?'),
+      lgwGetById: this.db.prepare('SELECT * FROM lorawan_gateways WHERE id = ?'),
+      lgwUpdate: this.db.prepare(`
+        UPDATE lorawan_gateways SET name = ?, gateway_eui = ?, frequency_band = ?
+        WHERE id = ?
+      `),
+      lgwExistsGloballyExceptId: this.db.prepare(`
+        SELECT 1 FROM lorawan_gateways
+        WHERE lower(replace(replace(replace(gateway_eui,':',''),'-',''),' ','')) = ?
+          AND id != ?
+        LIMIT 1
+      `),
       lgwDeleteAllForUser: this.db.prepare('DELETE FROM lorawan_gateways WHERE user_id = ?'),
       lgwExists: this.db.prepare(
         'SELECT 1 FROM lorawan_gateways WHERE user_id = ? AND lower(gateway_eui) = lower(?)'
@@ -2100,6 +2111,38 @@ class Store {
     return Boolean(this.st.lgwExistsGlobally.get(h));
   }
 
+  lorawanGatewayEuiExistsGloballyExceptId(eui16Norm, exceptId) {
+    const h = String(eui16Norm || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    const eid = String(exceptId || '').trim();
+    if (h.length !== 16 || !eid) return false;
+    return Boolean(this.st.lgwExistsGloballyExceptId.get(h, eid));
+  }
+
+  getLorawanGatewayById(id) {
+    const r = this.st.lgwGetById.get(String(id || '').trim());
+    if (!r) return null;
+    return {
+      id: r.id,
+      userId: r.user_id,
+      name: r.name,
+      gatewayEui: r.gateway_eui,
+      frequencyBand: r.frequency_band,
+      createdAt: r.created_at,
+    };
+  }
+
+  updateLorawanGateway(id, { name, gatewayEui, frequencyBand }) {
+    const info = this.st.lgwUpdate.run(
+      name,
+      gatewayEui,
+      frequencyBand,
+      String(id || '').trim()
+    );
+    return Number(info.changes || 0) > 0;
+  }
+
   insertLorawanGateway(row) {
     this.st.lgwInsert.run(
       row.id,
@@ -2456,6 +2499,41 @@ class Store {
         frequencyBand: sourceRow.frequencyBand,
         createdAt: nowIso,
       });
+    }
+  }
+
+  /** Actualiza copias del pool superadmin al editar nombre/EUI/banda (incluye cambio de EUI). */
+  syncLorawanGatewayEditToSuperadminPool(prevEui, sourceRow) {
+    if (!this._superadminPoolMirrorEnabled()) return;
+    if (!sourceRow || !sourceRow.gatewayEui) return;
+    const srcUid = String(sourceRow.userId || '').trim();
+    if (!this.isSuperadminUserId(srcUid)) return;
+    const newEui = String(sourceRow.gatewayEui).replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+    if (newEui.length !== 16) return;
+    const oldEui = String(prevEui || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    for (const sid of this.listSuperadminUserIds()) {
+      if (sid === srcUid) continue;
+      const byOld = oldEui.length === 16 ? this.lnsGetGatewayByEui(sid, oldEui) : null;
+      const byNew = this.lnsGetGatewayByEui(sid, newEui);
+      const target = byOld || byNew;
+      if (target) {
+        this.updateLorawanGateway(target.id, {
+          name: sourceRow.name,
+          gatewayEui: newEui,
+          frequencyBand: sourceRow.frequencyBand,
+        });
+      } else {
+        this.insertLorawanGateway({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+          userId: sid,
+          name: sourceRow.name,
+          gatewayEui: newEui,
+          frequencyBand: sourceRow.frequencyBand,
+          createdAt: sourceRow.createdAt || new Date().toISOString(),
+        });
+      }
     }
   }
 

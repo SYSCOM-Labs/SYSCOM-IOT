@@ -420,6 +420,15 @@ export const createLorawanGateway = async ({ name, gatewayEui, frequencyBand }) 
   return response.data;
 };
 
+export const updateLorawanGateway = async (id, { name, gatewayEui, frequencyBand }) => {
+  const response = await axios.patch(
+    `${SERVER_API()}/lorawan-gateways/${encodeURIComponent(id)}`,
+    { name, gatewayEui, frequencyBand },
+    { headers: authHeaders() }
+  );
+  return response.data;
+};
+
 export const deleteLorawanGateway = async (id) => {
   const response = await axios.delete(
     `${SERVER_API()}/lorawan-gateways/${encodeURIComponent(id)}`,

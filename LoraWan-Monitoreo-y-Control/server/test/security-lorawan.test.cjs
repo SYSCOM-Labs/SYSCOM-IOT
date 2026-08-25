@@ -253,3 +253,56 @@ test('UDP: LNS_UDP_PORT=0 desactiva el listener', async (t) => {
   const r = await jsonReq(srv.base, 'GET', '/api/setup/status');
   assert.equal(r.status, 200);
 });
+
+test('PATCH /api/lorawan-gateways/:id actualiza nombre y EUI', async (t) => {
+  const srv = await bootServer({ LNS_UDP_PORT: '0', SYSCOM_LNS_AUTO_REGISTER_GATEWAY: '0' });
+  t.after(() => srv.stop());
+  assert.ok(srv.ready, `servidor no arrancó: ${srv.getStderr().slice(-300)}`);
+
+  const token = await setupSuper(srv.base);
+  assert.ok(token, 'login superadmin');
+
+  const created = await jsonReq(srv.base, 'POST', '/api/lorawan-gateways', {
+    token,
+    body: {
+      name: 'GW original',
+      gatewayEui: 'aabbccddeeff0011',
+      frequencyBand: 'US902-928-FSB2',
+    },
+  });
+  assert.equal(created.status, 201, JSON.stringify(created.data));
+  const id = created.data?.id;
+  assert.ok(id, 'id del gateway');
+
+  const patched = await jsonReq(srv.base, 'PATCH', `/api/lorawan-gateways/${id}`, {
+    token,
+    body: {
+      name: 'GW corregido',
+      gatewayEui: 'aabbccddeeff0012',
+      frequencyBand: 'US902-928-FSB2',
+    },
+  });
+  assert.equal(patched.status, 200, JSON.stringify(patched.data));
+  assert.equal(patched.data?.name, 'GW corregido');
+  assert.equal(String(patched.data?.gatewayEui).toLowerCase(), 'aabbccddeeff0012');
+
+  const conflict = await jsonReq(srv.base, 'POST', '/api/lorawan-gateways', {
+    token,
+    body: {
+      name: 'Otro',
+      gatewayEui: 'aabbccddeeff0099',
+      frequencyBand: 'US902-928-FSB2',
+    },
+  });
+  assert.equal(conflict.status, 201, JSON.stringify(conflict.data));
+  const stolen = await jsonReq(srv.base, 'PATCH', `/api/lorawan-gateways/${id}`, {
+    token,
+    body: {
+      name: 'GW corregido',
+      gatewayEui: 'aabbccddeeff0099',
+      frequencyBand: 'US902-928-FSB2',
+    },
+  });
+  assert.equal(stolen.status, 409);
+  assert.equal(stolen.data?.code, 'GATEWAY_EXISTS');
+});

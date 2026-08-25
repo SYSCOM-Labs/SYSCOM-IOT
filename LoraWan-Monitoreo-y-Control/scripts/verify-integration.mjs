@@ -228,6 +228,19 @@ async function main() {
       },
     });
     assert(postG.status === 201, `lorawan-gateways POST ${JSON.stringify(postG.data)}`);
+    const gwId = postG.data?.id;
+    assert(gwId, 'lorawan-gateways POST id');
+    const patchG = await req('PATCH', `${base}/api/lorawan-gateways/${encodeURIComponent(gwId)}`, {
+      token: superToken,
+      body: {
+        name: 'GW test editado',
+        gatewayEui: '1122334455667789',
+        frequencyBand: 'US902-928-FSB2',
+      },
+    });
+    assert(patchG.status === 200, `lorawan-gateways PATCH ${JSON.stringify(patchG.data)}`);
+    assert(patchG.data?.name === 'GW test editado', 'gateway name actualizado');
+    assert(String(patchG.data?.gatewayEui).toLowerCase() === '1122334455667789', 'gateway EUI actualizado');
     const listG = await req('GET', `${base}/api/lorawan-gateways`, { token: superToken });
     assert(listG.status === 200 && Array.isArray(listG.data) && listG.data.length === 1, 'lorawan-gateways GET');
     assert(typeof listG.data[0].online === 'boolean', 'gateway.online');
