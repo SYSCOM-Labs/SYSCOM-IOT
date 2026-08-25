@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { getUsers, createUser, updateUser, deleteUser, getServerOrigin, getUserDevices } from '../services/localAuth';
 import { unassignDeviceFromUser } from '../services/api';
-import { validatePasswordStrength, PASSWORD_POLICY_HINT } from '../utils/passwordPolicy';
+import { validatePasswordStrength, PASSWORD_POLICY_HINT, validateProvisionalPassword, PROVISIONAL_PASSWORD_HINT } from '../utils/passwordPolicy';
 import {
   Users,
   Plus,
@@ -361,7 +361,7 @@ const UserManagement = ({ onAfterEnterSupport }) => {
       }
       await createUser({
         email: form.email,
-        password: form.password,
+        password: String(form.password || '').trim(),
         role: rolePayload,
         profileName: form.profileName,
         navPermissions,
@@ -430,15 +430,29 @@ const UserManagement = ({ onAfterEnterSupport }) => {
       showToast('error', 'Las contraseñas no coinciden.');
       return;
     }
-    const pv = validatePasswordStrength(newPassword);
-    if (!pv.ok) {
-      showToast('error', pv.error);
-      return;
+    const resettingOther = String(activeUser?.id) !== String(user?.id);
+    if (resettingOther) {
+      const pv = validateProvisionalPassword(newPassword);
+      if (!pv.ok) {
+        showToast('error', pv.error);
+        return;
+      }
+    } else {
+      const pv = validatePasswordStrength(newPassword);
+      if (!pv.ok) {
+        showToast('error', pv.error);
+        return;
+      }
     }
     setSaving(true);
     try {
-      await updateUser(activeUser.id, { password: newPassword });
-      showToast('success', 'Contraseña actualizada correctamente.');
+      await updateUser(activeUser.id, { password: newPassword.trim() });
+      showToast(
+        'success',
+        resettingOther
+          ? 'Contraseña temporal actualizada. El usuario deberá definir una contraseña segura al entrar.'
+          : 'Contraseña actualizada correctamente.'
+      );
       closeModal();
     } catch (e) {
       showToast('error', 'Error: ' + e.message);
@@ -749,7 +763,7 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                 </div>
               </div>
               <p className="um-password-policy-hint">
-                Tras el primer acceso, la cuenta deberá definir su propia contraseña: {PASSWORD_POLICY_HINT}
+                {PROVISIONAL_PASSWORD_HINT}
               </p>
               </div>
 
@@ -1055,7 +1069,11 @@ const UserManagement = ({ onAfterEnterSupport }) => {
               <span>{activeUser.email}</span>
             </div>
             <form onSubmit={handleChangePassword} className="um-form">
-              <p className="um-password-policy-hint">{PASSWORD_POLICY_HINT} Si cambia la contraseña de otro usuario, deberá redefinirla al entrar.</p>
+              <p className="um-password-policy-hint">
+                {String(activeUser.id) !== String(user?.id)
+                  ? PROVISIONAL_PASSWORD_HINT
+                  : PASSWORD_POLICY_HINT}
+              </p>
               <div className="form-group">
                 <label>Nueva contraseña</label>
                 <input
@@ -1064,7 +1082,11 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                   value={newPassword}
                   onChange={(e) => setNewPassword(e.target.value)}
                   required
-                  placeholder="Mín. 8 caracteres, mayús., minús. y símbolo"
+                  placeholder={
+                    String(activeUser.id) !== String(user?.id)
+                      ? 'Mín. 6 caracteres (p. ej. 123456)'
+                      : 'Mín. 8 caracteres, mayús., minús. y símbolo'
+                  }
                   autoFocus
                 />
               </div>

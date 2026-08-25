@@ -57,7 +57,7 @@ export default function FirstPasswordChange() {
           <h2>Defina su contraseña</h2>
           <p>
             Con la cuenta <strong>{user?.email}</strong> debe establecer una contraseña personal que cumpla la política de
-            seguridad antes de usar la plataforma.
+            seguridad antes de usar la plataforma. La clave provisional (por ejemplo 123456) ya no es válida en esta pantalla.
           </p>
           <p className="first-pw-policy-hint">{PASSWORD_POLICY_HINT}</p>
         </div>

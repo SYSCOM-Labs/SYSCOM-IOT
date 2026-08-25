@@ -2,6 +2,21 @@
 export const PASSWORD_POLICY_HINT =
   'Mínimo 8 caracteres, con mayúscula, minúscula y un carácter especial (símbolo).';
 
+export const PROVISIONAL_PASSWORD_HINT =
+  'Contraseña temporal: mínimo 6 caracteres (p. ej. 123456). Al entrar, la cuenta deberá definir una contraseña segura.';
+
+export function validateProvisionalPassword(password) {
+  const p = String(password || '').trim();
+  if (p.length < 6) {
+    return {
+      ok: false,
+      error:
+        'La contraseña inicial debe tener al menos 6 caracteres. En el primer acceso la cuenta definirá una contraseña segura.',
+    };
+  }
+  return { ok: true, error: null };
+}
+
 export function validatePasswordStrength(password) {
   const p = String(password || '');
   if (p.length < 8) {

@@ -43,7 +43,7 @@ const {
   applyVs133TelemetryAliases,
 } = require('./lib/vs133-telemetry-aliases');
 const { tryBootstrapMilesightAbpSession, retryMilesightAbpBootstrapAll } = require('./milesight-lns-bootstrap');
-const { validatePasswordStrength } = require('./password-policy');
+const { validatePasswordStrength, validateProvisionalPassword } = require('./password-policy');
 const { isAllowedGatewayFrequencyBand } = require('./lorawan-gateway-bands');
 const { isUs915ForUserGateway } = require('./lorawan-us915-region');
 const metrics = require('./syscom-metrics');
@@ -2381,14 +2381,26 @@ app.post('/api/auth/login', loginRateLimit, (req, res) => {
     .toLowerCase();
   // Coerción defensiva: bcryptjs lanza con tipos no string, lo que devolvía
   // 500 con correos válidos y permitía enumerarlos por código de estado.
-  const password = typeof rawPassword === 'string' ? rawPassword : '';
+  const password = typeof rawPassword === 'string' ? rawPassword.trim() : '';
   const user = store.getUserByEmail(email);
-  if (!user) {
-    bcrypt.compareSync(password, LOGIN_DUMMY_BCRYPT_HASH); // siempre false; iguala timing
+  const storedHash = user && typeof user.password === 'string' ? user.password : '';
+  const hashLooksBcrypt = /^\$2[aby]\$\d{2}\$/.test(storedHash);
+  if (!user || !hashLooksBcrypt) {
+    try {
+      bcrypt.compareSync(password, LOGIN_DUMMY_BCRYPT_HASH); // siempre false; iguala timing
+    } catch {
+      /* ignore */
+    }
     metrics.inc('login_fail');
     return res.status(401).json({ error: 'Correo o contraseña incorrectos' });
   }
-  if (!bcrypt.compareSync(password, user.password)) {
+  let passwordOk = false;
+  try {
+    passwordOk = bcrypt.compareSync(password, storedHash);
+  } catch {
+    passwordOk = false;
+  }
+  if (!passwordOk) {
     metrics.inc('login_fail');
     return res.status(401).json({ error: 'Correo o contraseña incorrectos' });
   }
@@ -2407,9 +2419,10 @@ app.post('/api/auth/first-password', authMiddleware, (req, res) => {
     return res.status(400).json({ error: 'No es necesario cambiar la contraseña.' });
   }
   const { newPassword } = req.body || {};
-  const v = validatePasswordStrength(newPassword);
+  const nextPassword = String(newPassword || '').trim();
+  const v = validatePasswordStrength(nextPassword);
   if (!v.ok) return res.status(400).json({ error: v.error });
-  row.password = bcrypt.hashSync(newPassword, 10);
+  row.password = bcrypt.hashSync(nextPassword, 10);
   row.mustChangePassword = false;
   store.updateUserRecord(row);
   const token = jwt.sign(sessionJwtPayload(row), JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
@@ -2909,11 +2922,10 @@ app.post('/api/users', authMiddleware, adminMiddleware, (req, res) => {
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return res.status(400).json({ error: 'Correo electrónico no válido' });
   }
-  if (!password || String(password).length < 6) {
-    return res.status(400).json({
-      error:
-        'Contraseña inicial requerida (mínimo 6 caracteres). La cuenta deberá elegir una contraseña segura en el primer acceso.',
-    });
+  const initialPassword = String(password || '').trim();
+  const provisional = validateProvisionalPassword(initialPassword);
+  if (!provisional.ok) {
+    return res.status(400).json({ error: provisional.error });
   }
   if (store.getUserByEmail(email)) {
     return res.status(409).json({
@@ -2940,7 +2952,7 @@ app.post('/api/users', authMiddleware, adminMiddleware, (req, res) => {
   const newUser = {
     id: Date.now().toString(),
     email,
-    password: bcrypt.hashSync(password, 10),
+    password: bcrypt.hashSync(initialPassword, 10),
     role: newRole,
     profileName: profileName || '',
     createdBy: req.user.id,
@@ -3013,12 +3025,16 @@ app.put('/api/users/:id', authMiddleware, (req, res) => {
     row.email = email;
   }
   if (password) {
-    const pv = validatePasswordStrength(password);
-    if (!pv.ok) return res.status(400).json({ error: pv.error });
-    row.password = bcrypt.hashSync(password, 10);
+    const raw = String(password).trim();
     if (isSelf) {
+      const pv = validatePasswordStrength(raw);
+      if (!pv.ok) return res.status(400).json({ error: pv.error });
+      row.password = bcrypt.hashSync(raw, 10);
       row.mustChangePassword = false;
     } else {
+      const pv = validateProvisionalPassword(raw);
+      if (!pv.ok) return res.status(400).json({ error: pv.error });
+      row.password = bcrypt.hashSync(raw, 10);
       row.mustChangePassword = true;
     }
   }

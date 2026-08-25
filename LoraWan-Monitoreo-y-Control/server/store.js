@@ -776,7 +776,7 @@ class Store {
 
   _prepareStatements() {
     this.st = {
-      userByEmail: this.db.prepare('SELECT * FROM users WHERE email = ?'),
+      userByEmail: this.db.prepare('SELECT * FROM users WHERE lower(email) = lower(?)'),
       userById: this.db.prepare('SELECT * FROM users WHERE id = ?'),
       usersByCreator: this.db.prepare('SELECT * FROM users WHERE created_by = ?'),
       allUsers: this.db.prepare('SELECT * FROM users'),
