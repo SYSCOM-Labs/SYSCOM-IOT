@@ -20,6 +20,7 @@ const {
 } = require(path.join(__dirname, 'lib', 'telemetryPayloadUtils.js'));
 const {
   hasDecodedPeopleCountTelemetry,
+  isVs133ProductModel,
   needsMergedTelemetryForList,
 } = require(path.join(__dirname, 'lib', 'vs133-telemetry-aliases.js'));
 const navPerm = require('./navPermissions');
@@ -800,6 +801,14 @@ class Store {
         VALUES (@user_id, @device_id, @device_name, @properties_json, @ts)
       `),
       pruneTelemetry: this.db.prepare('DELETE FROM telemetry WHERE ts < ?'),
+      pruneTelemetryChunk: this.db.prepare(
+        'DELETE FROM telemetry WHERE id IN (SELECT id FROM telemetry WHERE ts < ? LIMIT 1500)'
+      ),
+      pruneGatewayTelemetryChunk: this.db.prepare(
+        `DELETE FROM telemetry WHERE id IN (
+           SELECT id FROM telemetry WHERE device_id LIKE 'gateway-%' AND ts < ? LIMIT 1500
+         )`
+      ),
       latestByUser: this.db.prepare(`
         SELECT id, user_id, device_id, device_name, properties_json, ts FROM (
           SELECT id, user_id, device_id, device_name, properties_json, ts,
@@ -1692,15 +1701,6 @@ class Store {
         });
       }
     }
-    this._pruneCounter += 1;
-    const pruneEvery = Math.min(
-      200,
-      Math.max(10, parseInt(String(process.env.SYSCOM_TELEMETRY_PRUNE_EVERY_N || '').trim(), 10) || 20)
-    );
-    if (this._pruneCounter >= pruneEvery) {
-      this._pruneCounter = 0;
-      this.runRetentionPruneNow();
-    }
     return this._emitTelemetryRealtimeHooks(userId, did, deviceName, properties, tss);
   }
 
@@ -1936,7 +1936,8 @@ class Store {
         decodeMap[did] && decodeMap[did].productModel != null
           ? String(decodeMap[did].productModel).trim()
           : '';
-      if (needsMergedTelemetryForList(t.properties || {}, pm)) {
+      /** Solo VS133: fusionar join-only en el listado (N×64 filas) bloquea SQLite y Cloudflare da 504. */
+      if (isVs133ProductModel(pm) && needsMergedTelemetryForList(t.properties || {}, pm)) {
         needMerge.push(did);
       } else {
         out[did] = t;
@@ -4602,18 +4603,17 @@ class Store {
       Number.isFinite(Number(opts.keepMs)) ? Number(opts.keepMs) : 48 * 60 * 60 * 1000
     );
     const cutoff = Date.now() - keepMs;
-    const info = this.db
-      .prepare(
-        `DELETE FROM telemetry
-         WHERE ts < ?
-           AND (
-             device_id LIKE 'gateway-%'
-             OR properties_json LIKE '%"deviceType":"GATEWAY"%'
-             OR properties_json LIKE '%"deviceType": "GATEWAY"%'
-           )`
-      )
-      .run(cutoff);
-    const deleted = Number(info.changes || 0);
+    const maxChunks = Math.min(
+      80,
+      Math.max(1, Number.isFinite(Number(opts.maxChunks)) ? Math.floor(Number(opts.maxChunks)) : 20)
+    );
+    let deleted = 0;
+    for (let i = 0; i < maxChunks; i += 1) {
+      const info = this.st.pruneGatewayTelemetryChunk.run(cutoff);
+      const n = Number(info.changes || 0);
+      deleted += n;
+      if (n < 1500) break;
+    }
     if (deleted > 0) {
       console.log(
         `[Syscom] Telemetría gateway antigua podada: ${deleted} filas (conservando ${Math.round(keepMs / 3600000)} h)`
@@ -4624,13 +4624,27 @@ class Store {
 
   runRetentionPruneNow(opts = {}) {
     const cutoff = Date.now() - this.retentionMs;
-    const info = this.st.pruneTelemetry.run(cutoff);
-    const deleted = Number(info.changes || 0);
+    const maxChunks = Math.min(
+      400,
+      Math.max(
+        1,
+        Number.isFinite(Number(opts.maxChunks))
+          ? Math.floor(Number(opts.maxChunks))
+          : opts.vacuum === true
+            ? 200
+            : 20
+      )
+    );
+    let deleted = 0;
+    for (let i = 0; i < maxChunks; i += 1) {
+      const info = this.st.pruneTelemetryChunk.run(cutoff);
+      const n = Number(info.changes || 0);
+      deleted += n;
+      if (n < 1500) break;
+    }
     let vacuumed = false;
-    const vacuumMin =
-      parseInt(String(process.env.SYSCOM_TELEMETRY_VACUUM_MIN_DELETED || '').trim(), 10) || 5000;
-    const doVacuum = Boolean(opts.vacuum) || (deleted >= vacuumMin && deleted > 0);
-    if (doVacuum && deleted > 0) {
+    /** Nunca VACUUM por umbral de filas: bloquea el proceso minutos → 504 Cloudflare. */
+    if (opts.vacuum === true && deleted > 0) {
       try {
         this.db.exec('VACUUM');
         vacuumed = true;
@@ -4667,14 +4681,7 @@ class Store {
     }
     let vacuumed = false;
     const totalDeleted = retention.deleted + (gateways.deleted || 0);
-    if (totalDeleted > 0) {
-      try {
-        this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
-      } catch {
-        /* ignore */
-      }
-    }
-    /** VACUUM solo explícito: en arranque bloquea SQLite minutos y Cloudflare responde 504. */
+    /** wal_checkpoint(TRUNCATE) reescribe el .db y bloquea igual que VACUUM. */
     if (opts.vacuum === true && totalDeleted > 0) {
       try {
         this.db.exec('VACUUM');

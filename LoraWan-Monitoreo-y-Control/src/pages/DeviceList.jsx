@@ -339,8 +339,15 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
       void prefetchDevicePropertiesBatch(mapped, credentials, token);
       setError(null);
     } catch (err) {
-      const msg =
+      const msgRaw =
         err.response?.data?.error || err.response?.data?.errMsg || err.message || t('common.error');
+      const status = Number(err.response?.status || 0);
+      const msg =
+        status === 504 ||
+        status === 502 ||
+        /504|timeout|ECONNABORTED/i.test(String(msgRaw))
+          ? 'El servidor no respondió a tiempo. Recargue en unos segundos.'
+          : msgRaw;
       caught = msg;
       if (!softFail) setError(msg);
     } finally {

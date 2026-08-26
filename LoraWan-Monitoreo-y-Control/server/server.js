@@ -5301,9 +5301,9 @@ server.listen(PORT, '0.0.0.0', () => {
     168,
     Math.max(1, parseInt(String(process.env.SYSCOM_TELEMETRY_PRUNE_INTERVAL_HOURS || '').trim(), 10) || 6)
   );
-  const runBgMaintenance = (label, withVacuum = false) => {
+  const runBgMaintenance = (label, withVacuum = false, extra = {}) => {
     try {
-      const r = store.runStorageMaintenance({ vacuum: withVacuum });
+      const r = store.runStorageMaintenance({ vacuum: withVacuum, ...extra });
       if (r.totalDeleted > 0) {
         console.log(
           `[Syscom] Mantenimiento BD (${label}): ${r.totalDeleted} filas (retención ${r.retention.deleted}, gateway ${r.gateways.deleted || 0})${r.vacuumed ? ', VACUUM' : ''}`
@@ -5314,7 +5314,7 @@ server.listen(PORT, '0.0.0.0', () => {
       console.warn(`[Syscom] Mantenimiento BD (${label}):`, e.message || e);
     }
   };
-  setTimeout(() => runBgMaintenance('arranque', false), 90000);
+  setTimeout(() => runBgMaintenance('arranque', false, { skipGateways: true }), 180000);
   setInterval(() => runBgMaintenance('periódico', false), retentionPruneHours * 60 * 60 * 1000);
   console.log(
     `[Syscom] Mantenimiento BD automático cada ${retentionPruneHours} h: retención sensores ${Math.round(RETENTION_MS / 86400000)} d; gateways conservan últimas ${Math.round((parseInt(String(process.env.SYSCOM_GATEWAY_TELEMETRY_KEEP_MS || '').trim(), 10) || 48 * 60 * 60 * 1000) / 3600000)} h.`
