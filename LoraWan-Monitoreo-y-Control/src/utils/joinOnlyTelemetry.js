@@ -10,9 +10,17 @@ export function isJoinOnlyTelemetryProperties(props) {
   return hex.length === 0;
 }
 
+function isJoinPendingConnectStatus(device) {
+  const u = String(device?.connectStatus ?? device?.status ?? '')
+    .trim()
+    .toUpperCase();
+  return u === 'JOIN_PENDING' || u === 'JOIN PENDING' || u === 'JOIN';
+}
+
 /** @param {object} device Fila de listado o merge con properties aplanadas */
 export function isJoinOnlyDeviceRow(device) {
   if (!device) return false;
+  if (isJoinPendingConnectStatus(device)) return true;
   if (device.ingestStatus && String(device.ingestStatus).includes('Solo join')) return true;
   return isJoinOnlyTelemetryProperties(device);
 }

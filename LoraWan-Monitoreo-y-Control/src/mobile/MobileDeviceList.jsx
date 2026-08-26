@@ -5,6 +5,7 @@ import { getLatestDeviceData } from '../services/localAuth';
 import { useAuth } from '../context/AuthContext';
 import {
   applyStaleOfflineConnectStatus,
+  isDeviceJoinPendingOnly,
   isDeviceVisuallyOnline,
 } from '../utils/deviceConnectionStatus';
 import { deviceRowWithPreloadedTelemetry } from '../utils/deviceTelemetryPreload';
@@ -13,6 +14,7 @@ import './MobileDeviceList.css';
 
 function statusDotClass(device) {
   if (isDeviceVisuallyOnline(device)) return 'mobile-device-card__dot--online';
+  if (isDeviceJoinPendingOnly(device)) return 'mobile-device-card__dot--idle';
   const st = String(device.connectStatus || device.status || '').toLowerCase();
   if (st.includes('error') || st.includes('offline')) return 'mobile-device-card__dot--offline';
   return 'mobile-device-card__dot--idle';

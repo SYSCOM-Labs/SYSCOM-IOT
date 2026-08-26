@@ -56,12 +56,16 @@ function inferFreshOnlineConnectStatus(row, telemetryRow, rawLatestRow = null, o
     }
     row.connectStatus = 'JOIN_PENDING';
     row.lastUpdateTime = activityTs;
+    row.ingestStatus =
+      'Solo join LoRaWAN (sin uplink de aplicación reciente). Espere el próximo reporte del sensor o revise intervalo de envío en el equipo.';
     return;
   }
 
   if (appStale && joinOnlyTelemetryHint(displayProps)) {
     row.connectStatus = 'JOIN_PENDING';
     row.lastUpdateTime = activityTs;
+    row.ingestStatus =
+      'Solo join LoRaWAN (sin uplink de aplicación reciente). Espere el próximo reporte del sensor o revise intervalo de envío en el equipo.';
     return;
   }
 

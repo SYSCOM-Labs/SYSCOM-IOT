@@ -225,7 +225,11 @@ function mergeDeviceRowWithLatestTelemetry(dev, localUpdate) {
       connectStatus,
       lastUpdateTime:
         localUpdate.timestamp > (dev.lastUpdateTime || 0) ? localUpdate.timestamp : dev.lastUpdateTime,
-      ingestStatus: appFresh ? undefined : p.ingestStatus || dev.ingestStatus,
+      ingestStatus: appFresh
+        ? undefined
+        : p.ingestStatus ||
+          dev.ingestStatus ||
+          'Solo join LoRaWAN (sin uplink de aplicación reciente). Espere el próximo reporte del sensor o revise intervalo de envío en el equipo.',
       lorawan_event: p.lorawan_event,
       rssi: p.rssi !== undefined ? p.rssi : dev.rssi,
     };

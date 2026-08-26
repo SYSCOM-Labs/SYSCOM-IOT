@@ -41,6 +41,7 @@ export function isDeviceJoinPendingOnly(device) {
   if (appMs != null && !isLastDbIngestStaleForDisplay(appMs, Date.now(), APP_UPLINK_STALE_MS)) {
     return false;
   }
+  /* JOIN_PENDING del API: el merge del listado deja payload_hex viejo y el detector de join-only fallaba → Desconectado. */
   return isJoinOnlyDeviceRow(d);
 }
 

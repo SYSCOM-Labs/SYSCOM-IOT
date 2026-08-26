@@ -93,4 +93,26 @@ test('join-only raw + app uplink más viejo que la ventana → JOIN_PENDING', ()
   );
   assert.equal(row.connectStatus, 'JOIN_PENDING');
   assert.equal(row.lastUpdateTime, now);
+  assert.match(String(row.ingestStatus || ''), /Solo join/i);
+});
+
+test('join-only raw + payload_hex fusionado viejo no tapa JOIN_PENDING', () => {
+  const now = Date.now();
+  const row = { connectStatus: 'online', payload_hex: '0eff' };
+  inferFreshOnlineConnectStatus(
+    row,
+    {
+      timestamp: now,
+      properties: {
+        lastAppUplinkMs: now - 50 * 60 * 1000,
+        payload_hex: '0eff',
+        switch_1: 'on',
+      },
+    },
+    { properties: { lorawan_event: 'join_accept_sent' } },
+    { nowMs: now, commsStaleMs: 40 * 60 * 1000, appStaleMs: 40 * 60 * 1000 }
+  );
+  assert.equal(row.connectStatus, 'JOIN_PENDING');
+  assert.match(String(row.ingestStatus || ''), /Solo join/i);
+  assert.equal(row.lastUpdateTime, now);
 });
