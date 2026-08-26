@@ -870,33 +870,10 @@ function buildDevicesContentSuperadmin() {
   const decodeMap = store.getDeviceDecodeConfigMap(deviceIdList);
   const licenseMap = store.getDeviceLicenseMetaMap(deviceIdList);
 
-  const superadminIds = store.listSuperadminUserIds();
-  const resolveSeedUserId = superadminIds[0] || '';
-  const telemetryUserCache = new Map();
-  const byTelemetryUser = new Map();
-  for (const deviceId of deviceIdList) {
-    if (isGatewayPseudoDeviceId(deviceId)) continue;
-    const anyUd = anyUdByDevice[deviceId];
-    const reg0 = (assignByDevice[deviceId] || [])[0];
-    const seedUser =
-      (anyUd && anyUd.userId) || (reg0 && reg0.userId) || resolveSeedUserId;
-    let tuid = telemetryUserCache.get(deviceId);
-    if (!tuid) {
-      tuid = store.resolveTelemetryUserId(seedUser, deviceId, { role: 'superadmin' });
-      telemetryUserCache.set(deviceId, tuid);
-    }
-    if (!byTelemetryUser.has(tuid)) byTelemetryUser.set(tuid, []);
-    byTelemetryUser.get(tuid).push(deviceId);
-  }
-  const latestRawByDevice = {};
-  const mergedByDevice = {};
-  for (const [tuid, dids] of byTelemetryUser) {
-    Object.assign(latestRawByDevice, store.getLatestMapForDevices(tuid, dids));
-    Object.assign(
-      mergedByDevice,
-      store.getDeviceListTelemetryMap(tuid, dids, decodeMap, { historyRowLimit: 64 })
-    );
-  }
+  const listedIds = deviceIdList.filter((id) => !isGatewayPseudoDeviceId(id));
+  const tuid = (store.listSuperadminUserIds()[0] || 'superadmin');
+  const latestRawByDevice = store.getLatestMapForDevices(tuid, listedIds);
+  const mergedByDevice = store.getDeviceListTelemetryMap(tuid, listedIds, decodeMap, { historyRowLimit: 64 });
 
   const content = [];
   for (const deviceId of deviceIdList) {
@@ -5317,6 +5294,18 @@ server.listen(PORT, '0.0.0.0', () => {
   };
   setTimeout(() => runBgMaintenance('arranque', false, { skipGateways: true }), 180000);
   setInterval(() => runBgMaintenance('periódico', false), retentionPruneHours * 60 * 60 * 1000);
+  const runDeviceLatestBackfill = () => {
+    try {
+      const n = store.ensureDeviceLatestBackfill(80);
+      if (n > 0) {
+        console.log(`[Syscom] device_latest: ${n} dispositivo(s) sincronizados (sin escanear toda la telemetría)`);
+        setTimeout(runDeviceLatestBackfill, 250);
+      }
+    } catch (e) {
+      console.warn('[Syscom] device_latest backfill:', e && e.message);
+    }
+  };
+  setTimeout(runDeviceLatestBackfill, 12000);
   console.log(
     `[Syscom] Mantenimiento BD automático cada ${retentionPruneHours} h: retención sensores ${Math.round(RETENTION_MS / 86400000)} d; gateways conservan últimas ${Math.round((parseInt(String(process.env.SYSCOM_GATEWAY_TELEMETRY_KEEP_MS || '').trim(), 10) || 48 * 60 * 60 * 1000) / 3600000)} h.`
   );
@@ -5419,12 +5408,12 @@ server.listen(PORT, '0.0.0.0', () => {
         const eui = mac.toString('hex').toUpperCase();
         const { ensureGatewaysAutoRegistered: ensureGw } = require('./lib/auto-fleet-sync.cjs');
         let uids = ensureGw(store, mac);
+        const uid = uids && uids[0] != null ? String(uids[0]) : '';
+        if (!uid) return;
         const gwProps = { deviceType: 'GATEWAY', status: 'online', gateway_id: eui };
         const ts = Date.now();
-        for (const uid of uids) {
-          if (store.lastPropertiesJsonEqual(uid, eui, gwProps)) continue;
-          store.appendTelemetry(uid, eui, eui, gwProps, ts);
-        }
+        if (store.lastPropertiesJsonEqual(uid, eui, gwProps)) return;
+        store.appendTelemetry(uid, eui, eui, gwProps, ts);
       },
     });
   } else {

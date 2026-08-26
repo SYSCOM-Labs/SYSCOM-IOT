@@ -20,8 +20,6 @@ const {
 } = require(path.join(__dirname, 'lib', 'telemetryPayloadUtils.js'));
 const {
   hasDecodedPeopleCountTelemetry,
-  isVs133ProductModel,
-  needsMergedTelemetryForList,
 } = require(path.join(__dirname, 'lib', 'vs133-telemetry-aliases.js'));
 const navPerm = require('./navPermissions');
 const deviceAssignPerm = require('./lib/device-assignment-permissions.cjs');
@@ -525,6 +523,17 @@ class Store {
         );
         CREATE INDEX IF NOT EXISTS idx_report_templates_user_updated ON report_templates(user_id, updated_at DESC);
       `);
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS device_latest (
+          device_id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          device_name TEXT,
+          properties_json TEXT NOT NULL,
+          ts INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_device_latest_ts ON device_latest(ts DESC);
+        CREATE INDEX IF NOT EXISTS idx_device_latest_user ON device_latest(user_id);
+      `);
     } catch (e) {
       console.warn('[Syscom] Migración device schema:', e.message);
     }
@@ -831,6 +840,24 @@ class Store {
         WHERE user_id = ? AND device_id = ?
         ORDER BY ts DESC, id DESC LIMIT 1
       `),
+      latestForDeviceAny: this.db.prepare(`
+        SELECT id, user_id, device_id, device_name, properties_json, ts FROM telemetry
+        WHERE device_id = ?
+        ORDER BY ts DESC, id DESC LIMIT 1
+      `),
+      getDeviceLatest: this.db.prepare(`
+        SELECT device_id, user_id, device_name, properties_json, ts FROM device_latest WHERE device_id = ?
+      `),
+      upsertDeviceLatest: prepareBare(this.db, `
+        INSERT INTO device_latest (device_id, user_id, device_name, properties_json, ts)
+        VALUES (@device_id, @user_id, @device_name, @properties_json, @ts)
+        ON CONFLICT(device_id) DO UPDATE SET
+          user_id = excluded.user_id,
+          device_name = excluded.device_name,
+          properties_json = excluded.properties_json,
+          ts = excluded.ts
+        WHERE excluded.ts >= device_latest.ts
+      `),
       telemetryHistory: this.db.prepare(`
         SELECT id, user_id, device_id, device_name, properties_json, ts FROM telemetry
         WHERE user_id = ? AND device_id = ? AND ts >= ? AND ts <= ?
@@ -855,6 +882,7 @@ class Store {
         WHERE user_id = ? AND device_id = ?
         ORDER BY ts DESC, id DESC LIMIT 1
       `),
+      deleteDeviceLatest: this.db.prepare('DELETE FROM device_latest WHERE device_id = ?'),
       updateTelemetryTs: prepareBare(this.db, `
         UPDATE telemetry SET ts = @ts WHERE id = @id
       `),
@@ -1588,21 +1616,90 @@ class Store {
     this.st.deleteUser.run(uid);
   }
 
-  /**
-   * @returns {string[]} userIds que recibieron fila de telemetría (propietario + cuentas con el mismo dispositivo asignado).
-   */
   /** Actualiza properties_json de una fila existente (re-decode / corrección). */
   patchTelemetryPropertiesAt(userId, deviceId, ts, properties) {
     const payload = JSON.stringify(properties || {});
+    const did = String(deviceId);
+    const tss = Number(ts);
     const info = this.db
       .prepare(
         `UPDATE telemetry SET properties_json = ? WHERE user_id = ? AND device_id = ? AND ts = ?`
       )
-      .run(payload, String(userId), String(deviceId), Number(ts));
+      .run(payload, String(userId), did, tss);
+    if (info.changes > 0) {
+      const snap = this.st.getDeviceLatest.get(did);
+      if (snap && Number(snap.ts) === tss) {
+        this._upsertDeviceLatest(did, snap.user_id || userId, snap.device_name, payload, tss);
+      }
+    }
     return info.changes > 0;
   }
 
-  /** Usuarios que deben recibir SSE / automatización para un dispositivo. */
+  /** Réplica de telemetría por usuario asignado (legado). Defecto: una sola fila de historial. */
+  _telemetryMirrorEnabled() {
+    const raw = process.env.SYSCOM_TELEMETRY_MIRROR;
+    if (raw == null || String(raw).trim() === '') return false;
+    const v = String(raw).trim().toLowerCase();
+    return v === '1' || v === 'true' || v === 'on';
+  }
+
+  _upsertDeviceLatest(deviceId, userId, deviceName, propertiesJson, ts) {
+    if (!this.st || !this.st.upsertDeviceLatest) return;
+    const did = String(deviceId || '').trim();
+    if (!did) return;
+    const tss = Number(ts);
+    if (!Number.isFinite(tss)) return;
+    try {
+      this.st.upsertDeviceLatest.run({
+        device_id: did,
+        user_id: String(userId || ''),
+        device_name: deviceName != null && String(deviceName).trim() !== '' ? String(deviceName) : null,
+        properties_json: propertiesJson != null ? String(propertiesJson) : '{}',
+        ts: tss,
+      });
+    } catch (e) {
+      console.warn('[store] device_latest upsert:', e && e.message);
+    }
+  }
+
+  /**
+   * Cuenta dueña del historial (ingesta). Listado y ACL siguen por `user_devices`.
+   */
+  _telemetryOwnerUserId(deviceId, fallbackUserId) {
+    const did = String(deviceId || '').trim();
+    const fb = String(fallbackUserId || '').trim();
+    if (!did) return fb;
+    const snap = this.st.getDeviceLatest.get(did);
+    if (snap && snap.user_id) return String(snap.user_id);
+    const any = this.st.latestForDeviceAny.get(did);
+    if (any && any.user_id) {
+      this._upsertDeviceLatest(did, any.user_id, any.device_name, any.properties_json, any.ts);
+      return String(any.user_id);
+    }
+    return fb;
+  }
+
+  /**
+   * Rellena `device_latest` sin WINDOW sobre toda `telemetry` (índice por device_id).
+   * @returns {number} filas creadas en este lote
+   */
+  ensureDeviceLatestBackfill(limit = 80) {
+    const cap = Math.min(400, Math.max(1, Math.floor(Number(limit)) || 80));
+    const ids = this.st.udAllDistinctDeviceIds.all();
+    let filled = 0;
+    for (const r of ids) {
+      if (filled >= cap) break;
+      const did = String(r.device_id || '').trim();
+      if (!did) continue;
+      if (this.st.getDeviceLatest.get(did)) continue;
+      const row = this.st.latestForDeviceAny.get(did);
+      if (!row) continue;
+      this._upsertDeviceLatest(did, row.user_id, row.device_name, row.properties_json, row.ts);
+      filled += 1;
+    }
+    return filled;
+  }
+
   _telemetryAffectedUserIds(userId, deviceId) {
     const did = String(deviceId);
     const affected = new Set([String(userId)]);
@@ -1673,32 +1770,35 @@ class Store {
       ts: tss,
     };
     this.st.insertTelemetry.run(row);
-    const affected = new Set([String(userId)]);
-    const peers = this.st.udUserIdsForDevice.all(did);
-    for (const p of peers) {
-      const uid = String(p.user_id);
-      if (uid === String(userId)) continue;
-      if (affected.has(uid)) continue;
-      affected.add(uid);
-      this.st.insertTelemetry.run({
-        user_id: uid,
-        device_id: did,
-        device_name: deviceName || null,
-        properties_json: payload,
-        ts: tss,
-      });
-    }
-    if (this.deviceInSuperadminPool(did, userId)) {
-      for (const sid of this.listSuperadminUserIds()) {
-        if (affected.has(sid)) continue;
-        affected.add(sid);
+    this._upsertDeviceLatest(did, userId, deviceName, payload, tss);
+    if (this._telemetryMirrorEnabled()) {
+      const affected = new Set([String(userId)]);
+      const peers = this.st.udUserIdsForDevice.all(did);
+      for (const p of peers) {
+        const uid = String(p.user_id);
+        if (uid === String(userId)) continue;
+        if (affected.has(uid)) continue;
+        affected.add(uid);
         this.st.insertTelemetry.run({
-          user_id: sid,
+          user_id: uid,
           device_id: did,
           device_name: deviceName || null,
           properties_json: payload,
           ts: tss,
         });
+      }
+      if (this.deviceInSuperadminPool(did, userId)) {
+        for (const sid of this.listSuperadminUserIds()) {
+          if (affected.has(sid)) continue;
+          affected.add(sid);
+          this.st.insertTelemetry.run({
+            user_id: sid,
+            device_id: did,
+            device_name: deviceName || null,
+            properties_json: payload,
+            ts: tss,
+          });
+        }
       }
     }
     return this._emitTelemetryRealtimeHooks(userId, did, deviceName, properties, tss);
@@ -1709,34 +1809,41 @@ class Store {
    * @returns {boolean} false si no hay fila previa.
    */
   touchLastTelemetryTimestamp(userId, deviceId, deviceName, properties, ts) {
-    const uid = String(userId);
+    const uidIn = String(userId);
     const did = String(deviceId);
-    const row = this.st.latestForDevice.get(uid, did);
-    if (!row) return false;
     const tss = ts || Date.now();
+    const snap = this.st.getDeviceLatest.get(did);
+    const uid = snap && snap.user_id ? String(snap.user_id) : uidIn;
+    let row = this.st.latestForDevice.get(uid, did);
+    if (!row) row = this.st.latestForDeviceAny.get(did);
+    if (!row) return false;
     this.st.updateTelemetryTs.run({ id: row.id, ts: tss });
-    const affected = new Set([uid]);
-    const peers = this.st.udUserIdsForDevice.all(did);
-    for (const p of peers) {
-      const peerUid = String(p.user_id);
-      if (peerUid === uid || affected.has(peerUid)) continue;
-      const peerRow = this.st.latestForDevice.get(peerUid, did);
-      if (peerRow) {
-        this.st.updateTelemetryTs.run({ id: peerRow.id, ts: tss });
-        affected.add(peerUid);
-      }
-    }
-    if (this.deviceInSuperadminPool(did, userId)) {
-      for (const sid of this.listSuperadminUserIds()) {
-        if (affected.has(sid)) continue;
-        const peerRow = this.st.latestForDevice.get(sid, did);
+    const propsJson = row.properties_json;
+    this._upsertDeviceLatest(did, row.user_id, deviceName || row.device_name, propsJson, tss);
+    if (this._telemetryMirrorEnabled()) {
+      const affected = new Set([String(row.user_id)]);
+      const peers = this.st.udUserIdsForDevice.all(did);
+      for (const p of peers) {
+        const peerUid = String(p.user_id);
+        if (affected.has(peerUid)) continue;
+        const peerRow = this.st.latestForDevice.get(peerUid, did);
         if (peerRow) {
           this.st.updateTelemetryTs.run({ id: peerRow.id, ts: tss });
-          affected.add(sid);
+          affected.add(peerUid);
+        }
+      }
+      if (this.deviceInSuperadminPool(did, row.user_id)) {
+        for (const sid of this.listSuperadminUserIds()) {
+          if (affected.has(sid)) continue;
+          const peerRow = this.st.latestForDevice.get(sid, did);
+          if (peerRow) {
+            this.st.updateTelemetryTs.run({ id: peerRow.id, ts: tss });
+            affected.add(sid);
+          }
         }
       }
     }
-    this._emitTelemetryRealtimeHooks(uid, did, deviceName, properties, tss);
+    this._emitTelemetryRealtimeHooks(uidIn, did, deviceName, properties, tss);
     return true;
   }
 
@@ -1752,19 +1859,32 @@ class Store {
   }
 
   /**
-   * Última fila por dispositivo vía índice (user_id, device_id, ts).
-   * Evita ROW_NUMBER() sobre toda la tabla `telemetry` del usuario (GET /api/devices → 504).
+   * Última fila por dispositivo vía `device_latest` (1 fila/nodo). Fallback a telemetry indexada.
    */
   getLatestMapForDevices(userId, deviceIds) {
     const uid = String(userId || '').trim();
     const map = {};
-    if (!uid) return map;
     const ids = Array.isArray(deviceIds) ? deviceIds : [];
     for (const raw of ids) {
       const did = String(raw || '').trim();
       if (!did) continue;
-      const row = this.st.latestForDevice.get(uid, did);
-      if (row) map[did] = rowToTelemetryRow(row);
+      const snap = this.st.getDeviceLatest.get(did);
+      if (snap) {
+        map[did] = rowToTelemetryRow({
+          id: snap.device_id,
+          user_id: snap.user_id,
+          device_id: snap.device_id,
+          device_name: snap.device_name,
+          properties_json: snap.properties_json,
+          ts: snap.ts,
+        });
+        continue;
+      }
+      const row = this.st.latestForDeviceAny.get(did) || (uid ? this.st.latestForDevice.get(uid, did) : null);
+      if (row) {
+        map[did] = rowToTelemetryRow(row);
+        this._upsertDeviceLatest(did, row.user_id, row.device_name, row.properties_json, row.ts);
+      }
     }
     return map;
   }
@@ -1777,7 +1897,21 @@ class Store {
 
   /** Última fila en BD sin fusionar historial (evita recursión con getMergedLatestTelemetryForDevice). */
   _getLatestRowDirect(userId, deviceId) {
-    const row = this.st.latestForDevice.get(String(userId), String(deviceId));
+    const did = String(deviceId);
+    const snap = this.st.getDeviceLatest.get(did);
+    if (snap) {
+      return rowToTelemetryRow({
+        id: snap.device_id,
+        user_id: snap.user_id,
+        device_id: snap.device_id,
+        device_name: snap.device_name,
+        properties_json: snap.properties_json,
+        ts: snap.ts,
+      });
+    }
+    const owner = this._telemetryOwnerUserId(did, userId);
+    const row =
+      (owner ? this.st.latestForDevice.get(String(owner), did) : null) || this.st.latestForDeviceAny.get(did);
     return row ? rowToTelemetryRow(row) : null;
   }
 
@@ -1876,8 +2010,8 @@ class Store {
   }
 
   getMergedLatestTelemetryForDevice(userId, deviceId, opts = {}) {
-    const uid = userId;
     const did = String(deviceId);
+    const uid = this._telemetryOwnerUserId(did, userId);
     const rowLimit = Math.min(
       500,
       Math.max(1, Number.isFinite(Number(opts.historyRowLimit)) ? Math.floor(Number(opts.historyRowLimit)) : 500)
@@ -1916,33 +2050,12 @@ class Store {
   getDeviceListTelemetryMap(userId, deviceIds, decodeMap = {}, opts = {}) {
     const uid = String(userId || '').trim();
     const ids = Array.isArray(deviceIds) ? deviceIds.map((d) => String(d).trim()).filter(Boolean) : [];
-    if (!uid || !ids.length) return {};
+    if (!ids.length) return {};
 
     const latestMap = this.getLatestMapForDevices(uid, ids);
-    const rowLimit = Math.min(
-      80,
-      Math.max(1, Number.isFinite(Number(opts.historyRowLimit)) ? Math.floor(Number(opts.historyRowLimit)) : 16)
-    );
     const out = {};
-    const needMerge = [];
-
     for (const did of ids) {
-      const t = latestMap[did];
-      if (!t) continue;
-      const pm =
-        decodeMap[did] && decodeMap[did].productModel != null
-          ? String(decodeMap[did].productModel).trim()
-          : '';
-      /** Solo VS133: fusionar join-only en el listado (N×64 filas) bloquea SQLite y Cloudflare da 504. */
-      if (isVs133ProductModel(pm) && needsMergedTelemetryForList(t.properties || {}, pm)) {
-        needMerge.push(did);
-      } else {
-        out[did] = t;
-      }
-    }
-
-    if (needMerge.length) {
-      Object.assign(out, this.getMergedLatestMap(uid, needMerge, { historyRowLimit: rowLimit }));
+      if (latestMap[did]) out[did] = latestMap[did];
     }
     return out;
   }
@@ -1978,7 +2091,8 @@ class Store {
     /** Siempre por dispositivo (índice). El WINDOW sobre toda la tabla del usuario provoca 504. */
     if (!filterSet || filterSet.size === 0) return map;
     for (const did of filterSet) {
-      const rows = this.st.telemetryHistory.all(uid, did, 0, endMs, rowLimit);
+      const owner = this._telemetryOwnerUserId(did, uid);
+      const rows = this.st.telemetryHistory.all(owner, did, 0, endMs, rowLimit);
       if (rows.length) mergeRows(did, rows);
     }
     return map;
@@ -1995,8 +2109,10 @@ class Store {
     const endMs =
       opts.endMs != null && Number.isFinite(Number(opts.endMs)) ? Number(opts.endMs) : Date.now();
     const limit = Math.min(4000, Math.max(1, Number(opts.limit) > 0 ? Math.floor(Number(opts.limit)) : 50));
+    const did = String(deviceId);
+    const uid = this._telemetryOwnerUserId(did, userId);
     return this.st.telemetryHistory
-      .all(userId, String(deviceId), startMs, endMs, limit)
+      .all(uid, did, startMs, endMs, limit)
       .map(rowToTelemetryRow);
   }
 
@@ -2023,8 +2139,8 @@ class Store {
    * Ahora: `telemetryHistory` con LIMIT (más recientes en el rango), orden cronológico ASC para el cliente.
    */
   getTelemetrySeries(userId, deviceId, startMs, endMs, propKey, maxRows) {
-    const uid = userId;
     const did = String(deviceId);
+    const uid = this._telemetryOwnerUserId(did, userId);
     const s = parseInt(startMs, 10) || 0;
     const e = parseInt(endMs, 10) || Date.now();
     const cap = Math.min(maxRows || 500, 4000);
@@ -2058,11 +2174,17 @@ class Store {
   }
 
   getLastTelemetryRow(userId, deviceId) {
-    return this.st.lastTelemetrySameProps.get(userId, String(deviceId));
+    const did = String(deviceId);
+    const snap = this.st.getDeviceLatest.get(did);
+    if (snap) {
+      return { properties_json: snap.properties_json, ts: snap.ts, user_id: snap.user_id };
+    }
+    const owner = this._telemetryOwnerUserId(did, userId);
+    return this.st.lastTelemetrySameProps.get(owner, did) || this.st.lastTelemetrySameProps.get(userId, did);
   }
 
   lastPropertiesJsonEqual(userId, deviceId, properties) {
-    const row = this.st.lastTelemetrySameProps.get(userId, String(deviceId));
+    const row = this.getLastTelemetryRow(userId, deviceId);
     if (!row) return false;
     const next = JSON.stringify(properties || {});
     if (row.properties_json !== next) return false;
@@ -2381,20 +2503,23 @@ class Store {
   }
 
   /**
-   * user_id bajo el que hay telemetría para consultas API (superadmin ve datos de cualquier superadmin).
+   * user_id dueño del historial (ingesta). Asignados y superadmin leen la misma fila vía ACL.
    */
   resolveTelemetryUserId(requesterUserId, deviceId, opts = {}) {
     const role = opts.role != null ? String(opts.role).trim().toLowerCase() : '';
     const req = String(requesterUserId || '').trim();
     const did = String(deviceId || '').trim();
-    if (role !== 'superadmin' || !did) return req;
-    if (this.getLatestForDevice(req, did)) return req;
+    if (!did) return req;
+    const owner = this._telemetryOwnerUserId(did, '');
+    if (owner) return owner;
+    if (role !== 'superadmin') return req;
+    if (this.st.latestForDevice.get(req, did)) return req;
     for (const sid of this.listSuperadminUserIds()) {
       if (sid === req) continue;
-      if (this.getLatestForDevice(sid, did)) return sid;
+      if (this.st.latestForDevice.get(sid, did)) return sid;
     }
     for (const uid of this.listUserIdsAssignedToDevice(did)) {
-      if (this.getLatestForDevice(uid, did)) return uid;
+      if (this.st.latestForDevice.get(uid, did)) return uid;
     }
     return req;
   }
@@ -3912,6 +4037,11 @@ class Store {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.st.telemetryDeleteByDevice.run(did);
+      try {
+        this.st.deleteDeviceLatest.run(did);
+      } catch {
+        /* ignore */
+      }
       this.st.udDeleteAllForDevice.run(did);
       this.st.labelsDeleteByDevice.run(did);
       this.st.ddDeleteByDevice.run(did);
@@ -4114,37 +4244,12 @@ class Store {
     }
 
     const udList = this.listUserDevicesWithAccounts();
-    const anyUdByDevice = {};
-    for (const u of udList) {
-      if (!anyUdByDevice[u.deviceId]) anyUdByDevice[u.deviceId] = u;
-    }
     const deviceIds = new Set(udList.map((u) => u.deviceId));
     for (const licDid of this.listLicensedDeviceIds()) deviceIds.add(licDid);
 
     const deviceIdList = [...deviceIds];
     const decodeMap = this.getDeviceDecodeConfigMap(deviceIdList);
-    const superadminIds = this.listSuperadminUserIds();
-    const seedUserId = superadminIds[0] || uid;
-    const telemetryUserCache = new Map();
-    const byTelemetryUser = new Map();
-
-    for (const deviceId of deviceIdList) {
-      const anyUd = anyUdByDevice[deviceId];
-      const seedUser = (anyUd && anyUd.userId) || seedUserId;
-      let tuid = telemetryUserCache.get(deviceId);
-      if (!tuid) {
-        tuid = this.resolveTelemetryUserId(seedUser, deviceId, { role: 'superadmin' });
-        telemetryUserCache.set(deviceId, tuid);
-      }
-      if (!byTelemetryUser.has(tuid)) byTelemetryUser.set(tuid, []);
-      byTelemetryUser.get(tuid).push(deviceId);
-    }
-
-    const mergedByDevice = {};
-    for (const [tuid, dids] of byTelemetryUser) {
-      Object.assign(mergedByDevice, collectMap(tuid, dids, decodeMap, rowLimit));
-    }
-    return Object.values(mergedByDevice);
+    return Object.values(collectMap(uid, deviceIdList, decodeMap, rowLimit));
   }
 
   /** [{ deviceId, userId, email, role, displayName, tag, productModel }] */

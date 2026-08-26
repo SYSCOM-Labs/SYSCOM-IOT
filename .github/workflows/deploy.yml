@@ -1,7 +1,9 @@
 name: Deploy a producción
 
 # Auto-deploy: cada push a main reconstruye el frontend en el runner self-hosted,
-# sube el código + dist/ por rsync al servidor (DEPLOY_HOST) y reinicia el servicio systemd.
+# sube el código + dist/ por rsync al servidor (DEPLOY_HOST).
+# Reinicia systemd solo si cambió backend/LNS, dependencias o scripts de arranque.
+# Cambios solo de frontend (src/, dist/) se sirven desde disco sin cortar el LNS.
 # Runner: máquina propia etiquetada [self-hosted, Linux, X64, iot]; el deploy es remoto vía SSH.
 on:
   push:
@@ -29,6 +31,33 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detectar si hace falta reiniciar Node (LNS)
+        id: restart
+        working-directory: .
+        run: |
+          set -euo pipefail
+          NEED_RESTART=1
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.sha }}"
+          if [ "${{ github.event_name }}" = "push" ] && [ -n "$BEFORE" ] && ! echo "$BEFORE" | grep -Eq '^0+$'; then
+            if git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+              CHANGED="$(git diff --name-only "$BEFORE" "$AFTER" -- 'LoraWan-Monitoreo-y-Control/' || true)"
+              if echo "$CHANGED" | grep -Eq '(^|/)(server/|shared/|deploy/|scripts/|package\.json|package-lock\.json)'; then
+                NEED_RESTART=1
+              else
+                NEED_RESTART=0
+              fi
+            fi
+          fi
+          echo "need_restart=$NEED_RESTART" >> "$GITHUB_OUTPUT"
+          if [ "$NEED_RESTART" = "1" ]; then
+            echo "Reinicio de syscom-iot: sí (backend, dependencias o arranque)"
+          else
+            echo "Reinicio de syscom-iot: no (solo frontend/estáticos; express.static lee dist/ del disco)"
+          fi
 
       - name: Configurar Node 22
         uses: actions/setup-node@v4
@@ -100,6 +129,7 @@ jobs:
             ./ "$DEPLOY_USER@$DEPLOY_HOST:/opt/syscom-iot/app/"
 
       - name: Instalar deps de runtime y reiniciar servicio
+        if: steps.restart.outputs.need_restart == '1'
         run: |
           ssh -i "$SSH_DIR/deploy_key" -o UserKnownHostsFile="$SSH_DIR/known_hosts" -o StrictHostKeyChecking=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
@@ -115,5 +145,24 @@ jobs:
             echo "❌ syscom-iot no arrancó; últimas líneas de log:"
             journalctl -u syscom-iot -n 40 --no-pager
             exit 1
+          fi
+          REMOTE
+
+      - name: Actualizar estáticos sin reiniciar LNS
+        if: steps.restart.outputs.need_restart != '1'
+        run: |
+          ssh -i "$SSH_DIR/deploy_key" -o UserKnownHostsFile="$SSH_DIR/known_hosts" -o StrictHostKeyChecking=yes \
+            "$DEPLOY_USER@$DEPLOY_HOST" 'bash -se' <<'REMOTE'
+          set -euo pipefail
+          sudo chown -R syscom:syscom /opt/syscom-iot/app
+          if systemctl is-active --quiet syscom-iot; then
+            echo "✅ dist/ actualizado; syscom-iot sigue activo (sin reinicio)"
+          else
+            echo "⚠️  syscom-iot no está activo; arranque de seguridad"
+            cd /opt/syscom-iot/app
+            sudo -u syscom -H npm ci --omit=dev
+            sudo systemctl restart syscom-iot
+            sleep 3
+            systemctl is-active --quiet syscom-iot
           fi
           REMOTE
