@@ -3334,11 +3334,7 @@ app.patch('/api/lorawan-gateways/:id', authMiddleware, navGatewayMiddleware, (re
   if (!ok) return res.status(404).json({ error: 'No encontrado' });
   const updated = store.getLorawanGatewayById(existing.id);
   store.syncLorawanGatewayEditToSuperadminPool(prevEui, updated);
-  try {
-    retryMilesightAbpBootstrapAll(store, updated.userId || req.user.id);
-  } catch (e) {
-    console.warn('[LNS] Auto Milesight ABP (tras editar gateway):', e.message || e);
-  }
+  // OTAA: no reintentar bootstrap ABP Milesight al editar (solo aplica en POST de alta).
   res.json(updated);
 });
 
