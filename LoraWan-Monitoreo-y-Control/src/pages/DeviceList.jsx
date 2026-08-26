@@ -64,7 +64,6 @@ import {
   sanitizeDeviceAssignmentPermissions,
 } from '../utils/deviceAssignmentPermissions';
 import { isJoinOnlyTelemetryProperties } from '../utils/joinOnlyTelemetry';
-import { APP_UPLINK_STALE_MS, isLastDbIngestStaleForDisplay } from '../constants/commsStaleOfflineMs';
 import { pushAppActivityLog } from '../utils/appActivityLog';
 import { SYSCOM_REALTIME_TELEMETRY, SYSCOM_SSE_CONNECTED } from '../constants/realtimeEvents';
 import { collectDeviceBsdBundle, deviceBsdBundleIsEmpty } from '../utils/deviceBsdPreferencesBundle';
@@ -214,22 +213,12 @@ function mergeDeviceRowWithLatestTelemetry(dev, localUpdate) {
   let connectStatus = p.connectStatus || p.status || dev.connectStatus;
   const hex = p.payload_hex != null ? String(p.payload_hex).trim() : '';
   if (joinOnly) {
-    const appMs = Number(dev.lastAppUplinkMs ?? p.lastAppUplinkMs);
-    const appFresh =
-      Number.isFinite(appMs) &&
-      appMs > 0 &&
-      !isLastDbIngestStaleForDisplay(appMs, Date.now(), APP_UPLINK_STALE_MS);
-    if (!appFresh) connectStatus = 'JOIN_PENDING';
     const mergedJoin = {
       ...dev,
-      connectStatus,
+      connectStatus: 'ONLINE',
       lastUpdateTime:
         localUpdate.timestamp > (dev.lastUpdateTime || 0) ? localUpdate.timestamp : dev.lastUpdateTime,
-      ingestStatus: appFresh
-        ? undefined
-        : p.ingestStatus ||
-          dev.ingestStatus ||
-          'Solo join LoRaWAN (sin uplink de aplicación reciente). Espere el próximo reporte del sensor o revise intervalo de envío en el equipo.',
+      ingestStatus: undefined,
       lorawan_event: p.lorawan_event,
       rssi: p.rssi !== undefined ? p.rssi : dev.rssi,
     };

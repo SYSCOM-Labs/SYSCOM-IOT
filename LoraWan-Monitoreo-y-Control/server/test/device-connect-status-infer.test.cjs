@@ -43,13 +43,13 @@ test('join-only raw + app uplink reciente → ONLINE', () => {
       properties: { lastAppUplinkMs: now - 30_000, temperature: 22.1 },
     },
     { properties: { lorawan_event: 'join_accept_sent' } },
-    { nowMs: now, commsStaleMs: 40 * 60 * 1000, appStaleMs: 3 * 60 * 1000 }
+    { nowMs: now, commsStaleMs: 40 * 60 * 1000 }
   );
   assert.equal(row.connectStatus, 'ONLINE');
   assert.equal(row.ingestStatus, undefined);
 });
 
-test('join-only raw sin app uplink → JOIN_PENDING', () => {
+test('join-only raw sin app uplink (Visto reciente) → ONLINE', () => {
   const now = Date.now();
   const row = {};
   inferFreshOnlineConnectStatus(
@@ -59,9 +59,11 @@ test('join-only raw sin app uplink → JOIN_PENDING', () => {
       properties: { lorawan_event: 'join_accept_sent' },
     },
     { properties: { lorawan_event: 'join_accept_sent' } },
-    { nowMs: now, commsStaleMs: 40 * 60 * 1000, appStaleMs: 3 * 60 * 1000 }
+    { nowMs: now, commsStaleMs: 40 * 60 * 1000 }
   );
-  assert.equal(row.connectStatus, 'JOIN_PENDING');
+  assert.equal(row.connectStatus, 'ONLINE');
+  assert.equal(row.ingestStatus, undefined);
+  assert.equal(row.lastUpdateTime, now);
 });
 
 test('join-only raw + app uplink de 10 min → ONLINE', () => {
@@ -74,45 +76,22 @@ test('join-only raw + app uplink de 10 min → ONLINE', () => {
       properties: { lastAppUplinkMs: now - 10 * 60 * 1000 },
     },
     { properties: { lorawan_event: 'join_accept_sent' } },
-    { nowMs: now, commsStaleMs: 40 * 60 * 1000, appStaleMs: 40 * 60 * 1000 }
+    { nowMs: now, commsStaleMs: 40 * 60 * 1000 }
   );
   assert.equal(row.connectStatus, 'ONLINE');
 });
 
-test('join-only raw + app uplink más viejo que la ventana → JOIN_PENDING', () => {
+test('actividad más vieja que la ventana de comunicación no fuerza ONLINE', () => {
   const now = Date.now();
-  const row = {};
+  const row = { connectStatus: 'OFFLINE' };
   inferFreshOnlineConnectStatus(
     row,
     {
-      timestamp: now,
-      properties: { lastAppUplinkMs: now - 50 * 60 * 1000 },
+      timestamp: now - 50 * 60 * 1000,
+      properties: { lorawan_event: 'join_accept_sent' },
     },
     { properties: { lorawan_event: 'join_accept_sent' } },
-    { nowMs: now, commsStaleMs: 40 * 60 * 1000, appStaleMs: 40 * 60 * 1000 }
+    { nowMs: now, commsStaleMs: 40 * 60 * 1000 }
   );
-  assert.equal(row.connectStatus, 'JOIN_PENDING');
-  assert.equal(row.lastUpdateTime, now);
-  assert.match(String(row.ingestStatus || ''), /Solo join/i);
-});
-
-test('join-only raw + payload_hex fusionado viejo no tapa JOIN_PENDING', () => {
-  const now = Date.now();
-  const row = { connectStatus: 'online', payload_hex: '0eff' };
-  inferFreshOnlineConnectStatus(
-    row,
-    {
-      timestamp: now,
-      properties: {
-        lastAppUplinkMs: now - 50 * 60 * 1000,
-        payload_hex: '0eff',
-        switch_1: 'on',
-      },
-    },
-    { properties: { lorawan_event: 'join_accept_sent' } },
-    { nowMs: now, commsStaleMs: 40 * 60 * 1000, appStaleMs: 40 * 60 * 1000 }
-  );
-  assert.equal(row.connectStatus, 'JOIN_PENDING');
-  assert.match(String(row.ingestStatus || ''), /Solo join/i);
-  assert.equal(row.lastUpdateTime, now);
+  assert.equal(row.connectStatus, 'OFFLINE');
 });

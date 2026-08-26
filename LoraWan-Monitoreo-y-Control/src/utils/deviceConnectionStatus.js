@@ -1,5 +1,4 @@
-import { APP_UPLINK_STALE_MS, DEVICE_STALE_OFFLINE_MS, isLastDbIngestStaleForDisplay } from '../constants/commsStaleOfflineMs';
-import { isJoinOnlyDeviceRow } from './joinOnlyTelemetry';
+import { DEVICE_STALE_OFFLINE_MS, isLastDbIngestStaleForDisplay } from '../constants/commsStaleOfflineMs';
 
 export { DEVICE_STALE_OFFLINE_MS };
 
@@ -22,60 +21,25 @@ export function applyStaleOfflineConnectStatus(device) {
 }
 
 /**
- * Join OTAA reciente en BD pero sin uplink de aplicación (p. ej. UC300 en bucle de re-join).
- * No equivale a «en línea» operativo ni a telemetría cada 1 min.
+ * Join OTAA reciente: el listado lo trata como en línea (hay radio con el gateway).
+ * Conservado por si alguna vista quiere el matiz; el estado visible usa `isDeviceVisuallyOnline`.
  */
-function lastAppUplinkMsFromDevice(device) {
-  if (!device) return null;
-  const raw = device.lastAppUplinkMs ?? device.properties?.lastAppUplinkMs;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-export function isDeviceJoinPendingOnly(device) {
-  const d = applyStaleOfflineConnectStatus(device);
-  const ms = lastSeenMsFromDevice(d);
-  if (ms == null) return false;
-  if (isLastDbIngestStaleForDisplay(ms)) return false;
-  const appMs = lastAppUplinkMsFromDevice(d);
-  if (appMs != null && !isLastDbIngestStaleForDisplay(appMs, Date.now(), APP_UPLINK_STALE_MS)) {
-    return false;
-  }
-  /* JOIN_PENDING del API: el merge del listado deja payload_hex viejo y el detector de join-only fallaba → Desconectado. */
-  return isJoinOnlyDeviceRow(d);
+export function isDeviceJoinPendingOnly(_device) {
+  return false;
 }
 
 /**
- * En línea si hay ingesta reciente en BD con telemetría de aplicación (o estado explícito online).
- * Los joins LoRaWAN solos no cuentan como en línea (ToolBox puede seguir en De-Activate).
+ * En línea si hay ingesta reciente en BD (uplink de aplicación o join OTAA / Join-Accept).
  */
 export function isDeviceVisuallyOnline(device) {
-  if (isDeviceJoinPendingOnly(device)) return false;
   const d = applyStaleOfflineConnectStatus(device);
   const ms = lastSeenMsFromDevice(d);
   if (ms == null) return false;
   if (isLastDbIngestStaleForDisplay(ms)) return false;
-
-  const appMs = lastAppUplinkMsFromDevice(d);
-  if (appMs != null && !isLastDbIngestStaleForDisplay(appMs, Date.now(), APP_UPLINK_STALE_MS)) {
-    return true;
-  }
 
   const raw = d.connectStatus ?? d.status;
   const s = raw == null ? '' : String(raw).trim();
   const u = s.toUpperCase();
-
-  if (!u) return true;
-
-  if (u === 'OFFLINE' || u === 'DISCONNECTED' || u === 'FALSE' || u === '0' || u.includes('SIN TELEMET')) {
-    return false;
-  }
-
-  if (u === 'JOIN_PENDING' || u === 'JOIN PENDING') return false;
-
-  if (u === 'JOINED' || u === 'CONNECTED' || u === 'ONLINE' || u === 'TRUE' || u === '1') {
-    return true;
-  }
-
+  if (u.includes('SIN TELEMET')) return false;
   return true;
 }
