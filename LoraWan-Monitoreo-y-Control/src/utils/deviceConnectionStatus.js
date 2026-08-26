@@ -38,7 +38,9 @@ export function isDeviceJoinPendingOnly(device) {
   if (ms == null) return false;
   if (isLastDbIngestStaleForDisplay(ms)) return false;
   const appMs = lastAppUplinkMsFromDevice(d);
-  if (appMs != null) return false;
+  if (appMs != null && !isLastDbIngestStaleForDisplay(appMs, Date.now(), APP_UPLINK_STALE_MS)) {
+    return false;
+  }
   return isJoinOnlyDeviceRow(d);
 }
 

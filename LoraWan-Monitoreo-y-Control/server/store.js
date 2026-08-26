@@ -1923,8 +1923,8 @@ class Store {
 
     const latestMap = this.getLatestMapForDevices(uid, ids);
     const rowLimit = Math.min(
-      16,
-      Math.max(1, Number.isFinite(Number(opts.historyRowLimit)) ? Math.floor(Number(opts.historyRowLimit)) : 6)
+      80,
+      Math.max(1, Number.isFinite(Number(opts.historyRowLimit)) ? Math.floor(Number(opts.historyRowLimit)) : 16)
     );
     const out = {};
     const needMerge = [];
@@ -1953,7 +1953,7 @@ class Store {
     const uid = String(userId || '').trim();
     if (!uid) return {};
     const rowLimit = Math.min(
-      32,
+      64,
       Math.max(1, Number.isFinite(Number(opts.historyRowLimit)) ? Math.floor(Number(opts.historyRowLimit)) : 8)
     );
     const endMs = Date.now();
@@ -1977,26 +1977,11 @@ class Store {
       };
     };
 
-    /** Consulta por dispositivo (índice user+device+ts); evita WINDOW sobre toda la tabla del usuario. */
-    if (filterSet && filterSet.size > 0 && filterSet.size <= 40) {
-      for (const did of filterSet) {
-        const rows = this.st.telemetryHistory.all(uid, did, 0, endMs, rowLimit);
-        if (rows.length) mergeRows(did, rows);
-      }
-      return map;
-    }
-
-    const rawRows = this.st.telemetryHistoryMergedBatch.all(uid, 0, endMs, rowLimit);
-    const grouped = {};
-    for (const row of rawRows) {
-      const did = String(row.device_id || '').trim();
-      if (!did) continue;
-      if (filterSet && !filterSet.has(did)) continue;
-      if (!grouped[did]) grouped[did] = [];
-      grouped[did].push(row);
-    }
-    for (const [did, rows] of Object.entries(grouped)) {
-      mergeRows(did, rows);
+    /** Siempre por dispositivo (índice). El WINDOW sobre toda la tabla del usuario provoca 504. */
+    if (!filterSet || filterSet.size === 0) return map;
+    for (const did of filterSet) {
+      const rows = this.st.telemetryHistory.all(uid, did, 0, endMs, rowLimit);
+      if (rows.length) mergeRows(did, rows);
     }
     return map;
   }

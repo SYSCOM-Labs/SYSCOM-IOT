@@ -20,12 +20,13 @@ function resolveCommsStaleOfflineMs() {
   );
 }
 
-/** Sin uplink de aplicación (payload decodificado) dentro de este margen → no «En línea» (p. ej. reporte cada 1 min). */
+/** Sin uplink de aplicación (payload decodificado) dentro de este margen → no «En línea».
+ * Mismo orden de magnitud que el umbral de comunicación: nodos clase A/C no reportan cada 1 min. */
 function resolveAppUplinkStaleMs() {
   return (
     parsePositiveMs(process.env.SYSCOM_APP_UPLINK_STALE_MS) ||
     parsePositiveMs(process.env.SYSCOM_COMMS_APP_UPLINK_STALE_MS) ||
-    3 * 60 * 1000
+    resolveCommsStaleOfflineMs()
   );
 }
 

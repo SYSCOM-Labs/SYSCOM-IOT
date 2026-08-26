@@ -73,6 +73,10 @@ function preparePropertiesForPersistence(properties) {
   for (const k of STRIP_BEFORE_PERSIST) {
     if (k in out) delete out[k];
   }
+  if (!isJoinOnlyProperties(out) && String(out.deviceType || '').toUpperCase() !== 'GATEWAY') {
+    const ts = Number(out.lastAppUplinkMs);
+    if (!Number.isFinite(ts) || ts <= 0) out.lastAppUplinkMs = Date.now();
+  }
   return out;
 }
 

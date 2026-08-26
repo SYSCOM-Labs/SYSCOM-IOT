@@ -54,36 +54,31 @@ function inferFreshOnlineConnectStatus(row, telemetryRow, rawLatestRow = null, o
       row.lastUpdateTime = Math.max(activityTs, lastAppTs);
       return;
     }
-    row.connectStatus = appStale ? 'OFFLINE' : 'JOIN_PENDING';
-    if (appStale) {
-      row.ingestStatus =
-        'Sin reporte de aplicación reciente (solo join OTAA). Revise ToolBox: Activate, App Key, LoRaWAN 1.0.3, Rejoin OFF.';
-    }
-    if (hasAppTs) row.lastUpdateTime = lastAppTs;
+    row.connectStatus = 'JOIN_PENDING';
+    row.lastUpdateTime = activityTs;
     return;
   }
 
-  if (appStale) {
-    row.connectStatus = 'OFFLINE';
-    row.ingestStatus =
-      row.ingestStatus ||
-      'Último reporte de sensor antiguo. El equipo no cumple el intervalo configurado (p. ej. 1 min).';
-    if (hasAppTs) row.lastUpdateTime = lastAppTs;
+  if (appStale && joinOnlyTelemetryHint(displayProps)) {
+    row.connectStatus = 'JOIN_PENDING';
+    row.lastUpdateTime = activityTs;
     return;
   }
 
-  const p = displayProps;
-  if (joinOnlyTelemetryHint(p)) {
-    row.connectStatus = appFresh ? 'ONLINE' : 'JOIN_PENDING';
-    return;
-  }
   const cs = row.connectStatus != null ? String(row.connectStatus).trim() : '';
   const csU = cs.toUpperCase();
-  if (csU === 'JOINED' || csU === 'CONNECTED') {
+  if (csU === 'JOIN' || csU === 'JOIN_PENDING') {
     row.connectStatus = 'ONLINE';
     return;
   }
-  if (csU === 'JOIN' || csU === 'JOIN_PENDING') return;
+  if (csU === 'JOINED' || csU === 'CONNECTED' || csU === 'ONLINE' || csU === 'TRUE' || csU === '1') {
+    row.connectStatus = 'ONLINE';
+    return;
+  }
+  if (csU === 'OFFLINE' || csU === 'DISCONNECTED') {
+    row.connectStatus = 'ONLINE';
+    return;
+  }
   if (cs) return;
   row.connectStatus = 'ONLINE';
 }

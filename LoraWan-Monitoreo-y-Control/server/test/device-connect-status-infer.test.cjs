@@ -5,19 +5,26 @@ const assert = require('node:assert/strict');
 const { resolveAppUplinkStaleMs, isLastDbIngestStale } = require('../comms-stale-policy');
 const { inferFreshOnlineConnectStatus, joinOnlyTelemetryHint } = require('../lib/device-connect-status-infer');
 
-test('resolveAppUplinkStaleMs default 3 min', () => {
-  const prev = process.env.SYSCOM_APP_UPLINK_STALE_MS;
+test('resolveAppUplinkStaleMs default alineado a comunicación (40 min)', () => {
+  const prevApp = process.env.SYSCOM_APP_UPLINK_STALE_MS;
+  const prevComms = process.env.SYSCOM_COMMS_STALE_OFFLINE_MS;
+  const prevDev = process.env.SYSCOM_DEVICE_STALE_OFFLINE_MS;
   delete process.env.SYSCOM_APP_UPLINK_STALE_MS;
   delete process.env.SYSCOM_COMMS_APP_UPLINK_STALE_MS;
-  assert.equal(resolveAppUplinkStaleMs(), 180000);
-  if (prev != null) process.env.SYSCOM_APP_UPLINK_STALE_MS = prev;
+  delete process.env.SYSCOM_COMMS_STALE_OFFLINE_MS;
+  delete process.env.SYSCOM_DEVICE_STALE_OFFLINE_MS;
+  assert.equal(resolveAppUplinkStaleMs(), 40 * 60 * 1000);
+  if (prevApp != null) process.env.SYSCOM_APP_UPLINK_STALE_MS = prevApp;
+  if (prevComms != null) process.env.SYSCOM_COMMS_STALE_OFFLINE_MS = prevComms;
+  if (prevDev != null) process.env.SYSCOM_DEVICE_STALE_OFFLINE_MS = prevDev;
 });
 
-test('join-only raw + stale app uplink → offline window', () => {
+test('join-only raw + app uplink de 10 min (dentro de 40 min) no está stale', () => {
   const now = Date.now();
   const lastApp = now - 10 * 60 * 1000;
-  assert.equal(isLastDbIngestStale(lastApp, now, resolveAppUplinkStaleMs()), true);
+  assert.equal(isLastDbIngestStale(lastApp, now, resolveAppUplinkStaleMs()), false);
   assert.equal(isLastDbIngestStale(now - 60 * 1000, now, resolveAppUplinkStaleMs()), false);
+  assert.equal(isLastDbIngestStale(now - 50 * 60 * 1000, now, resolveAppUplinkStaleMs()), true);
 });
 
 test('joinOnlyTelemetryHint: join sin payload', () => {
@@ -57,7 +64,7 @@ test('join-only raw sin app uplink → JOIN_PENDING', () => {
   assert.equal(row.connectStatus, 'JOIN_PENDING');
 });
 
-test('join-only raw + app uplink viejo → OFFLINE', () => {
+test('join-only raw + app uplink de 10 min → ONLINE', () => {
   const now = Date.now();
   const row = {};
   inferFreshOnlineConnectStatus(
@@ -67,7 +74,23 @@ test('join-only raw + app uplink viejo → OFFLINE', () => {
       properties: { lastAppUplinkMs: now - 10 * 60 * 1000 },
     },
     { properties: { lorawan_event: 'join_accept_sent' } },
-    { nowMs: now, commsStaleMs: 40 * 60 * 1000, appStaleMs: 3 * 60 * 1000 }
+    { nowMs: now, commsStaleMs: 40 * 60 * 1000, appStaleMs: 40 * 60 * 1000 }
   );
-  assert.equal(row.connectStatus, 'OFFLINE');
+  assert.equal(row.connectStatus, 'ONLINE');
+});
+
+test('join-only raw + app uplink más viejo que la ventana → JOIN_PENDING', () => {
+  const now = Date.now();
+  const row = {};
+  inferFreshOnlineConnectStatus(
+    row,
+    {
+      timestamp: now,
+      properties: { lastAppUplinkMs: now - 50 * 60 * 1000 },
+    },
+    { properties: { lorawan_event: 'join_accept_sent' } },
+    { nowMs: now, commsStaleMs: 40 * 60 * 1000, appStaleMs: 40 * 60 * 1000 }
+  );
+  assert.equal(row.connectStatus, 'JOIN_PENDING');
+  assert.equal(row.lastUpdateTime, now);
 });

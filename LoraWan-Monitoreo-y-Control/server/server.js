@@ -783,7 +783,7 @@ function buildDevicesContentAssignedOnly(userId) {
   const decodeMap = store.getDeviceDecodeConfigMap(regIds);
   const licenseMap = store.getDeviceLicenseMetaMap(regIds);
   const latestRawMap = store.getLatestMapForDevices(userId, regIds);
-  const mergedMap = store.getDeviceListTelemetryMap(userId, regIds, decodeMap, { historyRowLimit: 16 });
+  const mergedMap = store.getDeviceListTelemetryMap(userId, regIds, decodeMap, { historyRowLimit: 64 });
 
   const content = [];
   for (const reg of registered) {
@@ -894,7 +894,7 @@ function buildDevicesContentSuperadmin() {
     Object.assign(latestRawByDevice, store.getLatestMapForDevices(tuid, dids));
     Object.assign(
       mergedByDevice,
-      store.getDeviceListTelemetryMap(tuid, dids, decodeMap, { historyRowLimit: 16 })
+      store.getDeviceListTelemetryMap(tuid, dids, decodeMap, { historyRowLimit: 64 })
     );
   }
 

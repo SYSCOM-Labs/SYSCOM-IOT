@@ -3,7 +3,7 @@
  * Solo usa el instante de ingesta en BD (`lastUpdateTime` / timestamp de `/api/devices/latest`), no heurísticas locales.
  */
 const DEFAULT_COMMS_STALE_OFFLINE_MS = 40 * 60 * 1000;
-const DEFAULT_APP_UPLINK_STALE_MS = 3 * 60 * 1000;
+const DEFAULT_APP_UPLINK_STALE_MS = DEFAULT_COMMS_STALE_OFFLINE_MS;
 
 function parsePositiveMs(s) {
   const n = parseInt(String(s ?? '').trim(), 10);
