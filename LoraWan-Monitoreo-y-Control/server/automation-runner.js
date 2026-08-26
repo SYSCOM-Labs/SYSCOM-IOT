@@ -202,8 +202,35 @@ function dayMatchesRule(rule, currentDay) {
   return days.some((d) => Number(d) === currentDay);
 }
 
+function collectAutomationDeviceIds(store, userId) {
+  const ids = new Set();
+  let rules;
+  try {
+    rules = store.listAutomationRules(userId);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(rules)) return [];
+  for (const rule of rules) {
+    if (!rule || typeof rule !== 'object') continue;
+    for (const cond of rule.conditions || []) {
+      const did = cond && cond.deviceId != null ? String(cond.deviceId).trim() : '';
+      if (did) ids.add(did);
+    }
+    for (const action of rule.actions || []) {
+      const did = action && action.targetDeviceId != null ? String(action.targetDeviceId).trim() : '';
+      if (did) ids.add(did);
+    }
+  }
+  return [...ids];
+}
+
 function buildDevicePropertiesMapForUser(store, userId, overlayDeviceId, overlayProps) {
-  const latestMap = store.getLatestMap(userId);
+  const overlay = String(overlayDeviceId || '').trim();
+  const ids = collectAutomationDeviceIds(store, userId);
+  if (overlay) ids.push(overlay);
+  const unique = [...new Set(ids.filter(Boolean))];
+  const latestMap = unique.length ? store.getLatestMapForDevices(userId, unique) : {};
   /** @type {Record<string, object>} */
   const deviceProperties = {};
   for (const id of Object.keys(latestMap)) {
@@ -593,8 +620,7 @@ function startAutomationScheduleTicker() {
       if (!perm.allowFull && !perm.allowEmail) continue;
       const uid = String(u.id);
       try {
-        const map = buildDevicePropertiesMapForUser(store, uid, '', {});
-        runRulesForUser(uid, map, { scheduleTickOnly: true });
+        runRulesForUser(uid, {}, { scheduleTickOnly: true });
       } catch (e) {
         console.warn('[automation] schedule tick user', uid, e && e.message);
       }
@@ -609,8 +635,12 @@ function startAutomationScheduleTicker() {
       _scheduleInterval = setInterval(tick, tickMs);
     }, ms);
   } else {
-    tick();
-    _scheduleInterval = setInterval(tick, tickMs);
+    /** No bloquear el listen HTTP: getLatestMap/ROW_NUMBER en el tick inmediato provocaba 504 al arrancar. */
+    _scheduleFirstTimeout = setTimeout(() => {
+      _scheduleFirstTimeout = null;
+      tick();
+      _scheduleInterval = setInterval(tick, tickMs);
+    }, 15000);
   }
 }
 
@@ -623,6 +653,13 @@ function onTelemetry(payload) {
   for (const uid of userIds) {
     const userId = String(uid);
     try {
+      let rules;
+      try {
+        rules = _ctx.store.listAutomationRules(userId);
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(rules) || rules.length === 0) continue;
       const map = buildDevicePropertiesMapForUser(_ctx.store, userId, deviceId, properties);
       runRulesForUser(userId, map);
     } catch (e) {

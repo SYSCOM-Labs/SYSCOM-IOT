@@ -1745,13 +1745,10 @@ class Store {
   }
 
   getLatestMap(userId) {
-    const rows = this.st.latestByUser.all(userId);
-    const map = {};
-    for (const row of rows) {
-      const t = rowToTelemetryRow(row);
-      map[t.deviceId] = t;
-    }
-    return map;
+    const ids = this.listUserDevices(userId)
+      .map((r) => String(r.deviceId || '').trim())
+      .filter(Boolean);
+    return this.getLatestMapForDevices(userId, ids);
   }
 
   /**

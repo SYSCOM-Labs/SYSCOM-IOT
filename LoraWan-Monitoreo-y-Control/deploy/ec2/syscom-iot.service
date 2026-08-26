@@ -25,7 +25,7 @@ WorkingDirectory=/opt/syscom-iot/app
 # Una sola fuente: Node carga .env (formato dotenv; mismo archivo que en desarrollo)
 ExecStart=/usr/bin/node --experimental-sqlite --env-file=/opt/syscom-iot/.env /opt/syscom-iot/app/server/server.js
 
-Restart=on-failure
+Restart=always
 RestartSec=5
 TimeoutStopSec=30
 

@@ -1992,7 +1992,6 @@ store.setAutomationTelemetryHook((payload) => {
     console.warn('[automation] telemetry hook:', e && e.message);
   }
 });
-automationRunner.startAutomationScheduleTicker();
 
 /** LoRaWAN con MAC propio (OTAA/datos cifrados) si hay rxpk + gateway EUI; si no, legado. */
 function deliverLorawanUplink(userId, body) {
@@ -5253,7 +5252,8 @@ server.listen(PORT, '0.0.0.0', () => {
   );
   console.log(`📊 Widgets dispositivo: GET | PUT | POST /api/devices/:deviceId/dashboard-widgets`);
   console.log(`📁 Base de datos (SQLite): ${store.dbPath()}`);
-  try {
+  setImmediate(() => {
+    try {
     ensureBuiltinCatalogSeeded(store);
     const fleet = reconcileFleetTemplatesOnStartup(store);
     if (fleet.synced > 0) {
@@ -5270,6 +5270,7 @@ server.listen(PORT, '0.0.0.0', () => {
   } catch (e) {
     console.warn('[Syscom] Arranque flota/plantillas:', e.message);
   }
+  });
   try {
     const { scheduleDailyDatabaseBackup } = require('./db-backup-scheduler');
     scheduleDailyDatabaseBackup(store);
@@ -5430,6 +5431,11 @@ server.listen(PORT, '0.0.0.0', () => {
     console.log(
       '[LNS-UDP] Escucha Semtech desactivada (LNS_UDP_PORT=0 o SYSCOM_LNS_UDP=0). Uplinks LoRaWAN MAC vía HTTP POST …/api/lorawan/uplink/… o ingesta dedicada.'
     );
+  }
+  try {
+    automationRunner.startAutomationScheduleTicker();
+  } catch (e) {
+    console.warn('[automation] ticker horario:', e && e.message);
   }
 });
 server.on('error', (err) => {
