@@ -65,7 +65,7 @@ import {
 } from '../utils/deviceAssignmentPermissions';
 import { isJoinOnlyTelemetryProperties } from '../utils/joinOnlyTelemetry';
 import { pushAppActivityLog } from '../utils/appActivityLog';
-import { SYSCOM_REALTIME_TELEMETRY, SYSCOM_SSE_CONNECTED } from '../constants/realtimeEvents';
+import { SYSCOM_REALTIME_TELEMETRY } from '../constants/realtimeEvents';
 import { collectDeviceBsdBundle, deviceBsdBundleIsEmpty } from '../utils/deviceBsdPreferencesBundle';
 import { hexDigitsBorderClass, requiredTrimBorderClass } from '../utils/formFieldBorderClasses';
 import {
@@ -293,6 +293,9 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
   const [devicePageSize, setDevicePageSize] = useState(10);
   /** Último evento SSE de telemetría (evita GET /devices/latest redundante cada 5 s). */
   const lastRealtimeTelemetryMsRef = useRef(0);
+  const devicesRef = useRef(devices);
+  devicesRef.current = devices;
+  const loadInFlightRef = useRef(null);
 
   /**
    * @param {{ silent?: boolean, softFail?: boolean, ensureRows?: object[] }} [opts]
@@ -303,46 +306,58 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
    */
   const loadDevices = async (opts = {}) => {
     const silent = Boolean(opts.silent);
-    const softFail = Boolean(opts.softFail);
+    const softFail = Boolean(opts.softFail) || silent;
     const ensureRows = Array.isArray(opts.ensureRows) ? opts.ensureRows.filter(Boolean) : [];
+    if (silent && loadInFlightRef.current) {
+      return loadInFlightRef.current;
+    }
     if (!silent) setLoading(true);
     let caught = null;
-    try {
-      const response = await fetchDevices(credentials, token);
-      let list = response.data?.data?.content || response.data?.content || [];
-      if (!Array.isArray(list)) list = [];
-      let mapped = list.map((d) => applyStaleOfflineConnectStatus(d));
-      primeDeviceSharedPresetsFromDeviceRows(mapped);
-      if (ensureRows.length > 0) {
-        const seen = new Set(mapped.map((d) => String(d.deviceId || '').trim().toLowerCase()));
-        for (const row of ensureRows) {
-          const id = String(row.deviceId || '').trim().toLowerCase();
-          if (!id || seen.has(id)) continue;
-          seen.add(id);
-          mapped.push(applyStaleOfflineConnectStatus(row));
+    const run = (async () => {
+      try {
+        const response = await fetchDevices(credentials, token);
+        let list = response.data?.data?.content || response.data?.content || [];
+        if (!Array.isArray(list)) list = [];
+        let mapped = list.map((d) => applyStaleOfflineConnectStatus(d));
+        primeDeviceSharedPresetsFromDeviceRows(mapped);
+        if (ensureRows.length > 0) {
+          const seen = new Set(mapped.map((d) => String(d.deviceId || '').trim().toLowerCase()));
+          for (const row of ensureRows) {
+            const id = String(row.deviceId || '').trim().toLowerCase();
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            mapped.push(applyStaleOfflineConnectStatus(row));
+          }
+          mapped.sort((a, b) => String(a.deviceId).localeCompare(String(b.deviceId)));
         }
-        mapped.sort((a, b) => String(a.deviceId).localeCompare(String(b.deviceId)));
+        for (const d of mapped) primeDeviceTelemetryPreloadFromListRow(d);
+        setDevices(mapped);
+        void prefetchDevicePropertiesBatch(mapped, credentials, token);
+        setError(null);
+      } catch (err) {
+        const msgRaw =
+          err.response?.data?.error || err.response?.data?.errMsg || err.message || t('common.error');
+        const status = Number(err.response?.status || 0);
+        const msg =
+          status === 504 ||
+          status === 502 ||
+          /504|timeout|ECONNABORTED/i.test(String(msgRaw))
+            ? 'El servidor no respondió a tiempo. Recargue en unos segundos.'
+            : msgRaw;
+        caught = msg;
+        const hasRows = devicesRef.current.length > 0;
+        if (!softFail && !hasRows) setError(msg);
+      } finally {
+        if (!silent) setLoading(false);
       }
-      for (const d of mapped) primeDeviceTelemetryPreloadFromListRow(d);
-      setDevices(mapped);
-      void prefetchDevicePropertiesBatch(mapped, credentials, token);
-      setError(null);
-    } catch (err) {
-      const msgRaw =
-        err.response?.data?.error || err.response?.data?.errMsg || err.message || t('common.error');
-      const status = Number(err.response?.status || 0);
-      const msg =
-        status === 504 ||
-        status === 502 ||
-        /504|timeout|ECONNABORTED/i.test(String(msgRaw))
-          ? 'El servidor no respondió a tiempo. Recargue en unos segundos.'
-          : msgRaw;
-      caught = msg;
-      if (!softFail) setError(msg);
+      return { ok: !caught, error: caught };
+    })();
+    loadInFlightRef.current = run;
+    try {
+      return await run;
     } finally {
-      if (!silent) setLoading(false);
+      if (loadInFlightRef.current === run) loadInFlightRef.current = null;
     }
-    return { ok: !caught, error: caught };
   };
 
   useEffect(() => {
@@ -366,26 +381,20 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
     loadDevices();
   }, []);
 
-  /** Tras login o reconexión SSE: sincronizar estado desde el servidor (no depende del navegador previo). */
+  /** Al volver a la pestaña: refresco silencioso (no pisa la lista si el GET falla). */
   useEffect(() => {
     if (!token) return undefined;
-    loadDevices({ silent: true });
-    const onSseConnected = () => loadDevices({ silent: true });
     const onVisible = () => {
       if (document.visibilityState === 'visible') loadDevices({ silent: true });
     };
-    window.addEventListener(SYSCOM_SSE_CONNECTED, onSseConnected);
     document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      window.removeEventListener(SYSCOM_SSE_CONNECTED, onSseConnected);
-      document.removeEventListener('visibilitychange', onVisible);
-    };
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, [token]);
 
-  /** Refresco periódico del listado desde la API (LNS/automatizaciones siguen en el servidor sin sesión web). */
+  /** Refresco periódico del listado; silencioso para no mostrar timeout a cada ciclo. */
   useEffect(() => {
     if (!token) return undefined;
-    const id = window.setInterval(() => loadDevices({ silent: true }), 30000);
+    const id = window.setInterval(() => loadDevices({ silent: true }), 60000);
     return () => window.clearInterval(id);
   }, [token]);
 
@@ -895,8 +904,23 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
     }
   };
 
-  if (loading) return <div className="loading-state"><Loader className="spin" /> {t('common.loading')}</div>;
-  if (error) return <div className="error-state">{error}</div>;
+  if (loading && devices.length === 0) {
+    return (
+      <div className="loading-state">
+        <Loader className="spin" /> {t('common.loading')}
+      </div>
+    );
+  }
+  if (error && devices.length === 0) {
+    return (
+      <div className="error-state">
+        <p>{error}</p>
+        <button type="button" className="btn btn-primary" onClick={() => { setError(null); loadDevices(); }}>
+          Reintentar
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="device-list-page device-list-page--premium">

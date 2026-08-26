@@ -46,7 +46,7 @@ const authHeaders = () => ({
 export const fetchDevices = async (_credentials, _token) => {
   const response = await axios.get(`${SERVER_API()}/devices`, {
     headers: authHeaders(),
-    timeout: 20000,
+    timeout: 55000,
   });
   if (response.data.status !== 'Success') throw new Error(response.data.errMsg || 'Device list failed');
   return response;
