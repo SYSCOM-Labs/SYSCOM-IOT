@@ -1754,6 +1754,24 @@ class Store {
     return map;
   }
 
+  /**
+   * Última fila por dispositivo vía índice (user_id, device_id, ts).
+   * Evita ROW_NUMBER() sobre toda la tabla `telemetry` del usuario (GET /api/devices → 504).
+   */
+  getLatestMapForDevices(userId, deviceIds) {
+    const uid = String(userId || '').trim();
+    const map = {};
+    if (!uid) return map;
+    const ids = Array.isArray(deviceIds) ? deviceIds : [];
+    for (const raw of ids) {
+      const did = String(raw || '').trim();
+      if (!did) continue;
+      const row = this.st.latestForDevice.get(uid, did);
+      if (row) map[did] = rowToTelemetryRow(row);
+    }
+    return map;
+  }
+
   getTelemetryForGatewayScan(userId, limit) {
     const since = Date.now() - (parseInt(process.env.GW_STATUS_LOOKBACK_MS, 10) || 7 * 24 * 60 * 60 * 1000);
     const lim = Math.min(limit || 50000, 200000);
@@ -1903,7 +1921,7 @@ class Store {
     const ids = Array.isArray(deviceIds) ? deviceIds.map((d) => String(d).trim()).filter(Boolean) : [];
     if (!uid || !ids.length) return {};
 
-    const latestMap = this.getLatestMap(uid);
+    const latestMap = this.getLatestMapForDevices(uid, ids);
     const rowLimit = Math.min(
       16,
       Math.max(1, Number.isFinite(Number(opts.historyRowLimit)) ? Math.floor(Number(opts.historyRowLimit)) : 6)
@@ -4664,21 +4682,20 @@ class Store {
     }
     let vacuumed = false;
     const totalDeleted = retention.deleted + (gateways.deleted || 0);
-    const vacuumMin =
-      parseInt(String(process.env.SYSCOM_TELEMETRY_VACUUM_MIN_DELETED || '').trim(), 10) || 5000;
-    if (opts.vacuum || totalDeleted >= vacuumMin) {
+    if (totalDeleted > 0) {
       try {
         this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
       } catch {
         /* ignore */
       }
-      if (totalDeleted > 0) {
-        try {
-          this.db.exec('VACUUM');
-          vacuumed = true;
-        } catch (e) {
-          console.warn('[Syscom] VACUUM mantenimiento:', e.message || e);
-        }
+    }
+    /** VACUUM solo explícito: en arranque bloquea SQLite minutos y Cloudflare responde 504. */
+    if (opts.vacuum === true && totalDeleted > 0) {
+      try {
+        this.db.exec('VACUUM');
+        vacuumed = true;
+      } catch (e) {
+        console.warn('[Syscom] VACUUM mantenimiento:', e.message || e);
       }
     }
     return { retention, gateways, vacuumed, totalDeleted };

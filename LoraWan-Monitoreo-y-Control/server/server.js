@@ -782,7 +782,7 @@ function buildDevicesContentAssignedOnly(userId) {
   const regIds = registered.map((r) => r.deviceId).filter(Boolean);
   const decodeMap = store.getDeviceDecodeConfigMap(regIds);
   const licenseMap = store.getDeviceLicenseMetaMap(regIds);
-  const latestRawMap = store.getLatestMap(userId);
+  const latestRawMap = store.getLatestMapForDevices(userId, regIds);
   const mergedMap = store.getDeviceListTelemetryMap(userId, regIds, decodeMap, { historyRowLimit: 16 });
 
   const content = [];
@@ -891,7 +891,7 @@ function buildDevicesContentSuperadmin() {
   const latestRawByDevice = {};
   const mergedByDevice = {};
   for (const [tuid, dids] of byTelemetryUser) {
-    Object.assign(latestRawByDevice, store.getLatestMap(tuid));
+    Object.assign(latestRawByDevice, store.getLatestMapForDevices(tuid, dids));
     Object.assign(
       mergedByDevice,
       store.getDeviceListTelemetryMap(tuid, dids, decodeMap, { historyRowLimit: 16 })
@@ -3345,9 +3345,19 @@ app.delete('/api/lorawan-gateways/:id', authMiddleware, navGatewayMiddleware, (r
 });
 
 app.get('/api/devices', authMiddleware, (req, res) => {
-  const role = req.user.role;
-  const content = getDevicesContentCached(role, req.user.id);
-  res.json({ status: 'Success', data: { content } });
+  try {
+    const role = req.user.role;
+    const t0 = Date.now();
+    const content = getDevicesContentCached(role, req.user.id);
+    const ms = Date.now() - t0;
+    if (ms > 2000) {
+      console.warn('[Syscom] GET /api/devices lento:', ms, 'ms', 'role=', role);
+    }
+    res.json({ status: 'Success', data: { content } });
+  } catch (e) {
+    console.error('[Syscom] GET /api/devices:', e.message || e);
+    res.status(500).json({ error: e.message || 'Error al listar dispositivos' });
+  }
 });
 
 /** Diagnóstico de tamaño de SQLite y telemetría (solo superadmin). */
@@ -5029,18 +5039,23 @@ app.post(
 
 // ── Telemetry (cliente autenticado) ───────────────────────
 app.get('/api/devices/latest', authMiddleware, (req, res) => {
-  const key = `${req.user.role}:${req.user.id}`;
-  const now = Date.now();
-  if (
-    devicesLatestCache.key === key &&
-    devicesLatestCache.data &&
-    now - devicesLatestCache.at < DEVICES_LATEST_CACHE_MS
-  ) {
-    return res.json(devicesLatestCache.data);
+  try {
+    const key = `${req.user.role}:${req.user.id}`;
+    const now = Date.now();
+    if (
+      devicesLatestCache.key === key &&
+      devicesLatestCache.data &&
+      now - devicesLatestCache.at < DEVICES_LATEST_CACHE_MS
+    ) {
+      return res.json(devicesLatestCache.data);
+    }
+    const data = store.getLatestTelemetryListForActor(req.user.id, req.user.role);
+    devicesLatestCache = { key, at: now, data };
+    res.json(data);
+  } catch (e) {
+    console.error('[Syscom] GET /api/devices/latest:', e.message || e);
+    res.status(500).json({ error: e.message || 'Error al leer telemetría' });
   }
-  const data = store.getLatestTelemetryListForActor(req.user.id, req.user.role);
-  devicesLatestCache = { key, at: now, data };
-  res.json(data);
 });
 
 app.post('/api/telemetry', authMiddleware, staffOnlyMiddleware, (req, res) => {
@@ -5299,7 +5314,7 @@ server.listen(PORT, '0.0.0.0', () => {
       console.warn(`[Syscom] Mantenimiento BD (${label}):`, e.message || e);
     }
   };
-  setImmediate(() => runBgMaintenance('arranque', false));
+  setTimeout(() => runBgMaintenance('arranque', false), 90000);
   setInterval(() => runBgMaintenance('periódico', false), retentionPruneHours * 60 * 60 * 1000);
   console.log(
     `[Syscom] Mantenimiento BD automático cada ${retentionPruneHours} h: retención sensores ${Math.round(RETENTION_MS / 86400000)} d; gateways conservan últimas ${Math.round((parseInt(String(process.env.SYSCOM_GATEWAY_TELEMETRY_KEEP_MS || '').trim(), 10) || 48 * 60 * 60 * 1000) / 3600000)} h.`
