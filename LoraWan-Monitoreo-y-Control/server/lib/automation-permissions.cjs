@@ -5,6 +5,7 @@ const navPerm = require('../navPermissions');
 /** Downlinks, agenda completa, etc. */
 function canRunAutomationsForUser(user) {
   if (!user) return false;
+  if (navPerm.isDemoRole(user.role)) return false;
   if (user.role === 'superadmin') return true;
   return navPerm.userHasNav(user, 'Automations');
 }
@@ -17,6 +18,7 @@ function canUseGlobalNotificationEmailForUser(user) {
   if (!user) return false;
   const role = String(user.role || '').trim();
   if (role === 'superadmin') return true;
+  if (navPerm.isDemoRole(role)) return false;
   if (role === 'user' || role === 'admin' || role === 'viewer') return true;
   return false;
 }

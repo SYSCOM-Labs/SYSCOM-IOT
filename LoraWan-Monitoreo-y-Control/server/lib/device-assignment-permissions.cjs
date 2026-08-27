@@ -50,6 +50,7 @@ function intersectPermissions(granted, actorPerms) {
 
 function effectivePermissionsForActor(actor, userDeviceRow) {
   if (actor && String(actor.role || '').toLowerCase() === 'superadmin') return allPermissions();
+  if (actor && String(actor.role || '').toLowerCase() === 'demo') return emptyPermissions();
   if (!userDeviceRow) return emptyPermissions();
   const raw =
     userDeviceRow.assignmentPermissionsJson != null

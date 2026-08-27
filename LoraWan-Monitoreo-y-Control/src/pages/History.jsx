@@ -166,7 +166,7 @@ async function discoverPropertiesForDevice(deviceId, credentials, token) {
 }
 
 const HistoryPage = () => {
-  const { credentials, token } = useAuth();
+  const { credentials, token, isDemo } = useAuth();
   const { t } = useLanguage();
 
   const [devices, setDevices] = useState([]);
@@ -680,7 +680,7 @@ const HistoryPage = () => {
       const dataCount = countReportDataRows(rows);
       if (dataCount === 0) {
         setError(t('reports.empty'));
-      } else if (!appliedTemplateId) {
+      } else if (!appliedTemplateId && !isDemo) {
         const cfg = {
           dateFrom,
           dateTo,
@@ -1020,6 +1020,8 @@ const HistoryPage = () => {
                   >
                     <Play size={14} /> {t('reports.template_apply')}
                   </button>
+                  {!isDemo && (
+                  <>
                   <button
                     type="button"
                     className="btn btn-secondary reports-template-edit-btn"
@@ -1036,6 +1038,8 @@ const HistoryPage = () => {
                   >
                     <Trash2 size={14} />
                   </button>
+                  </>
+                  )}
                 </div>
               </li>
             ))}

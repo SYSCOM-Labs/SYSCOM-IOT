@@ -773,7 +773,7 @@ class Store {
         if (raw !== '' && raw !== '{}') continue;
         const role = r.role != null ? String(r.role) : 'user';
         let obj;
-        if (role === 'superadmin') obj = navPerm.allNavTrue();
+        if (role === 'superadmin' || role === 'demo') obj = navPerm.allNavTrue();
         else if (role === 'admin') obj = navPerm.defaultNavLegacyAdmin();
         else obj = navPerm.defaultNavLegacyUser();
         upd.run(navPerm.navToJson(obj), r.id);

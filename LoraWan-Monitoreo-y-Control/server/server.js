@@ -60,6 +60,7 @@ const {
 } = require('./comms-stale-policy');
 const { joinOnlyTelemetryHint, inferFreshOnlineConnectStatus } = require('./lib/device-connect-status-infer');
 const deviceAssignPerm = require('./lib/device-assignment-permissions.cjs');
+const { isDemoRole, demoAllowsWrite } = require('./lib/demo-role.cjs');
 
 const realtimeSseContract = require(path.join(__dirname, '..', 'shared', 'realtime-sse-contract.json'));
 
@@ -974,6 +975,7 @@ const requireDeviceDownlinkPermission = deviceAssignPerm.requireDevicePermission
 function requireDeviceAssignPermission(req, res, next) {
   const actor = store.getUserById(req.user && req.user.id);
   if (!actor) return res.status(401).json({ error: 'Usuario no encontrado' });
+  if (isDemoRole(actor.role)) return res.status(403).json(DEMO_READ_ONLY_ERROR);
   if (String(actor.role || '').toLowerCase() === 'superadmin') return next();
   const did = String(
     (req.params && req.params.deviceId != null ? decodeURIComponent(String(req.params.deviceId)) : '') ||
@@ -993,6 +995,7 @@ function requireDeviceAssignPermission(req, res, next) {
 }
 
 function assignmentPermissionsForListActor(actor, reg) {
+  if (actor && isDemoRole(actor.role)) return deviceAssignPerm.emptyPermissions();
   const perms = { ...deviceAssignPerm.effectivePermissionsForActor(actor, reg) };
   if (actor && String(actor.role || '').toLowerCase() === 'superadmin') return perms;
   const jsonMissing =
@@ -2029,6 +2032,11 @@ function handleLorawanUplinkRequest(req, res) {
 }
 
 // ── Auth middleware ────────────────────────────────────────
+const DEMO_READ_ONLY_ERROR = {
+  code: 'DEMO_READ_ONLY',
+  error: 'La cuenta de demostración es de solo lectura. Puede consultar todo, pero no modificar.',
+};
+
 const authMiddleware = (req, res, next) => {
   const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
   if (!token) return res.status(401).json({ error: 'Token requerido' });
@@ -2041,18 +2049,30 @@ const authMiddleware = (req, res, next) => {
   const firstPwOk =
     req.method === 'POST' && (p === '/api/auth/first-password' || p.endsWith('/auth/first-password'));
   const meOk = req.method === 'GET' && (p === '/api/auth/me' || p.endsWith('/auth/me'));
-  if (firstPwOk || meOk) return next();
 
-  const fullUser = store.getUserById(req.user.id);
-  if (fullUser) {
-    req.user.nav = navPerm.effectiveNavForUser(fullUser);
-    req.user.role = fullUser.role;
+  const fullUserEarly = store.getUserById(req.user.id);
+  if (fullUserEarly) {
+    req.user.nav = navPerm.effectiveNavForUser(fullUserEarly);
+    req.user.role = fullUserEarly.role;
   }
+
+  if (firstPwOk) {
+    if (fullUserEarly && isDemoRole(fullUserEarly.role)) {
+      return res.status(403).json(DEMO_READ_ONLY_ERROR);
+    }
+    return next();
+  }
+  if (meOk) return next();
+
+  const fullUser = fullUserEarly;
   if (fullUser?.mustChangePassword && !req.user.impersonatorId) {
     return res.status(403).json({
       code: 'MUST_CHANGE_PASSWORD',
       error: 'Debe definir una contraseña segura antes de continuar.',
     });
+  }
+  if (fullUser && isDemoRole(fullUser.role) && !demoAllowsWrite(req.method, req.originalUrl || p)) {
+    return res.status(403).json(DEMO_READ_ONLY_ERROR);
   }
   next();
 };
@@ -2854,7 +2874,15 @@ app.get('/api/users', authMiddleware, adminMiddleware, (req, res) => {
     const subtree = store.listUsersInSubtree(req.user.id);
     raw = selfRow ? [selfRow, ...subtree] : subtree;
   }
-  res.json(raw.map((u) => sanitizeUserRecord(u)));
+  res.json(
+    raw.map((u) => {
+      const s = sanitizeUserRecord(u);
+      if (isDemoRole(req.user.role) && s.ingestToken) {
+        s.ingestToken = '••••••••';
+      }
+      return s;
+    })
+  );
 });
 
 /** Dispositivos asignados en `user_devices` (vista admin / super admin). */
@@ -2927,10 +2955,15 @@ app.post('/api/users', authMiddleware, adminMiddleware, (req, res) => {
       return res.status(403).json({ error: 'Solo el super administrador puede crear cuentas super administrador' });
     }
     newRole = 'superadmin';
+  } else if (roleBody === 'demo') {
+    if (req.user.role !== 'superadmin') {
+      return res.status(403).json({ error: 'Solo el super administrador puede crear cuentas de demostración' });
+    }
+    newRole = 'demo';
   }
 
   let navJson;
-  if (newRole === 'superadmin') {
+  if (newRole === 'superadmin' || newRole === 'demo') {
     navJson = navPerm.navToJson(navPerm.allNavTrue());
   } else {
     navJson = navPerm.navToJson(navPerm.sanitizeNavAssignment(actor, navBody));
@@ -2946,7 +2979,7 @@ app.post('/api/users', authMiddleware, adminMiddleware, (req, res) => {
     createdByEmail: req.user.email,
     ingestToken: crypto.randomBytes(24).toString('hex'),
     createdAt: new Date().toISOString(),
-    mustChangePassword: true,
+    mustChangePassword: newRole !== 'demo',
     navPermissionsJson: navJson,
   };
   try {
@@ -2971,7 +3004,7 @@ app.put('/api/users/:id', authMiddleware, (req, res) => {
   const { password, regenerateIngestToken, ...updates } = req.body;
   if (updates.role !== undefined) {
     const nr = updates.role;
-    if (!['superadmin', 'user'].includes(nr)) {
+    if (!['superadmin', 'user', 'demo'].includes(nr)) {
       /* ignore */
     } else if (!isSuper) {
       return res.status(403).json({ error: 'Solo el super administrador puede cambiar roles' });
@@ -2983,10 +3016,13 @@ app.put('/api/users/:id', authMiddleware, (req, res) => {
         }
       }
       row.role = nr;
+      if (nr === 'demo') {
+        row.navPermissionsJson = navPerm.navToJson(navPerm.allNavTrue());
+      }
     }
   }
   if (updates.navPermissions !== undefined && (isSuper || canManageDesc || isSelf)) {
-    if (row.role === 'superadmin') {
+    if (row.role === 'superadmin' || isDemoRole(row.role)) {
       row.navPermissionsJson = navPerm.navToJson(navPerm.allNavTrue());
     } else {
       const editor = store.getUserById(req.user.id);
@@ -3022,7 +3058,7 @@ app.put('/api/users/:id', authMiddleware, (req, res) => {
       const pv = validateProvisionalPassword(raw);
       if (!pv.ok) return res.status(400).json({ error: pv.error });
       row.password = bcrypt.hashSync(raw, 10);
-      row.mustChangePassword = true;
+      row.mustChangePassword = isDemoRole(row.role) ? false : true;
     }
   }
   if (regenerateIngestToken === true && (isSelf || canManageDesc || isSuper)) {
@@ -3546,7 +3582,7 @@ app.post('/api/devices/assign', authMiddleware, requireDeviceAssignPermission, (
   }
 
   if (actor.role === 'superadmin') {
-    if (!['user', 'superadmin'].includes(assignee.role)) {
+    if (!['user', 'superadmin', 'demo'].includes(assignee.role)) {
       return res.status(400).json({ error: 'Rol de destino no válido' });
     }
     const hasLocal = store.getUserDevice(actor.id, did);
@@ -3568,6 +3604,9 @@ app.post('/api/devices/assign', authMiddleware, requireDeviceAssignPermission, (
       requested,
       deviceAssignPerm.effectivePermissionsForActor(actor, actorUd)
     );
+  }
+  if (isDemoRole(assignee.role)) {
+    assignmentPermissions = deviceAssignPerm.emptyPermissions();
   }
 
   const base =

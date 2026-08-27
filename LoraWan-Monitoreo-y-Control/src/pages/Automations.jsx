@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Zap, Plus, Trash2, Edit2, Copy, AlertCircle, Calendar, Clock, Bell, Globe, Mail } from 'lucide-react';
+import { useAuth } from '../context/AuthContext';
 import AutomationModal from '../components/modals/AutomationModal';
 import { useLanguage } from '../context/LanguageContext';
 import './DeviceList.css';
@@ -14,6 +15,7 @@ import './Automations.css';
 
 const AutomationsPage = () => {
   const { t } = useLanguage();
+  const { isDemo } = useAuth();
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -29,7 +31,7 @@ const AutomationsPage = () => {
         if (cancelled) return;
         if (remote.length) {
           setRules(remote);
-        } else {
+        } else if (!isDemo) {
           const local = localStorage.getItem('iot_automations');
           if (local) {
             const parsed = JSON.parse(local);
@@ -52,9 +54,10 @@ const AutomationsPage = () => {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [isDemo]);
 
   const persistRules = async (next) => {
+    if (isDemo) return;
     await saveAutomationRules(next);
     invalidateAutomationRulesCache();
   };
@@ -137,6 +140,7 @@ const AutomationsPage = () => {
             <span className="premium-hero-title-text">{t('automations.title')}</span>
           </h1>
         </div>
+        {!isDemo && (
         <button
           type="button"
           className="btn btn-primary device-create-top-btn"
@@ -148,6 +152,7 @@ const AutomationsPage = () => {
         >
           <Plus size={18} /> {t('automations.add_rule')}
         </button>
+        )}
       </div>
 
       <div className="rules-grid">
@@ -167,6 +172,7 @@ const AutomationsPage = () => {
                   {rule.name?.trim() || `Regla ${String(rule.id).slice(0, 8)}`}
                 </h3>
               </div>
+              {!isDemo && (
               <div className="rule-actions">
                 <button
                   type="button"
@@ -209,6 +215,7 @@ const AutomationsPage = () => {
                   <span className="slider round"></span>
                 </label>
               </div>
+              )}
             </div>
             
             <div className="rule-content">

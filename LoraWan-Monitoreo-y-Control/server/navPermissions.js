@@ -1,6 +1,8 @@
+const { isDemoRole } = require('./lib/demo-role.cjs');
+
 /**
  * Permisos de navegación / módulos (alineados con IDs de página en la app React).
- * Solo `superadmin` puede tener `Templates` persistido como true.
+ * Solo `superadmin` (y `demo` en solo lectura) ven `Templates` como true.
  */
 
 const NAV_KEYS = [
@@ -65,6 +67,10 @@ function effectiveNavForUser(user) {
   if (role === 'superadmin') {
     return allNavTrue();
   }
+  /** Demo: recorre todos los módulos; las escrituras se bloquean en API. */
+  if (isDemoRole(role)) {
+    return allNavTrue();
+  }
   let base = parseNavJson(user && user.navPermissionsJson != null ? user.navPermissionsJson : null);
   if (!base) {
     if (role === 'admin') base = defaultNavLegacyAdmin();
@@ -78,7 +84,7 @@ function effectiveNavForUser(user) {
 
 function userHasNav(userRow, key) {
   if (!userRow) return false;
-  if (userRow.role === 'superadmin') return true;
+  if (userRow.role === 'superadmin' || isDemoRole(userRow.role)) return true;
   const nav = effectiveNavForUser(userRow);
   return Boolean(nav[key]);
 }
@@ -116,4 +122,5 @@ module.exports = {
   sanitizeNavAssignment,
   navToJson,
   parseNavJson,
+  isDemoRole,
 };

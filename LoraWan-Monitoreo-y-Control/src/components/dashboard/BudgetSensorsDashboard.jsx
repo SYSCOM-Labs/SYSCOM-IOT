@@ -2192,10 +2192,10 @@ export default function BudgetSensorsDashboard({
   refreshing = false,
   readOnlyView = false,
 }) {
-  const { credentials, token, hasNavPage, canEditDashboard: canEditFromAuth, user, userProfile } = useAuth();
+  const { credentials, token, hasNavPage, canEditDashboard: canEditFromAuth, user, userProfile, isDemo } = useAuth();
   const canEditDashboard = canEditFromAuth && !readOnlyView;
   const canSendLnsCommands = Boolean(
-    token && (hasNavPage('Devices') || variant === 'device' || variant === 'panel')
+    token && !isDemo && (hasNavPage('Devices') || variant === 'device' || variant === 'panel')
   );
   const { t } = useLanguage();
   const dashDeviceId = variant === 'device' ? resolveDeviceDashboardStorageId(device) : null;

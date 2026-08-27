@@ -54,7 +54,8 @@ const emptyForm = () => ({
 });
 
 const TemplatesPage = () => {
-  const { isSuperAdmin } = useAuth();
+  const { isSuperAdmin, isDemo } = useAuth();
+  const canManageTemplates = Boolean(isSuperAdmin) && !isDemo;
   const importInputRef = useRef(null);
   const [templates, setTemplates] = useState(() => getDeviceTemplates());
   const [editorOpen, setEditorOpen] = useState(false);
@@ -125,6 +126,7 @@ const TemplatesPage = () => {
 
   const handleSave = async (e) => {
     e.preventDefault();
+    if (!canManageTemplates) return;
     if (!form.modelo.trim() || !form.marca.trim()) {
       setTemplatesNoticeModal({
         open: true,
@@ -481,7 +483,7 @@ const TemplatesPage = () => {
     openEdit(t);
   };
 
-  if (!isSuperAdmin) {
+  if (!isSuperAdmin && !isDemo) {
     return (
       <div className="device-list-page device-list-page--premium premium-shell templates-page">
         <div className="table-container glass card premium-access-denied-card templates-page--denied">
@@ -528,6 +530,7 @@ const TemplatesPage = () => {
             />
           </label>
         </div>
+        {canManageTemplates && (
         <div className="premium-header-actions">
           <input
             id="templates-import-json"
@@ -555,6 +558,7 @@ const TemplatesPage = () => {
             <Plus size={18} /> Nueva plantilla
           </button>
         </div>
+        )}
       </div>
 
       <div className="table-container glass card">
@@ -587,9 +591,13 @@ const TemplatesPage = () => {
               {filteredSorted.map((t) => (
                 <tr
                   key={t.id}
-                  className="templates-table-row templates-table-row--clickable"
-                  onClick={(e) => handleTemplateRowClick(t, e)}
-                  title="Clic para editar la plantilla"
+                  className={
+                    canManageTemplates
+                      ? 'templates-table-row templates-table-row--clickable'
+                      : 'templates-table-row'
+                  }
+                  onClick={(e) => canManageTemplates && handleTemplateRowClick(t, e)}
+                  title={canManageTemplates ? 'Clic para editar la plantilla' : undefined}
                 >
                   <td>{t.marca || '—'}</td>
                   <td>
@@ -605,6 +613,7 @@ const TemplatesPage = () => {
                     {defaultTemplateId === t.id ? (
                       <div className="templates-default-wrap">
                         <span className="templates-default-badge">Predeterminada</span>
+                        {canManageTemplates && (
                         <button
                           type="button"
                           className="btn btn-secondary templates-default-btn"
@@ -620,8 +629,9 @@ const TemplatesPage = () => {
                         >
                           Quitar
                         </button>
+                        )}
                       </div>
-                    ) : (
+                    ) : canManageTemplates ? (
                       <button
                         type="button"
                         className="btn btn-secondary templates-default-btn"
@@ -638,10 +648,13 @@ const TemplatesPage = () => {
                       >
                         Heredar en altas
                       </button>
+                    ) : (
+                      '—'
                     )}
                   </td>
                   <td className="templates-actions-col device-actions-col">
                     <div className="actions">
+                      {canManageTemplates && (
                       <div className="device-row-actions-icons" role="group" aria-label="Acciones de plantilla">
                         <button
                           type="button"
@@ -656,6 +669,7 @@ const TemplatesPage = () => {
                           <Trash2 size={18} strokeWidth={2} />
                         </button>
                       </div>
+                      )}
                     </div>
                   </td>
                 </tr>

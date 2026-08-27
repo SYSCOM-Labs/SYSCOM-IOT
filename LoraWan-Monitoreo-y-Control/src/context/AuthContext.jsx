@@ -124,6 +124,7 @@ export const AuthProvider = ({ children }) => {
   /** Tras F5, `userProfile` puede llegar un tick después; el JWT en `user` ya trae `role`. */
   const r = userProfile?.role ?? user?.role;
   const isSuperAdmin = r === 'superadmin';
+  const isDemo = r === 'demo';
 
   const nav = useMemo(() => {
     const a = userProfile?.nav;
@@ -146,11 +147,11 @@ export const AuthProvider = ({ children }) => {
     isSuperAdmin ||
     ['Users', 'Gateway', 'Automations', 'Settings', 'Templates'].some((k) => Boolean(nav[k]));
   /** Cuenta solo lectura / dispositivos asignados (incluye legado `viewer`). */
-  const isViewer = r === 'user' || r === 'viewer';
+  const isViewer = r === 'user' || r === 'viewer' || isDemo;
   /** Edición de layout/widgets en panel o tablero por dispositivo: módulo Dashboard o Dispositivos, o superadmin. */
-  const canEditDashboard = isSuperAdmin || Boolean(nav.Dashboard || nav.Devices);
+  const canEditDashboard = !isDemo && (isSuperAdmin || Boolean(nav.Dashboard || nav.Devices));
   /** Solo super admin: alta de dispositivos en el sistema. */
-  const canCreateDevices = isSuperAdmin;
+  const canCreateDevices = isSuperAdmin && !isDemo;
 
   const isImpersonating = Boolean(
     userProfile?.impersonation?.actorId || user?.impersonatorId
@@ -304,6 +305,7 @@ export const AuthProvider = ({ children }) => {
         loading,
         isAdmin,
         isSuperAdmin,
+        isDemo,
         hasNavPage,
         isViewer,
         canEditDashboard,

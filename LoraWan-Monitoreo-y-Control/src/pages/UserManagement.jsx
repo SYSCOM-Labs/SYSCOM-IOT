@@ -9,6 +9,7 @@ import {
   Trash2,
   Shield,
   Eye,
+  Presentation,
   X,
   Loader,
   AlertCircle,
@@ -40,7 +41,14 @@ const EMPTY_FORM = {
 
 function normalizeRole(r) {
   if (r === 'viewer') return 'user';
-  if (r === 'superadmin' || r === 'admin' || r === 'user') return r;
+  if (r === 'superadmin' || r === 'admin' || r === 'user' || r === 'demo') return r;
+  return 'user';
+}
+
+function roleFormPayload(formRole, isSuperAdmin) {
+  if (!isSuperAdmin) return 'user';
+  if (formRole === 'superadmin') return 'superadmin';
+  if (formRole === 'demo') return 'demo';
   return 'user';
 }
 
@@ -150,6 +158,12 @@ const CREATE_ROLE_OPTIONS_SUPER = [
     icon: 'user',
   },
   {
+    id: 'demo',
+    name: 'Demostración',
+    desc: 'Ve todos los módulos y los dispositivos que le asigne. No puede modificar nada.',
+    icon: 'demo',
+  },
+  {
     id: 'superadmin',
     name: 'Super administrador',
     desc: 'Control total: dispositivos, plantillas y todas las cuentas.',
@@ -160,10 +174,12 @@ const CREATE_ROLE_OPTIONS_SUPER = [
 const SUPER_EDIT_ROLES = [
   { id: 'superadmin', name: 'Super admin', desc: 'Control total del sistema', icon: 'super' },
   { id: 'user', name: 'Usuario', desc: 'Permisos por módulos', icon: 'user' },
+  { id: 'demo', name: 'Demostración', desc: 'Solo lectura en toda la cuenta', icon: 'demo' },
 ];
 
 const UserManagement = ({ onAfterEnterSupport }) => {
-  const { user, hasNavPage, isSuperAdmin, enterImpersonation } = useAuth();
+  const { user, hasNavPage, isSuperAdmin, isDemo, enterImpersonation } = useAuth();
+  const canManageUsers = Boolean(isSuperAdmin || hasNavPage('Users')) && !isDemo;
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState(null);
@@ -353,7 +369,7 @@ const UserManagement = ({ onAfterEnterSupport }) => {
     }
     setSaving(true);
     try {
-      const rolePayload = isSuperAdmin && form.role === 'superadmin' ? 'superadmin' : 'user';
+      const rolePayload = roleFormPayload(form.role, isSuperAdmin);
       const navPermissions = {};
       for (const { id } of NAV_MODULE_DEFS) {
         if (form.navPick[id]) navPermissions[id] = true;
@@ -384,9 +400,9 @@ const UserManagement = ({ onAfterEnterSupport }) => {
     try {
       const updates = { profileName: form.profileName, email: form.email };
       if (isSuperAdmin) {
-        updates.role = form.role === 'superadmin' ? 'superadmin' : 'user';
+        updates.role = roleFormPayload(form.role, true);
       }
-      if (activeUser.role !== 'superadmin') {
+      if (activeUser.role !== 'superadmin' && form.role !== 'demo' && activeUser.role !== 'demo') {
         const navPermissions = {};
         for (const { id } of NAV_MODULE_DEFS) {
           if (form.navPick[id]) navPermissions[id] = true;
@@ -533,10 +549,17 @@ const UserManagement = ({ onAfterEnterSupport }) => {
               abrir la confirmación y ver la plataforma como ese usuario (modo soporte).
             </p>
           )}
+          {isDemo && (
+            <p className="um-support-hint device-page-header-sub">
+              Vista de demostración: puede consultar las cuentas, sin crear, editar ni cambiar permisos.
+            </p>
+          )}
         </div>
+        {canManageUsers && (
         <button type="button" className="btn btn-primary device-create-top-btn" onClick={openCreate}>
           <Plus size={18} /> Nuevo Usuario
         </button>
+        )}
       </div>
 
       <div className="table-container glass card">
@@ -550,9 +573,11 @@ const UserManagement = ({ onAfterEnterSupport }) => {
               <Users size={48} />
               <h3>Sin usuarios creados</h3>
               <p>Crea el primer usuario para dar acceso a la plataforma.</p>
+              {canManageUsers && (
               <button type="button" className="btn btn-primary device-create-top-btn" onClick={openCreate}>
                 <Plus size={18} /> Crear primer usuario
               </button>
+              )}
             </div>
           ) : (
             <table className="premium-data-table">
@@ -605,6 +630,10 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                           <>
                             <Shield size={12} /> Super admin
                           </>
+                        ) : u.role === 'demo' ? (
+                          <>
+                            <Presentation size={12} /> Demo
+                          </>
                         ) : u.role === 'admin' ? (
                           <>
                             <Eye size={12} /> Usuario
@@ -625,7 +654,7 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                     <td className="device-actions-col">
                       <div className="actions">
                         <div className="device-row-actions-icons" role="group" aria-label={`Acciones de ${u.email}`}>
-                          {supportEligible && (
+                          {canManageUsers && supportEligible && (
                             <button
                               type="button"
                               className="device-action-pill device-action-pill--support"
@@ -635,16 +664,20 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                               <LogIn size={18} strokeWidth={2} />
                             </button>
                           )}
+                          {canManageUsers && (
                           <button type="button" className="device-action-pill" title="Editar usuario" onClick={() => openEdit(u)}>
                             <Edit2 size={18} strokeWidth={2} />
                           </button>
+                          )}
                           <button type="button" className="device-action-pill" title="Ver dispositivos asignados" onClick={() => openDevicesList(u)}>
                             <Database size={18} strokeWidth={2} />
                           </button>
+                          {canManageUsers && (
                           <button type="button" className="device-action-pill" title="Regenerar token de ingesta" onClick={() => handleRegenerateIngest(u)}>
                             <Play size={18} strokeWidth={2} />
                           </button>
-                          {isSuperAdmin ? (
+                          )}
+                          {canManageUsers && isSuperAdmin ? (
                             <button
                               type="button"
                               className="device-action-pill device-action-pill--password"
@@ -655,6 +688,7 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                               <KeyRound size={18} strokeWidth={2} />
                             </button>
                           ) : null}
+                          {canManageUsers && (
                           <button
                             type="button"
                             className="device-action-pill device-action-pill--danger"
@@ -664,6 +698,7 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                           >
                             {deletingId === u.id ? <Loader size={18} className="spin" /> : <Trash2 size={18} strokeWidth={2} />}
                           </button>
+                          )}
                         </div>
                       </div>
                     </td>
@@ -705,7 +740,13 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                         role="button"
                         tabIndex={0}
                       >
-                        {opt.icon === 'super' ? <Shield size={20} /> : <Eye size={20} />}
+                        {opt.icon === 'super' ? (
+                          <Shield size={20} />
+                        ) : opt.icon === 'demo' ? (
+                          <Presentation size={20} />
+                        ) : (
+                          <Eye size={20} />
+                        )}
                         <div>
                           <div className="role-name">{opt.name}</div>
                           <div className="role-desc">{opt.desc}</div>
@@ -721,7 +762,14 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                 </p>
               )}
 
-              {!(isSuperAdmin && form.role === 'superadmin') && (
+              {form.role === 'demo' && (
+                <p className="um-modal-hint" style={{ marginBottom: '1rem' }}>
+                  Esta cuenta verá todos los módulos. Asígnele dispositivos después de crearla: verá widgets y
+                  telemetría real, sin poder enviar downlinks ni cambiar la plataforma.
+                </p>
+              )}
+
+              {!(isSuperAdmin && (form.role === 'superadmin' || form.role === 'demo')) && (
                 <div className="form-group">
                   <label>Módulos visibles en el menú</label>
                   <p className="um-modal-hint" style={{ marginTop: 0 }}>
@@ -839,7 +887,13 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                         role="button"
                         tabIndex={0}
                       >
-                        {opt.icon === 'super' ? <Shield size={20} /> : <Eye size={20} />}
+                        {opt.icon === 'super' ? (
+                          <Shield size={20} />
+                        ) : opt.icon === 'demo' ? (
+                          <Presentation size={20} />
+                        ) : (
+                          <Eye size={20} />
+                        )}
                         <div>
                           <div className="role-name">{opt.name}</div>
                           <div className="role-desc">{opt.desc}</div>
@@ -854,6 +908,8 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                   <strong>
                     {activeUser.role === 'superadmin'
                       ? 'Super admin'
+                      : activeUser.role === 'demo'
+                        ? 'Demostración'
                       : activeUser.role === 'admin'
                         ? 'Usuario'
                         : 'Usuario'}
@@ -885,7 +941,7 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                 </div>
               </div>
 
-              {activeUser.role !== 'superadmin' && (
+              {activeUser.role !== 'superadmin' && form.role !== 'demo' && activeUser.role !== 'demo' && (
                 <div className="form-group" style={{ marginTop: '1rem' }}>
                   <label>Módulos del menú</label>
                   <p className="um-modal-hint" style={{ marginTop: 0 }}>
@@ -964,7 +1020,7 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                       <th>DevEUI</th>
                       <th>Clase</th>
                       <th>Etiqueta</th>
-                      {String(devicesModal.user.id) !== String(user?.id) ? <th>Acción</th> : null}
+                      {String(devicesModal.user.id) !== String(user?.id) && !isDemo ? <th>Acción</th> : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -975,7 +1031,7 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                         <td className="mono">{d.devEUI || '—'}</td>
                         <td>{d.lorawanClass || '—'}</td>
                         <td>{d.tag || '—'}</td>
-                        {String(devicesModal.user.id) !== String(user?.id) ? (
+                        {String(devicesModal.user.id) !== String(user?.id) && !isDemo ? (
                           <td>
                             <button
                               type="button"
@@ -998,7 +1054,7 @@ const UserManagement = ({ onAfterEnterSupport }) => {
               <button type="button" className="btn btn-secondary" onClick={closeDevicesModal} disabled={unassignBusy}>
                 Cerrar
               </button>
-              {String(devicesModal.user.id) !== String(user?.id) && devicesModal.devices.length > 0 ? (
+              {canManageUsers && String(devicesModal.user.id) !== String(user?.id) && devicesModal.devices.length > 0 ? (
                 <button
                   type="button"
                   className="btn device-assign-unassign-btn"

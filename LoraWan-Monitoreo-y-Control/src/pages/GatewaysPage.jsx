@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Plus, X, Trash2, RefreshCw, Loader, RadioTower, Edit2 } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 import { fetchLorawanGateways, createLorawanGateway, updateLorawanGateway, deleteLorawanGateway } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 import FormToast from '../components/FormToast';
 import { getDuplicateEntityNotice } from '../utils/duplicateEntityNotice';
 import { LORAWAN_GATEWAY_BAND_OPTIONS, LORAWAN_GATEWAY_BAND_VALUES } from '../constants/lorawanGatewayBands';
@@ -37,6 +38,7 @@ function labelForBand(stored) {
 
 const GatewaysPage = () => {
   const { t } = useLanguage();
+  const { isDemo } = useAuth();
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -194,10 +196,12 @@ const GatewaysPage = () => {
             <RefreshCw size={18} className={loading ? 'spin' : ''} />
             {t('common.refresh')}
           </button>
+          {!isDemo && (
           <button type="button" className="btn btn-primary device-create-top-btn" onClick={openModal}>
             <Plus size={18} />
             Añadir gateway
           </button>
+          )}
         </div>
       </div>
 
@@ -259,6 +263,7 @@ const GatewaysPage = () => {
                     </td>
                     <td className="device-actions-col">
                       <div className="actions">
+                        {!isDemo && (
                         <div className="device-row-actions-icons" role="group" aria-label="Acciones del gateway">
                           <button
                             type="button"
@@ -279,6 +284,7 @@ const GatewaysPage = () => {
                             <Trash2 size={18} strokeWidth={2} />
                           </button>
                         </div>
+                        )}
                       </div>
                     </td>
                   </tr>

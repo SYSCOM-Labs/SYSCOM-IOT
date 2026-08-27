@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 
 const Sidebar = ({ activePage, onNavigate, isOpen, onToggle }) => {
-  const { logout, hasNavPage, isSuperAdmin } = useAuth();
+  const { logout, hasNavPage } = useAuth();
   const { t, language, toggleLanguage } = useLanguage();
   const [logo, setLogo] = useState(() => localStorage.getItem('syscom_iot_logo') || null);
 
@@ -38,12 +38,9 @@ const Sidebar = ({ activePage, onNavigate, isOpen, onToggle }) => {
     { id: 'History', icon: <FileSpreadsheet size={20} />, label: t('nav.history') },
     { id: 'SpecialReport', icon: <Calculator size={20} />, label: t('nav.special_report') },
     { id: 'Users', icon: <Users size={20} />, label: 'Usuarios' },
-    { id: 'Templates', icon: <Layers size={20} />, label: 'Plantillas', superAdminOnly: true },
+    { id: 'Templates', icon: <Layers size={20} />, label: 'Plantillas' },
     { id: 'Settings', icon: <Settings size={20} />, label: t('nav.settings') },
-  ].filter((item) => {
-    if (item.superAdminOnly) return isSuperAdmin;
-    return hasNavPage(item.id);
-  });
+  ].filter((item) => hasNavPage(item.id));
 
   return (
     <aside className={`sidebar sidebar--premium ${isOpen ? 'open' : ''}`}>

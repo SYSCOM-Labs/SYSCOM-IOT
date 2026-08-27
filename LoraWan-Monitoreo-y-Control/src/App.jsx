@@ -197,6 +197,18 @@ function ImpersonationSupportBanner({ isImpersonating, targetEmail, targetDispla
   );
 }
 
+function DemoReadOnlyBanner({ visible }) {
+  if (!visible) return null;
+  return (
+    <div className="syscom-demo-banner" role="status">
+      <p className="syscom-demo-banner__text">
+        Cuenta de demostración: puede consultar todos los módulos y los datos reales asignados. No puede modificar
+        nada (dashboard, downlinks, usuarios, ajustes, plantillas ni automatizaciones).
+      </p>
+    </div>
+  );
+}
+
 function App() {
   useEffect(() => {
     installAutomationToastAudioUnlock();
@@ -209,6 +221,7 @@ function App() {
     loading,
     hasNavPage,
     isSuperAdmin,
+    isDemo,
     logout,
     isImpersonating,
     exitImpersonation,
@@ -217,6 +230,7 @@ function App() {
 
   const roleLabel = (role) => {
     if (role === 'superadmin') return 'Super administrador';
+    if (role === 'demo') return 'Demostración (solo lectura)';
     if (role === 'admin') return 'Usuario'; /* legado migrado */
     if (role === 'user' || role === 'viewer') return 'Usuario';
     return 'Usuario';
@@ -430,6 +444,7 @@ function App() {
           }}
         />
         <LicenseExpiryBanner userId={user?.id} />
+        <DemoReadOnlyBanner visible={Boolean(isDemo)} />
         <SyscomRealtimeBridge />
         <LnsDownlinkToastBridge />
         <AutomationToastBridge />
@@ -446,7 +461,7 @@ function App() {
           {currentPage === 'Automations'  && (hasNavPage('Automations') ? <AutomationsPage /> : <AccessDenied />)}
           {currentPage === 'Settings'     && (hasNavPage('Settings') ? <SettingsPage />    : <AccessDenied />)}
           {currentPage === 'Users'        && (hasNavPage('Users') ? <UserManagement onAfterEnterSupport={() => navigate('Dashboard')} />  : <AccessDenied />)}
-          {currentPage === 'Templates'   && (isSuperAdmin ? <TemplatesPage /> : <AccessDenied />)}
+          {currentPage === 'Templates'   && (hasNavPage('Templates') ? <TemplatesPage /> : <AccessDenied />)}
           {currentPage === 'Gateway'      && (hasNavPage('Gateway') ? <GatewaysPage /> : <AccessDenied />)}
         </div>
       </main>

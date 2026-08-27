@@ -145,6 +145,7 @@ body:not(.theme-dark) .um-toast-host .form-toast {
 .role-badge.superadmin { background: rgba(234,179,8,0.15); color: #fbbf24; border: 1px solid rgba(234,179,8,0.35); }
 .role-badge.user,
 .role-badge.viewer     { background: rgba(59,130,246,0.12); color: #60a5fa; border: 1px solid rgba(59,130,246,0.3); }
+.role-badge.demo       { background: rgba(14,165,233,0.14); color: #38bdf8; border: 1px solid rgba(14,165,233,0.35); }
 
 /* Modal */
 /* Modal: crear / editar usuario */

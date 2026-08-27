@@ -31,8 +31,9 @@ export function sanitizeDeviceAssignmentPermissions(input) {
  */
 export function deviceActionPermissions(
   device,
-  { isSuperAdmin = false, hasDevicesNav = false, canAssignNav = false, isImpersonating = false } = {}
+  { isSuperAdmin = false, isDemo = false, hasDevicesNav = false, canAssignNav = false, isImpersonating = false } = {}
 ) {
+  if (isDemo) return emptyDeviceAssignmentPermissions();
   if (isSuperAdmin) return allDeviceAssignmentPermissions();
   let perms;
   if (device && device.assignmentPermissions && typeof device.assignmentPermissions === 'object') {

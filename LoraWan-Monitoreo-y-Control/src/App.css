@@ -700,6 +700,27 @@ body.theme-dark .license-expiry-banner {
   background: linear-gradient(135deg, rgba(180, 83, 9, 0.2), rgba(120, 53, 15, 0.15));
 }
 
+.syscom-demo-banner {
+  flex-shrink: 0;
+  border-bottom: 1px solid rgba(14, 165, 233, 0.45);
+  background: linear-gradient(105deg, rgba(8, 47, 73, 0.92) 0%, rgba(12, 74, 110, 0.88) 100%);
+  color: #e0f2fe;
+}
+
+.syscom-demo-banner__text {
+  margin: 0;
+  padding: 0.55rem 1.15rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  text-align: center;
+}
+
+body:not(.theme-dark) .syscom-demo-banner {
+  background: linear-gradient(105deg, #e0f2fe 0%, #bae6fd 100%);
+  border-bottom-color: rgba(2, 132, 199, 0.35);
+  color: #0c4a6e;
+}
+
 /* Modo soporte: superadmin viendo otra cuenta */
 .syscom-impersonation-banner {
   flex-shrink: 0;

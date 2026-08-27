@@ -258,9 +258,9 @@ function mergeDeviceRowWithLatestTelemetry(dev, localUpdate) {
 }
 
 const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
-  const { credentials, token, user, userProfile, hasNavPage, isSuperAdmin, canCreateDevices, isImpersonating } = useAuth();
+  const { credentials, token, user, userProfile, hasNavPage, isSuperAdmin, isDemo, canCreateDevices, isImpersonating } = useAuth();
   const { t } = useLanguage();
-  const canAssignDevice = isSuperAdmin || (hasNavPage('Users') && hasNavPage('Devices'));
+  const canAssignDevice = !isDemo && (isSuperAdmin || (hasNavPage('Users') && hasNavPage('Devices')));
   const hasDevicesNav = hasNavPage('Devices');
   const [devices, setDevices] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -825,7 +825,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
       await assignDeviceToUser(
         assignForDevice.deviceId,
         assignSelectedUser.email.trim().toLowerCase(),
-        assignPerms
+        assignSelectedUser.role === 'demo' ? emptyDeviceAssignmentPermissions() : assignPerms
       );
       setAssignForDevice(null);
       setAssignSelectedUser(null);
@@ -1066,6 +1066,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
               const power = formatDevicePowerCell(device);
               const rowPerms = deviceActionPermissions(device, {
                 isSuperAdmin,
+                isDemo,
                 hasDevicesNav,
                 canAssignNav: canAssignDevice,
                 isImpersonating,
@@ -1627,11 +1628,15 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                       className={`assign-user-row ${assignSelectedUser?.id === u.id ? 'selected' : ''}`}
                       onClick={() => {
                         setAssignSelectedUser(u);
-                        setAssignPerms(
-                          u.assignmentPermissions
-                            ? sanitizeDeviceAssignmentPermissions(u.assignmentPermissions)
-                            : emptyDeviceAssignmentPermissions()
-                        );
+                        if (u.role === 'demo') {
+                          setAssignPerms(emptyDeviceAssignmentPermissions());
+                        } else {
+                          setAssignPerms(
+                            u.assignmentPermissions
+                              ? sanitizeDeviceAssignmentPermissions(u.assignmentPermissions)
+                              : emptyDeviceAssignmentPermissions()
+                          );
+                        }
                       }}
                     >
                       <span className="assign-user-email">
@@ -1641,15 +1646,22 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                         ) : null}
                       </span>
                       <span className="assign-user-meta">
-                        {u.profileName || '—'} · {u.role === 'superadmin' ? 'Super admin' : 'Usuario'}
+                        {u.profileName || '—'} · {u.role === 'superadmin' ? 'Super admin' : u.role === 'demo' ? 'Demo' : 'Usuario'}
                       </span>
                     </button>
                   ))
                 )}
               </div>
-              <fieldset className="device-assign-perms" disabled={!assignSelectedUser || savingDevice}>
+              <fieldset
+                className="device-assign-perms"
+                disabled={!assignSelectedUser || savingDevice || assignSelectedUser?.role === 'demo'}
+              >
                 <legend className="device-assign-perms__legend">{t('devices.assign_permissions_title')}</legend>
-                <p className="device-assign-perms__hint">{t('devices.assign_permissions_hint')}</p>
+                <p className="device-assign-perms__hint">
+                  {assignSelectedUser?.role === 'demo'
+                    ? 'La cuenta demo ve el dispositivo y sus widgets, sin editar, eliminar, asignar ni enviar downlinks.'
+                    : t('devices.assign_permissions_hint')}
+                </p>
                 <div className="device-assign-perms__list">
                   {DEVICE_ASSIGNMENT_PERM_KEYS.map(({ key, labelKey }) => (
                     <label key={key} className="device-assign-perm-item">

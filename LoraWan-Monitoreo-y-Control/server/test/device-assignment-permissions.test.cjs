@@ -47,6 +47,12 @@ test('superadmin siempre tiene todos los permisos', () => {
   assert.equal(actorHasDevicePermission(actor, ud, 'delete'), true);
 });
 
+test('demo nunca tiene permisos de dispositivo (ni downlink)', () => {
+  const actor = { role: 'demo' };
+  const ud = { assignmentPermissionsJson: JSON.stringify(allPermissions()) };
+  assert.deepEqual(effectivePermissionsForActor(actor, ud), emptyPermissions());
+});
+
 test('usuario asignado respeta el JSON', () => {
   const actor = { role: 'user' };
   const ud = { assignmentPermissionsJson: JSON.stringify({ edit: true, downlink: true }) };
