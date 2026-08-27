@@ -77,25 +77,23 @@ html.syscom-scroll-lock-dashboard .page-budget-dashboard .bsd-panel-widgets-canv
   --text-primary: #ffffff;
   --text-secondary: #a1a1aa;
   --text-muted: #71717a;
-  /* Cristal: capas azul / cian semitransparentes (tema oscuro) */
-  --bsd-crystal-bg-1: rgba(56, 189, 248, 0.22);
-  --bsd-crystal-bg-2: rgba(14, 165, 233, 0.12);
-  --bsd-crystal-bg-3: rgba(15, 23, 42, 0.88);
-  /** Cristal vítreo: capas muy transparentes + blur (el color lo aporta el fondo difuminado) */
-  --bsd-widget-glass-top: rgba(88, 140, 200, 0.22);
-  --bsd-widget-glass-mid: rgba(28, 48, 82, 0.32);
-  --bsd-widget-glass-bot: rgba(12, 22, 48, 0.48);
-  --bsd-widget-rim-highlight: rgba(255, 255, 255, 0.72);
-  --bsd-widget-rim-shadow: rgba(0, 4, 18, 0.22);
+  /* 2026 quiet slate: mate opaco, hairline, una sombra. Sin backdrop-filter. */
+  --bsd-card-bg: linear-gradient(180deg, #2b3d5c 0%, #1a2a42 100%);
+  --bsd-card-border: rgba(148, 197, 220, 0.28);
+  --bsd-card-border-hover: rgba(186, 230, 253, 0.5);
+  --bsd-card-shadow: 0 8px 22px rgba(8, 16, 36, 0.22);
+  --bsd-card-shadow-hover: 0 10px 26px rgba(8, 16, 36, 0.28);
+  --bsd-card-inset: inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  --bsd-card-radius: 18px;
+  --bsd-widget-glass-top: #2b3d5c;
+  --bsd-widget-glass-mid: #22344f;
+  --bsd-widget-glass-bot: #1a2a42;
+  --bsd-widget-rim-highlight: rgba(255, 255, 255, 0.14);
+  --bsd-widget-rim-shadow: rgba(8, 16, 36, 0.22);
 
   font-family: 'Inter', sans-serif;
-  background:
-    radial-gradient(ellipse 120% 85% at 50% -8%, var(--bsd-crystal-bg-1), transparent 58%),
-    radial-gradient(ellipse 70% 55% at 100% 40%, rgba(99, 102, 241, 0.14), transparent 50%),
-    linear-gradient(168deg, #0b1220 0%, rgba(12, 74, 110, 0.55) 48%, #0a1628 100%);
-  background-color: #0a1628;
-  backdrop-filter: blur(28px);
-  -webkit-backdrop-filter: blur(28px);
+  background: linear-gradient(180deg, #101826 0%, #0c1422 100%);
+  background-color: #0c1422;
   min-height: 100%;
   padding-top: 24px;
   padding-bottom: 24px;
@@ -201,6 +199,24 @@ body.theme-dark .bsd-panel-widgets-canvas {
   position: relative;
   width: 100%;
   box-sizing: border-box;
+}
+
+/** Arrastre fluido: el blur del cristal se recalcula en cada frame y frena el gesto. */
+.bsd-dash-grid-layout--dragging .react-grid-item > .widget,
+.bsd-dash-grid-layout--dragging .react-grid-item > .bsd-sensor-grid-shell,
+.bsd-dash-grid-layout--dragging .react-grid-item > .bsd-grid-slot > .widget {
+  transition: none !important;
+  box-shadow: var(--bsd-card-shadow), var(--bsd-card-inset);
+}
+
+.bsd-dash-grid-layout .react-grid-item.react-draggable-dragging,
+.bsd-dash-grid-layout .react-grid-item.resizing {
+  z-index: 20;
+  transition: none !important;
+}
+
+.bsd-root:not(.bsd-dashboard-edit-off) .bsd-dash-grid-layout .widget {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .bsd-dash-static-layout {
@@ -733,16 +749,7 @@ body.theme-dark .bsd-panel-widgets-canvas {
 }
 
 .bsd-root::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(circle at 22% 18%, rgba(255, 255, 255, 0.08) 0%, transparent 42%),
-    radial-gradient(circle at 78% 88%, rgba(56, 189, 248, 0.1) 0%, transparent 48%),
-    radial-gradient(circle at 50% 50%, rgba(99, 102, 241, 0.06) 0%, transparent 65%);
-  pointer-events: none;
-  z-index: 0;
-  border-radius: inherit;
+  content: none;
 }
 
 .bsd-root .dashboard-container {
@@ -762,16 +769,15 @@ body.theme-dark .bsd-panel-widgets-canvas {
 }
 
 .bsd-root .dashboard-header {
-  background: rgba(20, 20, 35, 0.6);
-  backdrop-filter: blur(20px);
-  border-radius: 28px;
+  background: #182338;
+  border-radius: 22px;
   padding: 28px 32px;
   margin-bottom: 32px;
   display: flex;
   flex-direction: column;
   gap: 20px;
-  border: 1px solid rgba(99, 102, 241, 0.2);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3), 0 0 20px rgba(99, 102, 241, 0.1);
+  border: 1px solid rgba(148, 197, 220, 0.18);
+  box-shadow: 0 8px 24px rgba(8, 16, 36, 0.18);
   position: relative;
   overflow: visible;
 }
@@ -877,8 +883,7 @@ body.theme-dark .bsd-panel-widgets-canvas {
   padding: 12px;
   border-radius: 14px;
   border: 1px solid rgba(99, 102, 241, 0.3);
-  background: rgba(18, 18, 32, 0.96);
-  backdrop-filter: blur(12px);
+  background: #161625;
   box-shadow: 0 16px 40px rgba(0, 0, 0, 0.45);
   z-index: 40;
 }
@@ -952,23 +957,7 @@ body.theme-dark .bsd-panel-widgets-canvas {
 }
 
 .bsd-root .dashboard-header::before {
-  content: '';
-  position: absolute;
-  top: -50%;
-  left: -50%;
-  width: 200%;
-  height: 200%;
-  background: radial-gradient(circle, rgba(99, 102, 241, 0.1) 0%, transparent 70%);
-  animation: bsd-rotate 20s linear infinite;
-}
-
-@keyframes bsd-rotate {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+  content: none;
 }
 
 .bsd-root .title {
@@ -1041,96 +1030,47 @@ body.theme-dark .bsd-panel-widgets-canvas {
 }
 
 .bsd-root .widget {
-  /* Cristal azul con borde cian y bisel luminoso (misma familia que tarjetas sensor / widget Texto) */
-  background:
-    linear-gradient(172deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.06) 14%, transparent 36%),
-    radial-gradient(ellipse 78% 58% at 50% 16%, rgba(130, 200, 255, 0.2), transparent 58%),
-    linear-gradient(168deg, rgba(48, 82, 125, 0.42) 0%, rgba(18, 32, 58, 0.55) 100%);
-  border: 1px solid rgba(165, 243, 252, 0.45);
-  border-radius: clamp(12px, 1.8vmin, 16px);
+  background: var(--bsd-card-bg);
+  border: 1px solid var(--bsd-card-border);
+  border-radius: var(--bsd-card-radius);
   padding: clamp(14px, 2vmin, 20px);
   color: #ffffff;
-  box-shadow:
-    0 0 0 1px rgba(103, 232, 249, 0.14),
-    0 14px 42px -8px rgba(0, 10, 32, 0.48),
-    0 4px 16px -4px rgba(0, 0, 0, 0.38),
-    inset 0 2px 2px rgba(207, 250, 254, 0.42),
-    inset 2px 0 1px rgba(165, 243, 252, 0.32),
-    inset 0 -2px 2px rgba(15, 23, 42, 0.38),
-    inset -2px -1px 2px rgba(15, 23, 42, 0.3),
-    inset 0 0 26px rgba(56, 189, 248, 0.07);
-  backdrop-filter: blur(38px) saturate(1.52);
-  -webkit-backdrop-filter: blur(38px) saturate(1.52);
-  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s ease, border-color 0.25s ease;
+  box-shadow: var(--bsd-card-shadow), var(--bsd-card-inset);
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
   position: relative;
   overflow: hidden;
-  isolation: isolate;
 }
 
 .bsd-root .widget::before {
   content: '';
   position: absolute;
   top: 0;
-  left: -100%;
-  width: 100%;
-  height: 100%;
-  background: linear-gradient(100deg, transparent 35%, rgba(255, 255, 255, 0.09) 50%, transparent 65%);
-  transition: left 0.55s ease;
+  left: 12%;
+  right: 12%;
+  width: auto;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(165, 243, 252, 0.45), transparent);
+  pointer-events: none;
+  z-index: 1;
 }
 
-.bsd-root .widget:hover::before {
-  left: 100%;
-}
-
-/* Sin brillo animado: con fondo transparente el ::before mezcla con el lienzo y deja mancha azulada. */
-.bsd-root .widget.bsd-widget-surface--clear::before {
-  display: none;
-}
-
+.bsd-root .widget.bsd-widget-surface--clear::before,
 .bsd-root .widget.bsd-widget-surface--clear:hover::before {
   display: none;
 }
 
 .bsd-root .widget:hover {
-  transform: translateY(-3px);
-  border-color: rgba(186, 230, 253, 0.58);
-  box-shadow:
-    0 0 0 1px rgba(103, 232, 249, 0.22),
-    0 18px 48px -10px rgba(0, 12, 40, 0.52),
-    0 6px 20px -4px rgba(0, 0, 0, 0.42),
-    inset 0 2px 2px rgba(224, 242, 254, 0.48),
-    inset 2px 0 2px rgba(165, 243, 252, 0.38),
-    inset 0 -2px 2px rgba(15, 23, 42, 0.34),
-    inset -2px -1px 2px rgba(15, 23, 42, 0.26),
-    inset 0 0 30px rgba(56, 189, 248, 0.1);
+  border-color: var(--bsd-card-border-hover);
+  box-shadow: var(--bsd-card-shadow-hover), var(--bsd-card-inset);
 }
 
 body.theme-dark .bsd-root .widget {
-  --bsd-widget-glass-top: rgba(72, 118, 175, 0.26);
-  --bsd-widget-glass-mid: rgba(22, 40, 72, 0.36);
-  --bsd-widget-glass-bot: rgba(8, 16, 38, 0.52);
-  --bsd-widget-rim-highlight: rgba(255, 255, 255, 0.68);
-  --bsd-widget-rim-shadow: rgba(0, 4, 16, 0.28);
-  background:
-    linear-gradient(172deg, rgba(255, 255, 255, 0.18) 0%, rgba(255, 255, 255, 0.05) 14%, transparent 36%),
-    radial-gradient(ellipse 78% 58% at 50% 16%, rgba(110, 190, 255, 0.22), transparent 58%),
-    linear-gradient(168deg, rgba(40, 72, 115, 0.48) 0%, rgba(10, 20, 45, 0.58) 100%);
-  border-color: rgba(165, 243, 252, 0.4);
-  box-shadow:
-    0 0 0 1px rgba(103, 232, 249, 0.12),
-    0 16px 44px -8px rgba(0, 0, 0, 0.55),
-    0 4px 16px -4px rgba(0, 0, 0, 0.45),
-    inset 0 2px 2px rgba(207, 250, 254, 0.38),
-    inset 2px 0 1px rgba(165, 243, 252, 0.28),
-    inset 0 -2px 2px rgba(0, 0, 0, 0.28),
-    inset -2px -1px 2px rgba(0, 0, 0, 0.22),
-    inset 0 0 26px rgba(56, 189, 248, 0.08);
-  backdrop-filter: blur(42px) saturate(1.55);
-  -webkit-backdrop-filter: blur(42px) saturate(1.55);
+  --bsd-card-bg: linear-gradient(180deg, #243650 0%, #152033 100%);
+  --bsd-card-border: rgba(148, 197, 220, 0.22);
 }
 
 body.theme-dark .bsd-root .widget:hover {
-  border-color: rgba(186, 230, 253, 0.52);
+  border-color: var(--bsd-card-border-hover);
 }
 
 /** Widget Texto: cabecera con barras de señal (el cristal es el mismo que el resto de `.widget`). */
@@ -1156,7 +1096,7 @@ body.theme-dark .bsd-root .widget:hover {
   align-items: flex-end;
   color: #ffffff;
   flex-shrink: 0;
-  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+  filter: none;
 }
 
 .bsd-root .widget-header {
@@ -1184,7 +1124,6 @@ body.theme-dark .bsd-root .widget:hover {
   gap: 10px;
   color: #ffffff;
   letter-spacing: 0.01em;
-  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
 }
 
 .bsd-root .budget-main {
@@ -2108,52 +2047,25 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
 
 .bsd-root .sensor-card {
   position: relative;
-  background:
-    linear-gradient(172deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.06) 14%, transparent 36%),
-    radial-gradient(ellipse 78% 58% at 50% 16%, rgba(130, 200, 255, 0.2), transparent 58%),
-    linear-gradient(168deg, rgba(48, 82, 125, 0.42) 0%, rgba(18, 32, 58, 0.55) 100%);
-  border-radius: clamp(12px, 1.8vmin, 16px);
+  background: var(--bsd-card-bg);
+  border-radius: var(--bsd-card-radius);
   padding: 18px;
   text-align: center;
-  transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
   cursor: pointer;
-  border: 1px solid rgba(165, 243, 252, 0.45);
-  backdrop-filter: blur(38px) saturate(1.52);
-  -webkit-backdrop-filter: blur(38px) saturate(1.52);
-  box-shadow:
-    0 0 0 1px rgba(103, 232, 249, 0.14),
-    0 14px 42px -8px rgba(0, 10, 32, 0.48),
-    0 4px 16px -4px rgba(0, 0, 0, 0.38),
-    inset 0 2px 2px rgba(207, 250, 254, 0.42),
-    inset 2px 0 1px rgba(165, 243, 252, 0.32),
-    inset 0 -2px 2px rgba(15, 23, 42, 0.38),
-    inset -2px -1px 2px rgba(15, 23, 42, 0.3),
-    inset 0 0 26px rgba(56, 189, 248, 0.07);
-  isolation: isolate;
+  border: 1px solid var(--bsd-card-border);
+  box-shadow: var(--bsd-card-shadow), var(--bsd-card-inset);
 }
 
 .bsd-root .sensor-card.bsd-widget-surface--clear {
   background: transparent;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
+  box-shadow: none;
 }
 
 .bsd-root .widget .sensor-card {
-  background:
-    linear-gradient(172deg, rgba(255, 255, 255, 0.17) 0%, rgba(255, 255, 255, 0.05) 14%, transparent 34%),
-    radial-gradient(ellipse 74% 54% at 50% 14%, rgba(115, 195, 255, 0.16), transparent 56%),
-    linear-gradient(168deg, rgba(42, 74, 118, 0.38) 0%, rgba(16, 28, 54, 0.5) 100%);
-  border-color: rgba(165, 243, 252, 0.38);
-  backdrop-filter: blur(34px) saturate(1.48);
-  -webkit-backdrop-filter: blur(34px) saturate(1.48);
-  box-shadow:
-    0 0 0 1px rgba(103, 232, 249, 0.1),
-    0 10px 32px -8px rgba(0, 8, 28, 0.4),
-    inset 0 2px 2px rgba(207, 250, 254, 0.34),
-    inset 2px 0 1px rgba(165, 243, 252, 0.26),
-    inset 0 -2px 2px rgba(15, 23, 42, 0.32),
-    inset -2px -1px 2px rgba(15, 23, 42, 0.24),
-    inset 0 0 22px rgba(56, 189, 248, 0.06);
+  background: linear-gradient(180deg, #314563 0%, #22344f 100%);
+  border-color: rgba(148, 197, 220, 0.22);
+  box-shadow: 0 4px 14px rgba(8, 16, 36, 0.16), var(--bsd-card-inset);
 }
 
 .bsd-root .widget .bsd-panel-device-label {
@@ -2430,65 +2342,26 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   cursor: pointer;
   font-family: inherit;
   color: rgba(255, 255, 255, 0.98);
-  background:
-    linear-gradient(172deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.06) 14%, transparent 36%),
-    radial-gradient(ellipse 78% 58% at 50% 16%, rgba(130, 200, 255, 0.2), transparent 58%),
-    linear-gradient(168deg, rgba(48, 82, 125, 0.42) 0%, rgba(18, 32, 58, 0.55) 100%);
-  border: 1px solid rgba(165, 243, 252, 0.45);
-  box-shadow:
-    0 0 0 1px rgba(103, 232, 249, 0.14),
-    0 14px 42px -8px rgba(0, 10, 32, 0.48),
-    0 4px 16px -4px rgba(0, 0, 0, 0.38),
-    inset 0 2px 2px rgba(207, 250, 254, 0.42),
-    inset 2px 0 1px rgba(165, 243, 252, 0.32),
-    inset 0 -2px 2px rgba(15, 23, 42, 0.38),
-    inset -2px -1px 2px rgba(15, 23, 42, 0.3),
-    inset 0 0 26px rgba(56, 189, 248, 0.07);
-  backdrop-filter: blur(38px) saturate(1.52);
-  -webkit-backdrop-filter: blur(38px) saturate(1.52);
+  background: var(--bsd-card-bg);
+  border: 1px solid var(--bsd-card-border);
+  box-shadow: var(--bsd-card-shadow), var(--bsd-card-inset);
   overflow: hidden;
   position: relative;
-  isolation: isolate;
-  transition:
-    transform 0.2s ease,
-    border-color 0.2s ease,
-    box-shadow 0.2s ease;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
 .bsd-root .bsd-widget-add-card::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background: linear-gradient(
-    108deg,
-    transparent 38%,
-    rgba(255, 255, 255, 0.06) 48%,
-    rgba(186, 230, 253, 0.1) 52%,
-    transparent 62%
-  );
-  opacity: 0;
-  transition: opacity 0.2s ease;
+  content: none;
 }
 
 .bsd-root .bsd-widget-add-card:hover {
-  transform: translateY(-2px);
-  border-color: rgba(186, 230, 253, 0.58);
-  box-shadow:
-    0 0 0 1px rgba(103, 232, 249, 0.22),
-    0 18px 48px -10px rgba(0, 12, 40, 0.52),
-    0 6px 20px -4px rgba(0, 0, 0, 0.42),
-    inset 0 2px 2px rgba(224, 242, 254, 0.48),
-    inset 2px 0 2px rgba(165, 243, 252, 0.38),
-    inset 0 -2px 2px rgba(15, 23, 42, 0.34),
-    inset -2px -1px 2px rgba(15, 23, 42, 0.26),
-    inset 0 0 30px rgba(56, 189, 248, 0.1);
+  border-color: var(--bsd-card-border-hover);
+  box-shadow: var(--bsd-card-shadow-hover), var(--bsd-card-inset);
 }
 
 .bsd-root .bsd-widget-add-card:hover::after {
-  opacity: 1;
-  animation: bsd-widget-card-shine 1.8s ease-in-out infinite;
+  content: none;
+  animation: none;
 }
 
 .bsd-root .bsd-widget-add-card:focus-visible {
@@ -2890,17 +2763,8 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
 }
 
 .bsd-root .sensor-card:hover {
-  transform: translateY(-2px);
-  border-color: rgba(186, 230, 253, 0.58);
-  box-shadow:
-    0 0 0 1px rgba(103, 232, 249, 0.22),
-    0 18px 48px -10px rgba(0, 12, 40, 0.52),
-    0 6px 20px -4px rgba(0, 0, 0, 0.42),
-    inset 0 2px 2px rgba(224, 242, 254, 0.48),
-    inset 2px 0 2px rgba(165, 243, 252, 0.38),
-    inset 0 -2px 2px rgba(15, 23, 42, 0.34),
-    inset -2px -1px 2px rgba(15, 23, 42, 0.26),
-    inset 0 0 30px rgba(56, 189, 248, 0.1);
+  border-color: var(--bsd-card-border-hover);
+  box-shadow: var(--bsd-card-shadow-hover), var(--bsd-card-inset);
 }
 
 .bsd-root .sensor-icon {
@@ -2973,8 +2837,7 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   border-radius: 16px;
   margin-bottom: 10px;
   cursor: pointer;
-  transition: all 0.3s ease;
-  backdrop-filter: blur(5px);
+  transition: background 0.15s ease, border-color 0.15s ease;
 }
 
 .bsd-root .alert-item:hover {
@@ -3093,17 +2956,20 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
 }
 
 .bsd-root .streaming-container {
-  background: linear-gradient(135deg, rgba(15, 15, 26, 0.9), rgba(20, 20, 35, 0.8));
-  border-radius: 24px;
+  background: #141c2c;
+  border-radius: 16px;
   padding: 24px;
-  border: 1px solid rgba(99, 102, 241, 0.3);
+  border: 1px solid rgba(148, 197, 220, 0.16);
   position: relative;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
-  isolation: isolate;
+}
+
+.bsd-root .streaming-container::before {
+  content: none;
 }
 
 .bsd-root .bsd-stream-chart-canvas-wrap {
@@ -3123,20 +2989,6 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   width: auto !important;
   height: 100% !important;
   max-width: none;
-}
-
-.bsd-root .streaming-container::before {
-  content: '';
-  position: absolute;
-  top: -50%;
-  left: -50%;
-  width: 200%;
-  height: 200%;
-  z-index: 0;
-  pointer-events: none;
-  background: radial-gradient(circle, var(--cyan-glow) 0%, transparent 70%);
-  animation: bsd-rotate 15s linear infinite;
-  opacity: 0.3;
 }
 
 .bsd-root .streaming-container--multi {
@@ -3261,8 +3113,7 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
 
 /* —— Control widgets (switch, downlink, emergencia, imagen) —— */
 .bsd-root .bsd-lucide-glow {
-  color: #a5b4fc;
-  filter: drop-shadow(0 0 8px rgba(99, 102, 241, 0.45));
+  color: #7dd3fc;
 }
 
 .bsd-root .bsd-panel-device-bar {
@@ -3454,9 +3305,8 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   width: min(100%, 260px);
   padding: clamp(6px, 1.2cqh, 10px) clamp(10px, 2.5cqw, 14px);
   border-radius: 12px;
-  background: rgba(15, 23, 42, 0.35);
+  background: rgba(15, 23, 42, 0.55);
   border: 1px solid rgba(148, 163, 184, 0.18);
-  backdrop-filter: blur(6px);
 }
 
 .bsd-root .bsd-switch-live--on,
@@ -4321,7 +4171,6 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   color: #e0e7ff;
   cursor: pointer;
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
-  backdrop-filter: blur(8px);
 }
 
 .bsd-root .bsd-map-layer-menu__trigger:hover:not(:disabled) {
@@ -4343,7 +4192,6 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   border: 1px solid rgba(99, 102, 241, 0.25);
   background: rgba(15, 15, 26, 0.94);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(10px);
 }
 
 .bsd-root .bsd-map-layer-menu__opt {
@@ -4553,9 +4401,9 @@ body.theme-dark .bsd-root .bsd-tracking-map-popup__street {
   }
 }
 
-/* Light theme: lienzo azul-gris suave (#D8E0E8 → #CBD4DD), semitransparente + desenfoque */
+/* Tema claro: lienzo pizarra suave, sin desenfoque */
 body:not(.theme-dark) .bsd-root {
-  --bg-dark: #d8e0e8;
+  --bg-dark: #e8eef4;
   --bg-card: #ffffff;
   --bg-card-hover: #f8fafc;
   --border-glow: rgba(99, 102, 241, 0.18);
@@ -4563,23 +4411,12 @@ body:not(.theme-dark) .bsd-root {
   --text-secondary: #64748b;
   --text-muted: #94a3b8;
   --primary-glow: rgba(99, 102, 241, 0.22);
-  /* Widgets: cristal azul más claro que el lienzo, con alpha suficiente para texto blanco */
-  --bsd-widget-glass-top: rgba(56, 189, 248, 0.42);
-  --bsd-widget-glass-mid: rgba(14, 165, 233, 0.48);
-  --bsd-widget-glass-bot: rgba(8, 145, 178, 0.52);
-  background-color: rgba(216, 224, 232, 0.42);
-  background-image: linear-gradient(
-    135deg,
-    rgba(216, 224, 232, 0.78) 0%,
-    rgba(210, 218, 228, 0.62) 48%,
-    rgba(203, 212, 221, 0.76) 100%
-  );
+  --bsd-widget-glass-top: #2b3d5c;
+  --bsd-widget-glass-mid: #22344f;
+  --bsd-widget-glass-bot: #1a2a42;
+  background-color: #e4ebf2;
+  background-image: linear-gradient(180deg, #edf2f7 0%, #e2eaf1 100%);
   background-attachment: scroll;
-  backdrop-filter: blur(22px) saturate(1.02);
-  -webkit-backdrop-filter: blur(22px) saturate(1.02);
-  box-shadow:
-    inset 0 0 90px rgba(255, 255, 255, 0.22),
-    inset 0 0 48px rgba(180, 192, 208, 0.12);
   color: var(--text-primary);
 }
 
@@ -4591,31 +4428,17 @@ body:not(.theme-dark) .bsd-root.bsd-root--embedded {
 }
 
 body:not(.theme-dark) .bsd-root::before {
-  background:
-    radial-gradient(circle at 18% 14%, rgba(255, 255, 255, 0.38) 0%, transparent 38%),
-    radial-gradient(circle at 88% 78%, rgba(255, 255, 255, 0.22) 0%, transparent 42%),
-    radial-gradient(circle at 50% 50%, rgba(190, 200, 214, 0.12) 0%, transparent 62%);
-  opacity: 1;
+  content: none;
 }
 
 body:not(.theme-dark) .bsd-root .dashboard-header {
-  background: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.86) 0%,
-    rgba(248, 250, 252, 0.62) 48%,
-    rgba(255, 255, 255, 0.78) 100%
-  );
-  backdrop-filter: blur(18px);
-  -webkit-backdrop-filter: blur(18px);
-  border: 1px solid rgba(255, 255, 255, 0.72);
-  box-shadow:
-    0 10px 36px -10px rgba(15, 23, 42, 0.14),
-    0 2px 10px rgba(99, 102, 241, 0.1),
-    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  background: #f7f9fc;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  box-shadow: 0 8px 22px rgba(15, 23, 42, 0.08);
 }
 
 body:not(.theme-dark) .bsd-root .dashboard-header::before {
-  opacity: 0.25;
+  content: none;
 }
 
 body:not(.theme-dark) .bsd-root .title h1 {
@@ -4690,44 +4513,18 @@ body:not(.theme-dark) .bsd-root .bsd-widget-menu-bulk {
   color: #334155;
 }
 
-/* Tema claro: mismo cristal cian que en tema oscuro (sombras externas más suaves) */
+/* Tema claro: mismos paneles mate (el texto del widget sigue en blanco) */
 body:not(.theme-dark) .bsd-root .widget {
-  background:
-    linear-gradient(172deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.06) 14%, transparent 36%),
-    radial-gradient(ellipse 78% 58% at 50% 16%, rgba(130, 200, 255, 0.2), transparent 58%),
-    linear-gradient(168deg, rgba(48, 82, 125, 0.42) 0%, rgba(18, 32, 58, 0.55) 100%);
-  border-color: rgba(165, 243, 252, 0.45);
   color: #ffffff;
-  backdrop-filter: blur(36px) saturate(1.45);
-  -webkit-backdrop-filter: blur(36px) saturate(1.45);
-  box-shadow:
-    0 0 0 1px rgba(103, 232, 249, 0.14),
-    0 12px 36px -8px rgba(8, 24, 56, 0.32),
-    0 4px 14px -4px rgba(8, 32, 62, 0.24),
-    inset 0 2px 2px rgba(207, 250, 254, 0.42),
-    inset 2px 0 1px rgba(165, 243, 252, 0.32),
-    inset 0 -2px 2px rgba(12, 36, 72, 0.2),
-    inset -2px -1px 2px rgba(12, 36, 72, 0.16),
-    inset 0 0 26px rgba(120, 185, 230, 0.06);
 }
 
 body:not(.theme-dark) .bsd-root .widget.bsd-widget-surface--clear {
-  box-shadow:
-    0 12px 34px -12px rgba(15, 23, 42, 0.16),
-    inset 0 1px 0 rgba(255, 255, 255, 0.48);
+  box-shadow: inset 0 0 0 1px rgba(148, 197, 220, 0.35);
 }
 
 body:not(.theme-dark) .bsd-root .widget:hover {
-  transform: translateY(-3px);
-  border-color: rgba(186, 230, 253, 0.55);
-  box-shadow:
-    0 0 0 1px rgba(103, 232, 249, 0.2),
-    0 16px 44px -8px rgba(8, 28, 58, 0.38),
-    inset 0 2px 2px rgba(224, 242, 254, 0.48),
-    inset 2px 0 2px rgba(165, 243, 252, 0.36),
-    inset 0 -2px 2px rgba(12, 40, 72, 0.18),
-    inset -2px -1px 2px rgba(12, 40, 72, 0.12),
-    inset 0 0 30px rgba(140, 200, 255, 0.08);
+  border-color: var(--bsd-card-border-hover);
+  box-shadow: var(--bsd-card-shadow-hover), var(--bsd-card-inset);
 }
 
 body:not(.theme-dark) .bsd-root .widget-header {
@@ -4740,40 +4537,16 @@ body:not(.theme-dark) .bsd-root .widget-title {
 }
 
 body:not(.theme-dark) .bsd-root .sensor-card {
-  background:
-    linear-gradient(172deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.06) 14%, transparent 36%),
-    radial-gradient(ellipse 78% 58% at 50% 16%, rgba(130, 200, 255, 0.2), transparent 58%),
-    linear-gradient(168deg, rgba(48, 82, 125, 0.42) 0%, rgba(18, 32, 58, 0.55) 100%);
-  border-color: rgba(165, 243, 252, 0.45);
-  backdrop-filter: blur(38px) saturate(1.52);
-  -webkit-backdrop-filter: blur(38px) saturate(1.52);
-  box-shadow:
-    0 0 0 1px rgba(103, 232, 249, 0.14),
-    0 12px 36px -8px rgba(8, 24, 56, 0.3),
-    0 4px 14px -4px rgba(8, 32, 62, 0.22),
-    inset 0 2px 2px rgba(207, 250, 254, 0.42),
-    inset 2px 0 1px rgba(165, 243, 252, 0.32),
-    inset 0 -2px 2px rgba(12, 36, 72, 0.2),
-    inset -2px -1px 2px rgba(12, 36, 72, 0.16),
-    inset 0 0 26px rgba(120, 185, 230, 0.06);
+  border-color: var(--bsd-card-border);
 }
 
 body:not(.theme-dark) .bsd-root .sensor-card.bsd-widget-surface--clear {
   background: transparent;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }
 
 body:not(.theme-dark) .bsd-root .sensor-card:hover {
-  border-color: rgba(186, 230, 253, 0.55);
-  box-shadow:
-    0 0 0 1px rgba(103, 232, 249, 0.2),
-    0 16px 44px -8px rgba(8, 28, 58, 0.36),
-    inset 0 2px 2px rgba(224, 242, 254, 0.48),
-    inset 2px 0 2px rgba(165, 243, 252, 0.36),
-    inset 0 -2px 2px rgba(12, 40, 72, 0.18),
-    inset -2px -1px 2px rgba(12, 40, 72, 0.12),
-    inset 0 0 30px rgba(140, 200, 255, 0.08);
+  border-color: var(--bsd-card-border-hover);
+  box-shadow: var(--bsd-card-shadow-hover), var(--bsd-card-inset);
 }
 
 body:not(.theme-dark) .bsd-root .sensor-card .semicircle-gauge__value {
@@ -4844,22 +4617,6 @@ body:not(.theme-dark) .bsd-root .bsd-widget-menu-gallery-search {
 }
 
 body:not(.theme-dark) .bsd-root .bsd-widget-add-card {
-  background:
-    linear-gradient(172deg, rgba(255, 255, 255, 0.2) 0%, rgba(255, 255, 255, 0.06) 14%, transparent 36%),
-    radial-gradient(ellipse 78% 58% at 50% 16%, rgba(130, 200, 255, 0.2), transparent 58%),
-    linear-gradient(168deg, rgba(48, 82, 125, 0.42) 0%, rgba(18, 32, 58, 0.55) 100%);
-  border-color: rgba(165, 243, 252, 0.45);
-  backdrop-filter: blur(36px) saturate(1.45);
-  -webkit-backdrop-filter: blur(36px) saturate(1.45);
-  box-shadow:
-    0 0 0 1px rgba(103, 232, 249, 0.14),
-    0 12px 36px -8px rgba(8, 24, 56, 0.32),
-    0 4px 14px -4px rgba(8, 32, 62, 0.24),
-    inset 0 2px 2px rgba(207, 250, 254, 0.42),
-    inset 2px 0 1px rgba(165, 243, 252, 0.32),
-    inset 0 -2px 2px rgba(12, 36, 72, 0.2),
-    inset -2px -1px 2px rgba(12, 36, 72, 0.16),
-    inset 0 0 26px rgba(120, 185, 230, 0.06);
   color: rgba(255, 255, 255, 0.98);
 }
 
@@ -5047,9 +4804,7 @@ body:not(.theme-dark) .bsd-root .bsd-map-iframe {
   justify-content: center;
   padding: clamp(12px, 4vh, 40px) clamp(12px, 3vw, 28px);
   overflow-y: auto;
-  background: rgba(15, 15, 26, 0.72);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: rgba(15, 15, 26, 0.78);
 }
 
 .bsd-widget-gallery-modal {
@@ -5062,14 +4817,10 @@ body:not(.theme-dark) .bsd-root .bsd-map-iframe {
   padding: clamp(18px, 2.5vw, 26px) clamp(20px, 2.5vw, 28px) clamp(20px, 2.5vw, 28px);
   font-family: 'Inter', system-ui, sans-serif;
   color: #f4f4f5;
-  background: rgba(20, 20, 35, 0.92);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  background: #161625;
   border: 1px solid rgba(99, 102, 241, 0.28);
-  border-radius: 28px;
-  box-shadow:
-    0 24px 64px rgba(0, 0, 0, 0.55),
-    0 0 40px rgba(99, 102, 241, 0.12);
+  border-radius: 22px;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.45);
 }
 
 .bsd-widget-gallery-header {
@@ -5304,24 +5055,14 @@ body:not(.theme-dark) .bsd-root .bsd-map-iframe {
 
 /* Tema claro BSD (portal en body): cristal como dashboard-header */
 body:not(.theme-dark) .bsd-widget-gallery-overlay {
-  background: rgba(15, 23, 42, 0.28);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  background: rgba(15, 23, 42, 0.4);
 }
 
 body:not(.theme-dark) .bsd-widget-gallery-modal {
   color: #0f172a;
-  background: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.9) 0%,
-    rgba(248, 250, 252, 0.72) 48%,
-    rgba(255, 255, 255, 0.84) 100%
-  );
-  border: 1px solid rgba(255, 255, 255, 0.72);
-  box-shadow:
-    0 24px 56px -16px rgba(15, 23, 42, 0.18),
-    0 2px 12px rgba(99, 102, 241, 0.12),
-    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  background: #f7f9fc;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  box-shadow: 0 24px 48px rgba(15, 23, 42, 0.14);
 }
 
 body:not(.theme-dark) .bsd-widget-gallery-header {

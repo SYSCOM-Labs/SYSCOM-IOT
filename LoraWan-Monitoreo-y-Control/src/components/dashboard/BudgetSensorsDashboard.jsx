@@ -152,17 +152,16 @@ import {
 import BsdContainerTankView from './BsdContainerTankView';
 import BsdBatteryLevelView from './BsdBatteryLevelView';
 import {
-  applyBsdDragChainPushLayout,
   buildDefaultBsdGridLayout,
   compactBsdGridLayoutTopLeft,
   clampLayoutItemsToModerateMins,
   computeBsdDashboardNormalizedLayout,
+  commitBsdUserGridLayout,
   buildModerateBsdGridTemplateForWidget,
   dashboardGridLayoutStorageKey,
   layoutsEqualStable,
   mergeStoredBsdGridLayout,
   normalizeLayoutForPersistence,
-  normalizeLayoutSignature,
   readStoredBsdGridLayout,
   filterLayoutToAllowedDashboardItems,
   filterLayoutToVisibleDashboardItems,
@@ -2958,13 +2957,15 @@ export default function BudgetSensorsDashboard({
   /** Fuerza remontaje de RGL cuando se repara un layout con solapes en disco/estado. */
   const [gridLayoutRepairEpoch, setGridLayoutRepairEpoch] = useState(0);
 
-  /** Modo lectura: celdas estáticas + sin solapamiento (RGL no reubica al redimensionar). */
+  /**
+   * Posiciones visibles para RGL. No marcar `static: true` al pulsar «Listo»:
+   * react-grid-layout `correctBounds` empuja celdas estáticas que se tocan hacia abajo
+   * (los 3 KPIs acababan bajo el gráfico lineal). `isDraggable`/`isResizable` ya bloquean el gesto.
+   */
   const gridLayoutForRgl = useMemo(() => {
-    let visible = filterLayoutToVisibleDashboardItems(resolvedGridLayout, visibilityMap);
-    visible = ensureBsdGridLayoutGeometry(visible);
-    if (!dashboardLayoutLocked) return visible;
-    return visible.map((it) => ({ ...it, static: true }));
-  }, [resolvedGridLayout, dashboardLayoutLocked, visibilityMap]);
+    const visible = filterLayoutToVisibleDashboardItems(resolvedGridLayout, visibilityMap);
+    return ensureBsdGridLayoutGeometry(visible);
+  }, [resolvedGridLayout, visibilityMap]);
 
   const rglLayoutIdSet = useMemo(
     () => new Set(gridLayoutForRgl.map((it) => String(it.i))),
@@ -2976,20 +2977,16 @@ export default function BudgetSensorsDashboard({
     () => new Map(gridLayoutForRgl.map((it) => [String(it.i), it])),
     [gridLayoutForRgl]
   );
-  const gridLayoutSignature = useMemo(
-    () => normalizeLayoutSignature(gridLayoutForRgl),
-    [gridLayoutForRgl]
-  );
   /** Evita mezclar posiciones del panel/dispositivo anterior al cambiar `dashboardGridLayoutKey`. */
   const prevDashboardGridLayoutKeyRef = useRef(dashboardGridLayoutKey);
-  /** Layout al inicio de un drag (intercambio pairwise con el solape al soltar). */
-  const gridDragSnapshotRef = useRef(null);
-  /** RGL emite `onLayoutChange` justo después de `onDragStop` con el layout sin intercambio; ignorar una vez. */
+  /** RGL emite `onLayoutChange` justo después de `onDragStop`; ignorar para no pisar el persistido. */
   const ignoreNextGridLayoutChangeFromDragRef = useRef(false);
-  /** Durante el arrastre no compactamos en `onLayoutChange` (RGL emite muchas veces; el reempaque al soltar lo hace `persistDashboardGridLayoutNow`). */
+  /** Durante el arrastre no compactamos en `onLayoutChange` (RGL emite muchas veces; el persist al soltar lo hace `persistDashboardGridLayoutNow`). */
   const gridRglDraggingRef = useRef(false);
-  /** Durante el resize de una celda: igual que drag, no adoptar `onLayoutChange` «fantasma» cuando es false. */
+  /** Durante el resize de una celda: igual que drag, no adoptar `onLayoutChange` «fantasma». */
   const gridRglResizingRef = useRef(false);
+  /** Clase CSS para desactivar blur/sombras mientras se arrastra (el cristal es caro de pintar). */
+  const [gridLayoutInteracting, setGridLayoutInteracting] = useState(false);
 
   const innerRef = useRef(null);
   const gridWidthMeasureRef = useRef(null);
@@ -3145,89 +3142,70 @@ export default function BudgetSensorsDashboard({
     persistBsdGridLayoutDisk(resolved);
   }, [variant, panelDeviceCount, dashboardGridLayoutKey, persistBsdGridLayoutDisk]);
 
-  /** Solo adoptar posiciones que entrega RGL mientras el usuario arrastra o redimensiona; si no, RGL+merge pueden mover celdas solas (p. ej. Switch, gráficos). */
+  /** Solo adoptar posiciones de RGL al soltar (drag/resize). Durante el gesto no hay setState: evita lag y reempaque. */
   const handleGridLayoutChange = useCallback(
-    (next) => {
+    (_next) => {
       if (dashboardLayoutLocked) return;
       if (ignoreNextGridLayoutChangeFromDragRef.current) {
         ignoreNextGridLayoutChangeFromDragRef.current = false;
-        return;
       }
-      if (!gridRglDraggingRef.current && !gridRglResizingRef.current) {
-        return;
-      }
-      const normalized = computeBsdDashboardNormalizedLayout(
-        next,
-        gridLayoutLatestRef.current,
-        variant,
-        (panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0,
-        visibilityMapRef.current
-      );
-      if (!normalized) return;
-      const out = normalized;
-      if (layoutsEqualStable(gridLayoutLatestRef.current, out)) return;
-      gridLayoutLatestRef.current = out;
-      setGridLayout(out);
     },
-    [dashboardLayoutLocked, variant]
+    [dashboardLayoutLocked]
   );
 
-  /** Escribe en localStorage el layout ya normalizado (misma geometría que RGL). */
-  /** @param {{ compact?: boolean }} [opts] Si `compact: true`, reempaqueta arriba-izquierda (solo cuando se pida explícitamente). */
+  /** Escribe en localStorage el layout ya normalizado (misma geometría que RGL), sin reempaquetar filas. */
+  /** @param {{ compact?: boolean }} [opts] Si `compact: true`, reempaqueta arriba-izquierda (solo si se pide explícitamente). */
   const persistDashboardGridLayoutNow = useCallback(
     (layout, opts) => {
-      const normalized = computeBsdDashboardNormalizedLayout(
+      const committed = commitBsdUserGridLayout(
         layout,
         gridLayoutLatestRef.current,
-        variant,
-        (panelDevicesRef.current?.length ?? 0) > 0 ? 1 : 0,
         visibilityMapRef.current
       );
-      if (!normalized) return;
+      if (!committed.length && !(Array.isArray(layout) && layout.length)) return;
       const shouldPack = opts?.compact === true;
-      const visibleNorm = filterLayoutToVisibleDashboardItems(normalized, visibilityMapRef.current);
       const packed = shouldPack
-        ? compactBsdGridLayoutTopLeft(visibleNorm)
-        : resolveBsdDashboardGridLayout(normalized, visibilityMapRef.current);
+        ? compactBsdGridLayoutTopLeft(filterLayoutToVisibleDashboardItems(committed, visibilityMapRef.current))
+        : committed;
       if (layoutsEqualStable(gridLayoutLatestRef.current, packed)) return;
       gridLayoutLatestRef.current = packed;
       setGridLayout(packed);
       persistBsdGridLayoutDisk(packed);
     },
-    [dashboardGridLayoutKey, persistBsdGridLayoutDisk, variant]
+    [dashboardGridLayoutKey, persistBsdGridLayoutDisk]
   );
 
   const handleGridDragStart = useCallback(() => {
     gridRglDraggingRef.current = true;
-    gridDragSnapshotRef.current = normalizeLayoutForPersistence(gridLayoutLatestRef.current);
+    setGridLayoutInteracting(true);
   }, []);
 
   const handleGridResizeStart = useCallback(() => {
     gridRglResizingRef.current = true;
+    setGridLayoutInteracting(true);
   }, []);
 
   const handleGridResizeStop = useCallback(
     (layout) => {
-      gridRglResizingRef.current = false;
-      persistDashboardGridLayoutNow(layout, { compact: false });
+      try {
+        ignoreNextGridLayoutChangeFromDragRef.current = true;
+        persistDashboardGridLayoutNow(layout, { compact: false });
+      } finally {
+        gridRglResizingRef.current = false;
+        setGridLayoutInteracting(false);
+      }
     },
     [persistDashboardGridLayoutNow]
   );
 
   const handleGridDragStop = useCallback(
-    (layout, oldItem, newItem) => {
+    (layout) => {
       try {
-        const snap = gridDragSnapshotRef.current;
-        gridDragSnapshotRef.current = null;
-        const resolved = applyBsdDragChainPushLayout(snap, oldItem, newItem, layout);
-        if (resolved) {
-          ignoreNextGridLayoutChangeFromDragRef.current = true;
-          persistDashboardGridLayoutNow(resolved, { compact: false });
-        } else {
-          persistDashboardGridLayoutNow(layout, { compact: false });
-        }
+        ignoreNextGridLayoutChangeFromDragRef.current = true;
+        persistDashboardGridLayoutNow(layout, { compact: false });
       } finally {
         gridRglDraggingRef.current = false;
+        setGridLayoutInteracting(false);
       }
     },
     [persistDashboardGridLayoutNow]
@@ -7340,10 +7318,13 @@ export default function BudgetSensorsDashboard({
            * de historial no se repetía → gráfico vacío en modo lectura.
            */
           return (
-            /** `gridLayoutRepairEpoch`: remonta RGL solo tras reparar solapes (no en cada toggle de visibilidad). */
+            /**
+             * Sin firma de layout en `key`: remontar RGL en cada drag/persist destruía el gesto
+             * (widgets a 1 celda, lag) y al pulsar «Listo» recompactaba el tablero.
+             */
             <GridLayout
-              key={`bsd-dash-${dashboardGridLayoutKey}-r${gridLayoutRepairEpoch}-s${gridLayoutSignature}`}
-              className="bsd-dash-grid-layout"
+              key={`bsd-dash-${dashboardGridLayoutKey}-r${gridLayoutRepairEpoch}`}
+              className={`bsd-dash-grid-layout${gridLayoutInteracting ? ' bsd-dash-grid-layout--dragging' : ''}`}
               width={gridWidth}
               layout={gridLayoutForRgl}
               cols={12}

@@ -1117,7 +1117,7 @@ export function appearanceWithConditionalBackground(appearance, actualRaw, alter
   return { ...appearance, widgetBackgroundColor: bg };
 }
 
-/** Fondo del tablero BSD sin tinte (solo vidrio / borde). */
+/** Fondo del tablero BSD sin tinte (solo borde). */
 export function isWidgetBackgroundTransparent(appearance) {
   const raw = String(appearance?.widgetBackgroundColor ?? '').trim().toLowerCase();
   return raw === 'transparent' || raw === 'none' || raw === 'sin' || raw === 'sin fondo';
@@ -1125,7 +1125,7 @@ export function isWidgetBackgroundTransparent(appearance) {
 
 /**
  * Estilos inline para la tarjeta `.widget` (o tarjeta de sensor) según apariencia guardada.
- * `null` = usar gradiente cristal por defecto del CSS.
+ * `null` = usar el mate por defecto del CSS (sin blur).
  * @param {Record<string, unknown> | null | undefined} appearance
  */
 export function buildBsdWidgetSurfaceStyle(appearance) {
@@ -1136,12 +1136,10 @@ export function buildBsdWidgetSurfaceStyle(appearance) {
     return {
       background: 'transparent',
       backgroundImage: 'none',
-      /* Sin backdrop-filter: el blur mezcla la capa decorativa cyan de .bsd-root y genera manchas. */
       backdropFilter: 'none',
       WebkitBackdropFilter: 'none',
-      boxShadow:
-        '0 12px 36px rgba(8, 47, 73, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.28)',
-      borderColor: 'rgba(186, 230, 253, 0.42)',
+      boxShadow: 'inset 0 0 0 1px rgba(148, 197, 220, 0.35)',
+      borderColor: 'rgba(148, 197, 220, 0.35)',
     };
   }
   const hex = parseCssHex(raw);
@@ -1150,17 +1148,14 @@ export function buildBsdWidgetSurfaceStyle(appearance) {
   const r = parseInt(n.slice(0, 2), 16);
   const g = parseInt(n.slice(2, 4), 16);
   const b = parseInt(n.slice(4, 6), 16);
-  const top = `rgba(${r},${g},${b},0.52)`;
-  const mid = `rgba(${r},${g},${b},0.6)`;
-  const bot = `rgba(${r},${g},${b},0.48)`;
+  const top = `rgb(${Math.min(255, r + 18)},${Math.min(255, g + 14)},${Math.min(255, b + 10)})`;
+  const bot = `rgb(${r},${g},${b})`;
   return {
-    background: `linear-gradient(165deg, ${top} 0%, ${mid} 45%, ${bot} 100%)`,
-    borderColor: 'rgba(255, 255, 255, 0.4)',
-    /* Sin blur: el vidrio del CSS mezcla el cian del tablero y el color elegido no se ve fiel. */
+    background: `linear-gradient(180deg, ${top} 0%, ${bot} 100%)`,
+    borderColor: 'rgba(255, 255, 255, 0.22)',
     backdropFilter: 'none',
     WebkitBackdropFilter: 'none',
-    boxShadow:
-      '0 20px 48px -16px rgba(8, 47, 73, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.45), inset 0 -1px 0 rgba(12, 74, 110, 0.18)',
+    boxShadow: '0 8px 22px rgba(8, 16, 36, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.14)',
   };
 }
 

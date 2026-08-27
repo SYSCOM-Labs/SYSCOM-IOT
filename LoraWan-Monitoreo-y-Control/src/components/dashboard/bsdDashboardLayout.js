@@ -820,9 +820,11 @@ export function resolveBsdDashboardGridLayout(layout, visibilityMap) {
       resolvedVisible = repairBsdGridLayoutOverlapsOnly(resolvedVisible);
     }
   }
-  if (bsdDashboardLayoutHasOverlap(resolvedVisible)) {
-    resolvedVisible = compactBsdGridLayoutTopLeft(resolvedVisible);
-  }
+  /**
+   * No usar `compactBsdGridLayoutTopLeft` aquí: reubica todas las celdas en orden de id/lectura y
+   * empuja KPIs debajo del gráfico (p. ej. 3 textos a la izquierda + lineal a la derecha → al pulsar
+   * «Listo» quedaban debajo). Solo se repara quien realmente se solapa.
+   */
   return normalizeLayoutForPersistence([...hidden, ...resolvedVisible]);
 }
 
@@ -1047,4 +1049,27 @@ export function computeBsdDashboardNormalizedLayout(next, prev, variant, panelDe
     normalizeLayoutForPersistence(clampLayoutItemsToModerateMins(filtered)),
     visibilityMap
   );
+}
+
+/**
+ * Persiste el layout que el usuario ve (arrastre / «Listo») sin reempaquetar el tablero.
+ * Conserva huecos y filas mixtas (p. ej. 3 tarjetas + gráfico lineal). Solo repara solapes reales.
+ *
+ * @param {BsdGridItem[] | null | undefined} next
+ * @param {BsdGridItem[] | null | undefined} prev
+ * @param {Record<string, unknown>} visibilityMap
+ * @returns {BsdGridItem[]}
+ */
+export function commitBsdUserGridLayout(next, prev, visibilityMap) {
+  const prevNorm = normalizeLayoutForPersistence(prev || []);
+  const nextNorm = normalizeLayoutForPersistence(
+    (next || []).filter((it) => it && it.i != null && isKnownDashboardGridId(String(it.i)))
+  );
+  const prevMap = new Map(prevNorm.map((it) => [String(it.i), it]));
+  const nextIds = new Set(nextNorm.map((it) => String(it.i)));
+  const merged = [...nextNorm];
+  for (const [id, item] of prevMap) {
+    if (!nextIds.has(id)) merged.push(item);
+  }
+  return resolveBsdDashboardGridLayout(merged, visibilityMap);
 }

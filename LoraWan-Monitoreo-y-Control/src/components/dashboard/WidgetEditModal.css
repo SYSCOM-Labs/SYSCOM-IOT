@@ -1,11 +1,10 @@
-/* Modal de edición — mismo lenguaje visual que BudgetSensorsDashboard (oscuro / vidrio) */
+/* Modal de edición — mismo lenguaje mate 2026 que el tablero BSD */
 
 .widget-edit-overlay {
   position: fixed;
   inset: 0;
   z-index: 10050;
   background: rgba(15, 15, 26, 0.72);
-  backdrop-filter: blur(12px);
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -30,13 +29,10 @@
   overflow: hidden;
   font-family: 'Inter', system-ui, sans-serif;
   color: #f4f4f5;
-  background: rgba(20, 20, 35, 0.92);
-  backdrop-filter: blur(20px);
+  background: #161625;
   border: 1px solid rgba(99, 102, 241, 0.28);
-  border-radius: 28px;
-  box-shadow:
-    0 24px 64px rgba(0, 0, 0, 0.55),
-    0 0 40px rgba(99, 102, 241, 0.12);
+  border-radius: 22px;
+  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.45);
 }
 
 @media (min-width: 900px) {
