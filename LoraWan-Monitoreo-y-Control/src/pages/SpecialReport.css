@@ -2,6 +2,9 @@
   padding: 30px;
   max-width: 1400px;
   margin: 0 auto;
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .report-container {
@@ -9,6 +12,8 @@
   grid-template-columns: 1fr 1fr;
   gap: 30px;
   margin-top: 24px;
+  min-width: 0;
+  width: 100%;
 }
 
 .section-title {
@@ -89,6 +94,7 @@
 
 .operand-row select {
   flex: 1;
+  min-width: 0;
   padding: 10px;
   border: 1px solid var(--border-color);
   border-radius: 6px;
@@ -98,6 +104,8 @@
 
 .btn-add-op {
   width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
   padding: 12px;
   border: 1px dashed var(--border-color);
   background: transparent;
@@ -129,11 +137,17 @@
   color: var(--text-secondary);
   font-weight: 400;
   text-transform: none;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.operator-hint code {
+  white-space: normal;
 }
 
 .operator-btns {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -252,12 +266,132 @@
   .special-report-page {
     padding: 0;
     max-width: none;
+    overflow-x: hidden;
+  }
+
+  .special-report-page .card:hover {
+    transform: none;
+  }
+
+  .report-container {
+    gap: 14px;
+    margin-top: 8px;
+  }
+
+  .special-report-page .config-section.glass.card,
+  .special-report-page .result-section.glass.card {
+    padding: 14px 12px 18px;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+  }
+
+  .section-title {
+    margin-bottom: 14px;
+    gap: 8px;
+  }
+
+  .section-title h3 {
+    font-size: 0.95rem;
+    letter-spacing: 0.03em;
+    overflow-wrap: anywhere;
   }
 
   .date-range-picker {
     flex-direction: column;
     padding: 12px;
     gap: 10px;
+    min-width: 0;
+  }
+
+  .date-input,
+  .date-input input[type='datetime-local'] {
+    width: 100%;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+
+  .operands-list,
+  .operator-selection {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .operand-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px 10px;
+    padding: 10px;
+    min-width: 0;
+  }
+
+  .operand-row .op-index {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .operand-row select:first-of-type {
+    grid-column: 2;
+    grid-row: 1;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .operand-row .btn-icon {
+    grid-column: 3;
+    grid-row: 1;
+  }
+
+  .operand-row select:last-of-type {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    min-width: 0;
+    width: 100%;
+  }
+
+  .btn-add-op {
+    white-space: normal;
+    text-align: center;
+    line-height: 1.3;
+    padding: 12px 10px;
+  }
+
+  .operator-btns {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .op-btn {
+    min-height: 44px;
+    padding: 10px 8px;
+    white-space: normal;
+    line-height: 1.2;
+  }
+
+  .result-display {
+    padding: 0;
+  }
+
+  .result-header {
+    flex-direction: column;
+    align-items: stretch;
+    padding: 16px;
+    gap: 12px;
+  }
+
+  .final-value .value {
+    font-size: 1.75rem;
+    overflow-wrap: anywhere;
+  }
+
+  .export-actions {
+    flex-direction: row;
+  }
+
+  .export-actions .btn {
+    flex: 1 1 auto;
+    justify-content: center;
   }
 
   .result-table-wrapper {
@@ -269,6 +403,23 @@
   .result-table {
     min-width: 0;
     width: 100%;
+  }
+
+  .result-table th,
+  .result-table td {
+    padding: 10px 8px;
+    overflow-wrap: anywhere;
+  }
+
+  .empty-result {
+    height: auto;
+    min-height: 160px;
+    padding: 28px 12px;
+  }
+
+  .report-chart-container,
+  .conclusion-box {
+    padding: 14px 12px;
   }
 }
 

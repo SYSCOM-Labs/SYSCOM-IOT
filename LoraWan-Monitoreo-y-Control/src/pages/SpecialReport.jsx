@@ -390,7 +390,7 @@ const SpecialReport = () => {
                   className={`op-btn ${operator === op ? 'active' : ''}`}
                   onClick={() => setOperator(op)}
                 >
-                  {op === '+' ? 'Suma' : op === '-' ? 'Resta' : op === '*' ? 'Mult.' : 'Div.'}
+                  {op === '+' ? 'Suma' : op === '-' ? 'Resta' : op === '*' ? 'Multiplicación' : 'División'}
                 </button>
               ))}
             </div>
