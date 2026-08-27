@@ -54,10 +54,11 @@ export default function FirstPasswordChange() {
           <div className="role-pill admin">
             <Lock size={14} /> Primer acceso
           </div>
-          <h2>Defina su contraseña</h2>
+          <h2>Ya entró. Ahora defina su contraseña</h2>
           <p>
-            Con la cuenta <strong>{user?.email}</strong> debe establecer una contraseña personal que cumpla la política de
-            seguridad antes de usar la plataforma. La clave provisional (por ejemplo 123456) ya no es válida en esta pantalla.
+            La clave temporal de <strong>{user?.email}</strong> funcionó. Antes de usar la plataforma hay que crear una
+            contraseña personal. <strong>123456 ya no sirve aquí</strong>: hace falta mayúscula, minúscula y un símbolo
+            (por ejemplo <code>Syscom!2026</code>).
           </p>
           <p className="first-pw-policy-hint">{PASSWORD_POLICY_HINT}</p>
         </div>

@@ -242,14 +242,16 @@ const Login = () => {
         setError('No hay una cuenta registrada con ese correo. Verifica el texto o solicita acceso a un administrador.');
         return;
       }
-      await loginWithEmail(norm, password);
+      await loginWithEmail(norm, String(password).trim());
     } catch (err) {
       if (err.code === 'auth/is-admin') {
         setError(
           'Esta cuenta de super administrador no puede usar el acceso restringido. Use el inicio de sesión principal.'
         );
       } else if (err.message?.includes('incorrectos')) {
-        setError('Correo o contraseña incorrectos.');
+        setError(
+          'Esa cuenta existe, pero la contraseña no coincide. Un administrador debe restablecerla en Usuarios (clave temporal, por ejemplo 123456).'
+        );
       } else {
         setError(err.message || 'Error al iniciar sesión.');
       }

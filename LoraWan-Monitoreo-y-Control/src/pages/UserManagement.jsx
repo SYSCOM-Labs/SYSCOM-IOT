@@ -461,6 +461,23 @@ const UserManagement = ({ onAfterEnterSupport }) => {
     }
   };
 
+  const applyProvisional123456 = async () => {
+    if (!activeUser || String(activeUser.id) === String(user?.id)) return;
+    setSaving(true);
+    try {
+      await updateUser(activeUser.id, { password: '123456' });
+      showToast(
+        'success',
+        'Clave temporal 123456 aplicada. Esa cuenta ya puede entrar y deberá definir una contraseña segura.'
+      );
+      closeModal();
+    } catch (e) {
+      showToast('error', 'Error: ' + e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleDelete = async (uid, email) => {
     if (!window.confirm(`¿Eliminar al usuario "${email}"? Esta acción no se puede deshacer.`)) return;
     setDeletingId(uid);
@@ -1074,6 +1091,17 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                   ? PROVISIONAL_PASSWORD_HINT
                   : PASSWORD_POLICY_HINT}
               </p>
+              {String(activeUser.id) !== String(user?.id) ? (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  style={{ marginBottom: 12 }}
+                  disabled={saving}
+                  onClick={() => void applyProvisional123456()}
+                >
+                  Aplicar ahora 123456
+                </button>
+              ) : null}
               <div className="form-group">
                 <label>Nueva contraseña</label>
                 <input

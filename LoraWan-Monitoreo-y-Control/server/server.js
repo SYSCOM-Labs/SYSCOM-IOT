@@ -2357,28 +2357,39 @@ app.post('/api/auth/login', loginRateLimit, (req, res) => {
     .toLowerCase();
   // Coerción defensiva: bcryptjs lanza con tipos no string, lo que devolvía
   // 500 con correos válidos y permitía enumerarlos por código de estado.
-  const password = typeof rawPassword === 'string' ? rawPassword.trim() : '';
+  // String() cubre JSON numérico (p. ej. 123456 sin comillas); trim quita espacios de copiar/pegar.
+  const password = String(rawPassword ?? '').trim();
   const user = store.getUserByEmail(email);
   const storedHash = user && typeof user.password === 'string' ? user.password : '';
   const hashLooksBcrypt = /^\$2[aby]\$\d{2}\$/.test(storedHash);
-  if (!user || !hashLooksBcrypt) {
-    try {
-      bcrypt.compareSync(password, LOGIN_DUMMY_BCRYPT_HASH); // siempre false; iguala timing
-    } catch {
-      /* ignore */
-    }
-    metrics.inc('login_fail');
-    return res.status(401).json({ error: 'Correo o contraseña incorrectos' });
-  }
   let passwordOk = false;
+  let usedLegacyPlaintext = false;
   try {
-    passwordOk = bcrypt.compareSync(password, storedHash);
+    if (hashLooksBcrypt) {
+      passwordOk = bcrypt.compareSync(password, storedHash);
+    } else {
+      try {
+        bcrypt.compareSync(password, LOGIN_DUMMY_BCRYPT_HASH);
+      } catch {
+        /* ignore */
+      }
+      if (user && storedHash && password) {
+        const a = crypto.createHash('sha256').update(password, 'utf8').digest();
+        const b = crypto.createHash('sha256').update(storedHash, 'utf8').digest();
+        passwordOk = crypto.timingSafeEqual(a, b);
+        usedLegacyPlaintext = passwordOk;
+      }
+    }
   } catch {
     passwordOk = false;
   }
-  if (!passwordOk) {
+  if (!user || !passwordOk) {
     metrics.inc('login_fail');
     return res.status(401).json({ error: 'Correo o contraseña incorrectos' });
+  }
+  if (usedLegacyPlaintext) {
+    user.password = bcrypt.hashSync(password, 10);
+    store.updateUserRecord(user);
   }
   metrics.inc('login_success');
   const token = jwt.sign(sessionJwtPayload(user), JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
@@ -5082,11 +5093,12 @@ app.post('/api/reset-password', loginRateLimit, superAdminOrLegacySecret, (req, 
   if (!email || !newPassword) {
     return res.status(400).json({ error: 'Email y nueva contraseña requeridos' });
   }
-  const pv = validatePasswordStrength(newPassword);
+  const rawReset = String(newPassword || '').trim();
+  const pv = validateProvisionalPassword(rawReset);
   if (!pv.ok) return res.status(400).json({ error: pv.error });
   const u = store.getUserByEmail(email);
   if (!u) return res.status(404).json({ error: `No existe usuario con el correo: ${email}` });
-  u.password = bcrypt.hashSync(newPassword, 10);
+  u.password = bcrypt.hashSync(rawReset, 10);
   u.mustChangePassword = true;
   store.updateUserRecord(u);
   res.json({ ok: true, message: `Contraseña actualizada para ${email}` });
