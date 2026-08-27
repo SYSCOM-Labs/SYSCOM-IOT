@@ -879,3 +879,58 @@ body.theme-dark .license-expiry-banner {
 body.theme-dark .syscom-impersonation-banner {
   border-bottom-color: rgba(34, 211, 238, 0.5);
 }
+
+/**
+ * Móvil: el documento (html/body) hace el scroll táctil.
+ * overflow:hidden + 100dvh + overscroll contain en flex deja el gesto sin barra que mover.
+ */
+@media (max-width: 1024px) {
+  html.syscom-scroll-lock-dashboard,
+  html.syscom-scroll-lock-dashboard body,
+  html.syscom-scroll-lock-dashboard #root,
+  html.syscom-scroll-lock-dashboard #root > .app-container {
+    height: auto !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    overflow-x: hidden !important;
+    overflow-y: visible !important;
+  }
+
+  html.syscom-scroll-lock-dashboard {
+    overflow-y: auto !important;
+  }
+
+  .app-container,
+  .app-container.app-container--premium {
+    height: auto !important;
+    max-height: none !important;
+    min-height: 100dvh;
+    overflow: visible !important;
+  }
+
+  .main-content {
+    overflow: visible !important;
+    max-height: none !important;
+    min-height: 0 !important;
+  }
+
+  html.syscom-scroll-lock-dashboard .main-content {
+    overflow: visible !important;
+    max-height: none !important;
+    height: auto !important;
+  }
+
+  .page-content,
+  html.syscom-scroll-lock-dashboard .page-content.page-content--budget-dashboard {
+    overflow: visible !important;
+    flex: 0 0 auto !important;
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overscroll-behavior-y: auto !important;
+  }
+
+  html.syscom-scroll-lock-dashboard .page-budget-dashboard {
+    overflow: visible !important;
+  }
+}

@@ -218,6 +218,49 @@ body {
   min-height: 100vh;
 }
 
+@media (max-width: 1024px) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  html:has(.app-container),
+  html:has(.app-container) body,
+  #root:has(.app-container) {
+    height: auto !important;
+    max-height: none !important;
+    min-height: 0 !important;
+  }
+
+  html:has(.app-container) {
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+  }
+
+  html:has(.app-container) body,
+  #root:has(.app-container) {
+    overflow-x: hidden !important;
+    overflow-y: visible !important;
+  }
+
+  #root:has(.app-container) {
+    display: block !important;
+  }
+
+  #root:has(.app-container) > .app-container {
+    height: auto !important;
+    max-height: none !important;
+    min-height: 100dvh;
+    flex: none !important;
+  }
+
+  body {
+    background-attachment: scroll;
+    min-height: 100dvh;
+    overflow-x: hidden;
+    overflow-y: visible;
+  }
+}
+
 body.theme-dark {
   background-image:
     radial-gradient(ellipse 100% 70% at 80% -10%, rgb(139 92 246 / 0.12), transparent 50%),
