@@ -4,6 +4,13 @@
   margin: 0 auto;
 }
 
+@media (max-width: 768px) {
+  .automations-page {
+    padding: 0;
+    max-width: none;
+  }
+}
+
 .subtitle {
   color: var(--text-secondary);
   font-size: 0.9rem;

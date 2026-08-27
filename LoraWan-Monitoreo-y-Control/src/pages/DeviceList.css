@@ -1708,7 +1708,7 @@ body:not(.theme-dark) .device-list-page--premium .battery-cell {
   }
 
   .device-table-scroll {
-    overflow-x: visible;
+    overflow: visible;
   }
 
   .device-table,
@@ -1722,11 +1722,10 @@ body:not(.theme-dark) .device-list-page--premium .battery-cell {
   }
 
   .device-table tbody tr {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-    column-gap: 0.65rem;
-    row-gap: 0.2rem;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.35rem;
     padding: 0.9rem 0.85rem;
     margin: 0;
     border-bottom: 1px solid rgba(148, 163, 184, 0.28);
@@ -1749,24 +1748,10 @@ body:not(.theme-dark) .device-list-page--premium .battery-cell {
     max-width: 100%;
   }
 
-  .device-table tbody td:nth-child(1) {
-    display: block;
-    grid-column: 1;
-    grid-row: 1;
-    min-width: 0;
-  }
-
-  .device-table tbody td:nth-child(3) {
-    display: block;
-    grid-column: 1;
-    grid-row: 2;
-    min-width: 0;
-  }
-
+  .device-table tbody td:nth-child(1),
+  .device-table tbody td:nth-child(3),
   .device-table tbody td.device-actions-col {
     display: block;
-    grid-column: 2;
-    grid-row: 1 / span 2;
     min-width: 0;
   }
 
@@ -1791,8 +1776,8 @@ body:not(.theme-dark) .device-list-page--premium .battery-cell {
   }
 
   .device-row-actions-icons {
-    justify-content: flex-end;
-    max-width: 10.5rem;
+    justify-content: flex-start;
+    max-width: none;
   }
 
   .device-list-page--premium .device-table tbody tr::after {

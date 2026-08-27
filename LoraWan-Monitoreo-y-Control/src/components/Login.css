@@ -6,6 +6,9 @@
   justify-content: center;
   background-color: var(--bg-main);
   z-index: 100;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 16px;
 }
 
 body.theme-dark .login-overlay {

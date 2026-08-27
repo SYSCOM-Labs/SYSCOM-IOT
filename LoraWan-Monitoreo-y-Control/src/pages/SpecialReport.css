@@ -248,6 +248,30 @@
   }
 }
 
+@media (max-width: 768px) {
+  .special-report-page {
+    padding: 0;
+    max-width: none;
+  }
+
+  .date-range-picker {
+    flex-direction: column;
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .result-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
+
+  .result-table {
+    min-width: 0;
+    width: 100%;
+  }
+}
+
 .comparison-badge {
   display: inline-flex;
   align-items: center;

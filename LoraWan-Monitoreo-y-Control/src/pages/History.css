@@ -173,7 +173,7 @@ body.theme-dark .history-page .btn-secondary:hover:not(:disabled) {
 
 @media (max-width: 768px) {
   .history-page {
-    padding: 12px;
+    padding: 0;
   }
 
   .filters-bar {
@@ -195,9 +195,15 @@ body.theme-dark .history-page .btn-secondary:hover:not(:disabled) {
     height: 300px;
   }
 
-  .log-table th:nth-child(3),
-  .log-table td:nth-child(3) {
-    display: none;
+  .reports-table-wrap,
+  .table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    max-width: 100%;
+  }
+
+  .reports-panel {
+    padding: 14px;
   }
 }
 
