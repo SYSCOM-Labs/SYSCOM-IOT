@@ -462,6 +462,11 @@ body.theme-dark .um-row--support-eligible:hover {
   color: #60a5fa;
 }
 
+.device-action-pill--password {
+  border-color: rgba(234, 179, 8, 0.5);
+  color: #facc15;
+}
+
 .um-nav-grid.um-nav-grid--list {
   display: flex;
   flex-direction: column;

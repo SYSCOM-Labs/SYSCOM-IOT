@@ -18,7 +18,6 @@ import {
   Save,
   Database,
   Play,
-  UserPlus,
   LogIn,
   Mail,
 } from 'lucide-react';
@@ -645,9 +644,17 @@ const UserManagement = ({ onAfterEnterSupport }) => {
                           <button type="button" className="device-action-pill" title="Regenerar token de ingesta" onClick={() => handleRegenerateIngest(u)}>
                             <Play size={18} strokeWidth={2} />
                           </button>
-                          <button type="button" className="device-action-pill" title="Cambiar contraseña" onClick={() => openPassword(u)}>
-                            <UserPlus size={18} strokeWidth={2} />
-                          </button>
+                          {isSuperAdmin ? (
+                            <button
+                              type="button"
+                              className="device-action-pill device-action-pill--password"
+                              title="Cambiar contraseña"
+                              aria-label={`Cambiar contraseña de ${u.email}`}
+                              onClick={() => openPassword(u)}
+                            >
+                              <KeyRound size={18} strokeWidth={2} />
+                            </button>
+                          ) : null}
                           <button
                             type="button"
                             className="device-action-pill device-action-pill--danger"
