@@ -7,6 +7,8 @@ import './DeviceList.css';
 import '../styles/premiumPageShell.css';
 import { fetchAutomationRules, saveAutomationRules } from '../services/api';
 import { invalidateAutomationRulesCache } from '../services/automationService';
+import { DEMO_PLAYGROUND_MESSAGE } from '../utils/demoPlayground';
+import FormToast from '../components/FormToast';
 import {
   effectiveAutomationConditions,
   isScheduleAutomationRule,
@@ -22,6 +24,12 @@ const AutomationsPage = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRule, setEditingRule] = useState(null);
   const [isDuplicating, setIsDuplicating] = useState(false);
+  const [demoToast, setDemoToast] = useState(null);
+
+  const notifyDemoPlayground = () => {
+    setDemoToast({ msg: DEMO_PLAYGROUND_MESSAGE });
+    window.setTimeout(() => setDemoToast(null), 5000);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -29,9 +37,11 @@ const AutomationsPage = () => {
       try {
         const remote = await fetchAutomationRules();
         if (cancelled) return;
-        if (remote.length) {
+        if (isDemo) {
+          setRules([]);
+        } else if (remote.length) {
           setRules(remote);
-        } else if (!isDemo) {
+        } else {
           const local = localStorage.getItem('iot_automations');
           if (local) {
             const parsed = JSON.parse(local);
@@ -44,8 +54,10 @@ const AutomationsPage = () => {
       } catch (e) {
         if (!cancelled) {
           setLoadError(String(e?.message || e));
-          const local = localStorage.getItem('iot_automations');
-          if (local) setRules(JSON.parse(local));
+          if (!isDemo) {
+            const local = localStorage.getItem('iot_automations');
+            if (local) setRules(JSON.parse(local));
+          }
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -57,7 +69,10 @@ const AutomationsPage = () => {
   }, [isDemo]);
 
   const persistRules = async (next) => {
-    if (isDemo) return;
+    if (isDemo) {
+      notifyDemoPlayground();
+      return;
+    }
     await saveAutomationRules(next);
     invalidateAutomationRulesCache();
   };
@@ -127,6 +142,17 @@ const AutomationsPage = () => {
 
   return (
     <div className="automations-page device-list-page device-list-page--premium premium-shell">
+      {demoToast && (
+        <div className="um-toast-host">
+          <FormToast
+            type="warning"
+            title="Solo demostración"
+            message={demoToast.msg}
+            onDismiss={() => setDemoToast(null)}
+            durationMs={5000}
+          />
+        </div>
+      )}
       {loadError && (
         <p className="subtitle" style={{ color: 'var(--danger, #c0392b)', marginBottom: '1rem' }}>
           {loadError}
@@ -139,8 +165,12 @@ const AutomationsPage = () => {
             <Zap size={26} className="premium-hero-title-icon" aria-hidden />
             <span className="premium-hero-title-text">{t('automations.title')}</span>
           </h1>
+          {isDemo && (
+            <p className="device-page-header-sub">
+              Puede armar reglas para ver cómo funciona la pantalla. No se guardan y no envían correo ni downlinks.
+            </p>
+          )}
         </div>
-        {!isDemo && (
         <button
           type="button"
           className="btn btn-primary device-create-top-btn"
@@ -152,7 +182,6 @@ const AutomationsPage = () => {
         >
           <Plus size={18} /> {t('automations.add_rule')}
         </button>
-        )}
       </div>
 
       <div className="rules-grid">
@@ -172,7 +201,6 @@ const AutomationsPage = () => {
                   {rule.name?.trim() || `Regla ${String(rule.id).slice(0, 8)}`}
                 </h3>
               </div>
-              {!isDemo && (
               <div className="rule-actions">
                 <button
                   type="button"
@@ -215,7 +243,6 @@ const AutomationsPage = () => {
                   <span className="slider round"></span>
                 </label>
               </div>
-              )}
             </div>
             
             <div className="rule-content">

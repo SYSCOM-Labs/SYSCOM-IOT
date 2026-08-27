@@ -32,6 +32,7 @@ import {
 import AppActivityLogDock from '../components/AppActivityLogDock';
 import { APP_TIMEZONE_OPTIONS, browserTimezone } from '../constants/timezones';
 import { probeEg71Gateway, probeEg71GatewaySaved } from '../services/eg71GatewayApi';
+import { DEMO_PLAYGROUND_MESSAGE } from '../utils/demoPlayground';
 
 const LOGO_STORAGE_KEY = 'syscom_iot_logo';
 const LOGO_CHANGED_EVENT = 'syscom-custom-logo-changed';
@@ -70,7 +71,12 @@ const SettingsPage = () => {
   const [activityLogOpen, setActivityLogOpen] = useState(false);
   const activityLogWrapRef = useRef(null);
   const isSuperAdmin = user?.role === 'superadmin';
-  const canWriteSettings = !isDemo;
+
+  const rejectDemoWrite = () => {
+    if (!isDemo) return false;
+    window.alert(DEMO_PLAYGROUND_MESSAGE);
+    return true;
+  };
 
   useEffect(() => {
     const n =
@@ -185,7 +191,7 @@ const SettingsPage = () => {
   };
 
   const handleSaveSmtpConfig = async () => {
-    if (!canWriteSettings) return;
+    if (rejectDemoWrite()) return;
     if (!isSuperAdmin) {
       alert('Solo el super administrador puede guardar la configuración SMTP.');
       return;
@@ -222,6 +228,7 @@ const SettingsPage = () => {
   };
 
   const handleTestSmtp = async () => {
+    if (rejectDemoWrite()) return;
     if (!isSuperAdmin) {
       alert('Solo el super administrador puede enviar correos de prueba.');
       return;
@@ -273,6 +280,7 @@ const SettingsPage = () => {
   const handleLogoFile = (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
+    if (rejectDemoWrite()) return;
     if (!file || !file.type.startsWith('image/')) {
       if (file) alert('Seleccione un archivo de imagen (PNG, JPG, SVG, etc.).');
       return;
@@ -293,13 +301,15 @@ const SettingsPage = () => {
   };
 
   const handleRemoveLogo = () => {
+    if (rejectDemoWrite()) return;
     localStorage.removeItem(LOGO_STORAGE_KEY);
     setCustomLogo(null);
     notifyLogoChanged();
   };
 
   const handleSaveBarProfileName = async () => {
-    if (!canWriteSettings || !user?.id || !resyncSession) return;
+    if (rejectDemoWrite()) return;
+    if (!user?.id || !resyncSession) return;
     setBarProfileSaving(true);
     try {
       await updateUser(user.id, { profileName: String(profileDisplayName).trim() });
@@ -315,6 +325,7 @@ const SettingsPage = () => {
   const handleBarAvatarFile = (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
+    if (rejectDemoWrite()) return;
     if (!file || !file.type.startsWith('image/')) {
       if (file) alert('Seleccione un archivo de imagen (PNG, JPG, SVG, etc.).');
       return;
@@ -335,12 +346,14 @@ const SettingsPage = () => {
   };
 
   const handleRemoveBarAvatar = () => {
+    if (rejectDemoWrite()) return;
     localStorage.removeItem(BAR_AVATAR_STORAGE_KEY);
     setBarAvatarDataUrl(null);
     notifyBarPrefsChanged();
   };
 
   const handleSaveEg71Gateway = async () => {
+    if (rejectDemoWrite()) return;
     if (!user?.id) return;
     const baseUrl = String(eg71BaseUrl || '').trim();
     if (!baseUrl) {
@@ -370,6 +383,7 @@ const SettingsPage = () => {
   };
 
   const handleProbeEg71Gateway = async () => {
+    if (rejectDemoWrite()) return;
     setEg71ProbeBusy(true);
     try {
       const baseUrl = String(eg71BaseUrl || '').trim();
@@ -393,6 +407,7 @@ const SettingsPage = () => {
   };
 
   const handleDatabaseExport = async () => {
+    if (rejectDemoWrite()) return;
     setDbExportBusy(true);
     try {
       const blob = await exportDatabaseBackupBlob();
@@ -413,6 +428,7 @@ const SettingsPage = () => {
   };
 
   const handleSaveNasDestination = async () => {
+    if (rejectDemoWrite()) return;
     setNasSaveBusy(true);
     try {
       await saveBackupConfig({ nasDestination });
@@ -425,7 +441,7 @@ const SettingsPage = () => {
   };
 
   const handleSaveAppTimezone = async () => {
-    if (!canWriteSettings) return;
+    if (rejectDemoWrite()) return;
     setAppTimezoneSaveBusy(true);
     try {
       const data = await saveAppTimezone(appTimezoneDraft);
@@ -448,6 +464,7 @@ const SettingsPage = () => {
   const handleDatabaseImportPick = async (e) => {
     const file = e.target.files?.[0];
     e.target.value = '';
+    if (rejectDemoWrite()) return;
     if (!file) return;
     if (!String(file.name || '').toLowerCase().endsWith('.db')) {
       alert('Seleccione un archivo .db exportado desde este servidor.');
@@ -477,7 +494,7 @@ const SettingsPage = () => {
           </h1>
           {isDemo && (
             <p className="device-page-header-sub">
-              Cuenta de demostración: puede revisar la configuración, pero no guardar cambios.
+              Puede probar los formularios. Al guardar verá un aviso: nada se aplica en el sistema.
             </p>
           )}
         </div>
@@ -563,7 +580,7 @@ const SettingsPage = () => {
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={appTimezoneSaveBusy || !canWriteSettings}
+                disabled={appTimezoneSaveBusy}
                 onClick={() => void handleSaveAppTimezone()}
               >
                 {appTimezoneSaveBusy ? '…' : t('settings.timezone_save')}
@@ -627,7 +644,7 @@ const SettingsPage = () => {
               <button
                 type="button"
                 className="btn btn-secondary"
-                disabled={eg71ProbeBusy || eg71SaveBusy || !canWriteSettings}
+                disabled={eg71ProbeBusy || eg71SaveBusy}
                 onClick={() => void handleProbeEg71Gateway()}
               >
                 {eg71ProbeBusy ? '…' : t('settings.eg71_probe')}
@@ -635,7 +652,7 @@ const SettingsPage = () => {
               <button
                 type="button"
                 className="btn btn-primary"
-                disabled={eg71SaveBusy || eg71ProbeBusy || !canWriteSettings}
+                disabled={eg71SaveBusy || eg71ProbeBusy}
                 onClick={() => void handleSaveEg71Gateway()}
               >
                 {eg71SaveBusy ? '…' : t('settings.eg71_save')}
@@ -669,7 +686,7 @@ const SettingsPage = () => {
               )}
             </div>
             <div className="settings-logo-actions">
-              <button type="button" className="btn btn-primary" disabled={!canWriteSettings} onClick={() => logoFileRef.current?.click()}>
+              <button type="button" className="btn btn-primary" onClick={() => logoFileRef.current?.click()}>
                 <Upload size={18} aria-hidden />
                 {t('settings.logo_choose')}
               </button>
@@ -677,7 +694,7 @@ const SettingsPage = () => {
                 type="button"
                 className="btn btn-secondary"
                 onClick={handleRemoveLogo}
-                disabled={!customLogo || !canWriteSettings}
+                disabled={!customLogo}
               >
                 <Trash2 size={18} aria-hidden />
                 {t('settings.logo_remove')}
@@ -708,7 +725,7 @@ const SettingsPage = () => {
             className="btn btn-primary"
             style={{ marginBottom: '1.25rem' }}
             onClick={handleSaveBarProfileName}
-            disabled={barProfileSaving || !user?.id || !canWriteSettings}
+            disabled={barProfileSaving || !user?.id}
           >
             {barProfileSaving ? '…' : t('settings.bar_profile_save_name')}
           </button>
@@ -734,11 +751,11 @@ const SettingsPage = () => {
               )}
             </div>
             <div className="settings-logo-actions">
-              <button type="button" className="btn btn-primary" disabled={!canWriteSettings} onClick={() => barAvatarFileRef.current?.click()}>
+              <button type="button" className="btn btn-primary" onClick={() => barAvatarFileRef.current?.click()}>
                 <Upload size={18} aria-hidden />
                 {t('settings.bar_profile_choose_photo')}
               </button>
-              <button type="button" className="btn btn-secondary" onClick={handleRemoveBarAvatar} disabled={!barAvatarDataUrl || !canWriteSettings}>
+              <button type="button" className="btn btn-secondary" onClick={handleRemoveBarAvatar} disabled={!barAvatarDataUrl}>
                 <Trash2 size={18} aria-hidden />
                 {t('settings.bar_profile_remove_photo')}
               </button>
@@ -875,7 +892,7 @@ const SettingsPage = () => {
               type="button"
               className="btn btn-primary"
               onClick={handleSaveSmtpConfig}
-              disabled={!isSuperAdmin || smtpSaveBusy || !canWriteSettings}
+              disabled={!isSuperAdmin || smtpSaveBusy}
             >
               {smtpSaveBusy ? 'Guardando…' : 'Guardar SMTP'}
             </button>
@@ -883,7 +900,7 @@ const SettingsPage = () => {
               type="button"
               className="btn btn-secondary"
               onClick={handleTestSmtp}
-              disabled={!isSuperAdmin || smtpTestBusy || !canWriteSettings}
+              disabled={!isSuperAdmin || smtpTestBusy}
             >
               {smtpTestBusy ? 'Enviando…' : 'Enviar prueba'}
             </button>
@@ -902,7 +919,7 @@ const SettingsPage = () => {
                 type="button"
                 className="btn btn-primary"
                 onClick={handleDatabaseExport}
-                disabled={dbExportBusy || dbImportBusy || !canWriteSettings}
+                disabled={dbExportBusy || dbImportBusy}
               >
                 <Download size={18} aria-hidden />
                 {dbExportBusy ? t('settings.database_export_busy') : t('settings.database_export')}
@@ -920,7 +937,7 @@ const SettingsPage = () => {
                 type="button"
                 className="btn btn-secondary"
                 onClick={() => dbImportFileRef.current?.click()}
-                disabled={dbExportBusy || dbImportBusy || !canWriteSettings}
+                disabled={dbExportBusy || dbImportBusy}
               >
                 <Upload size={18} aria-hidden />
                 {dbImportBusy ? t('settings.database_import_busy') : t('settings.database_import')}
@@ -955,7 +972,7 @@ const SettingsPage = () => {
                   type="button"
                   className="btn btn-primary settings-nas-save-btn"
                   onClick={handleSaveNasDestination}
-                  disabled={nasSaveBusy || dbExportBusy || dbImportBusy || !canWriteSettings}
+                  disabled={nasSaveBusy || dbExportBusy || dbImportBusy}
                 >
                   {nasSaveBusy ? '…' : t('settings.database_nas_save')}
                 </button>

@@ -4124,10 +4124,16 @@ app.delete(
 );
 
 app.get('/api/automations', authMiddleware, (req, res) => {
+  if (isDemoRole(req.user.role)) {
+    return res.json({ rules: [] });
+  }
   res.json({ rules: store.listAutomationRules(req.user.id) });
 });
 
 app.put('/api/automations', authMiddleware, navAutomationsMiddleware, (req, res) => {
+  if (isDemoRole(req.user.role)) {
+    return res.status(403).json(DEMO_READ_ONLY_ERROR);
+  }
   const { rules } = req.body || {};
   if (!Array.isArray(rules)) return res.status(400).json({ error: 'rules debe ser un array' });
   store.replaceAutomationRules(req.user.id, rules);

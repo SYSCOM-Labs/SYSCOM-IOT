@@ -4333,6 +4333,8 @@ class Store {
   }
 
   replaceAutomationRules(userId, rules) {
+    const owner = this.getUserById(userId);
+    if (owner && navPerm.isDemoRole(owner.role)) return;
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.st.arDeleteUser.run(userId);

@@ -4,6 +4,14 @@
   margin: 0 auto;
 }
 
+.automations-page .um-toast-host {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 9999;
+  max-width: min(440px, calc(100vw - 2.5rem));
+}
+
 @media (max-width: 768px) {
   .automations-page {
     padding: 0;

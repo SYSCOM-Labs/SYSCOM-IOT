@@ -71,6 +71,8 @@ async function loadRulesFromServer(opts = {}) {
  * @param {{ skipDownlink?: boolean }} [runOpts] Si `skipDownlink`, no se envían downlinks (el servidor ya los encoló).
  */
 export const runAutomations = async (devices, deviceProperties, credentials, token, auth, runOpts = {}) => {
+  const role = String(auth?.user?.role || '').toLowerCase();
+  if (role === 'demo') return;
   const rules = await loadRulesFromServer({ bypassCache: Boolean(runOpts.skipDownlink) });
   if (!rules || !rules.length) return;
 
@@ -511,6 +513,7 @@ let _pendingTelemetryDetail = null;
  */
 export function scheduleClientEmailWebhookAutomations(ctx, telemetryDetail) {
   if (!ctx?.token || !ctx.isStaff) return;
+  if (String(ctx.auth?.user?.role || '').toLowerCase() === 'demo') return;
   if (telemetryDetail && telemetryDetail.deviceId != null) {
     _pendingTelemetryDetail = telemetryDetail;
   }
