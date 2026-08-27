@@ -746,6 +746,27 @@ export function ensureBsdGridLayoutGeometry(layout) {
   return normalizeLayoutForPersistence(items);
 }
 
+/** Ancho de lienzo por debajo del cual el tablero se apila en una columna (no persistir este layout). */
+export const BSD_NARROW_DASHBOARD_MAX_PX = 640;
+
+/**
+ * Vista móvil: una columna a 12 cols, sin cambiar el layout guardado en disco.
+ * Conserva `h` de cada widget para que gráficos y mapas no se aplasten.
+ *
+ * @param {BsdGridItem[] | null | undefined} layout
+ * @returns {BsdGridItem[]}
+ */
+export function stackBsdGridLayoutForNarrowViewport(layout) {
+  const items = Array.isArray(layout) ? layout : [];
+  let y = 0;
+  return items.map((it) => {
+    const h = Math.max(Math.round(Number(it.h)) || 8, 8);
+    const next = { ...it, x: 0, y, w: 12, h };
+    y += h;
+    return next;
+  });
+}
+
 /**
  * Si el tile `itemId` se solapa con otro (p. ej. tras `clampLayoutItemsToModerateMins`), lo mueve a la primera
  * celda libre con la misma lógica que la galería (`placeNewBsdGridItem`).

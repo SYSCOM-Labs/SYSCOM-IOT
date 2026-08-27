@@ -1155,7 +1155,7 @@ export function buildBsdWidgetSurfaceStyle(appearance) {
     borderColor: 'rgba(255, 255, 255, 0.22)',
     backdropFilter: 'none',
     WebkitBackdropFilter: 'none',
-    boxShadow: '0 8px 22px rgba(8, 16, 36, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.14)',
+    boxShadow: '0 1px 2px rgba(15, 23, 42, 0.06), 0 10px 28px rgba(15, 23, 42, 0.08)',
   };
 }
 
@@ -1570,9 +1570,9 @@ export function defaultWidgetConfig(sensor) {
           : isBatteryLevelWidget
             ? '#ea580c'
             : isBarChart || isTextWidget || isVeletaWidget || isTrackingMapWidget
-              ? '#ffffff'
+              ? '#0f172a'
               : '#f97316',
-      /** Vacío = cristal BSD; `transparent` = sin tinte; o `#rrggbb` */
+      /** Vacío = mate del tema; `transparent` = sin tinte; o `#rrggbb` */
       widgetBackgroundColor: '',
       /** Opcional: si el valor del campo cumple la condición, sustituye temporalmente el fondo del widget. */
       conditionalBackground: {

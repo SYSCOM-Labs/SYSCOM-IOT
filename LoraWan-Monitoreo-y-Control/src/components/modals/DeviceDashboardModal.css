@@ -838,4 +838,10 @@ body:not(.theme-dark) .device-bsd-modal .dashboard-header.device-bsd-modal__chro
     height: 100% !important;
     max-height: 100% !important;
   }
+  .dashboard-body {
+    padding: 12px 10px 20px;
+  }
+  .device-entry-wizard {
+    padding: 16px 12px 24px;
+  }
 }

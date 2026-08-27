@@ -1026,7 +1026,9 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                   setShowCreateDevice(true);
                 }}
               >
-                <Plus size={18} /> Crear nuevo dispositivo
+                <Plus size={18} />
+                <span className="device-create-top-btn__full">Crear nuevo dispositivo</span>
+                <span className="device-create-top-btn__short">Crear</span>
               </button>
             )}
           </div>
@@ -1146,7 +1148,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
                             ) : (
                               <RefreshCw size={16} />
                             )}
-                            Renovación de licencia
+                            <span className="device-actions-license-label">Renovación de licencia</span>
                           </button>
                         )}
                         {rowPerms.edit && (

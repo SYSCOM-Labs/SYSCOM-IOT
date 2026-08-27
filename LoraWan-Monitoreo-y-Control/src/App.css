@@ -451,6 +451,17 @@ html.syscom-scroll-lock-dashboard .page-budget-dashboard {
   }
 }
 
+@media (max-width: 480px) {
+  .page-content {
+    padding: 10px max(10px, env(safe-area-inset-right, 0px)) 16px max(10px, env(safe-area-inset-left, 0px));
+  }
+
+  .top-bar {
+    padding: 8px 12px;
+    min-height: 56px;
+  }
+}
+
 /* —— Premium shell (barra superior, área principal, coherente con sidebar) —— */
 .app-container--premium {
   position: relative;

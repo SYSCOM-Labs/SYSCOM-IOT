@@ -169,6 +169,8 @@ import {
   resolveBsdDashboardGridLayout,
   bsdDashboardLayoutHasOverlap,
   ensureBsdGridLayoutGeometry,
+  BSD_NARROW_DASHBOARD_MAX_PX,
+  stackBsdGridLayoutForNarrowViewport,
   normalizeNewWidgetSlotTemplate,
   ensureBsdGridWidgetSlotAtFirstGap,
 } from './bsdDashboardLayout';
@@ -2967,6 +2969,17 @@ export default function BudgetSensorsDashboard({
     return ensureBsdGridLayoutGeometry(visible);
   }, [resolvedGridLayout, visibilityMap]);
 
+  const lastMeasuredGridWidthRef = useRef(0);
+  const [gridWidth, setGridWidth] = useState(() => {
+    if (typeof window === 'undefined') return 1200;
+    return Math.max(1, Math.floor(window.innerWidth));
+  });
+  const dashStackWidgets = gridWidth < BSD_NARROW_DASHBOARD_MAX_PX;
+  const gridLayoutForViewport = useMemo(
+    () => (dashStackWidgets ? stackBsdGridLayoutForNarrowViewport(gridLayoutForRgl) : gridLayoutForRgl),
+    [dashStackWidgets, gridLayoutForRgl]
+  );
+
   const rglLayoutIdSet = useMemo(
     () => new Set(gridLayoutForRgl.map((it) => String(it.i))),
     [gridLayoutForRgl]
@@ -2974,8 +2987,8 @@ export default function BudgetSensorsDashboard({
   /** Posiciones actuales para `data-grid` en hijos directos de RGL. */
   const gridLayoutItemByIdRef = useRef(new Map());
   gridLayoutItemByIdRef.current = useMemo(
-    () => new Map(gridLayoutForRgl.map((it) => [String(it.i), it])),
-    [gridLayoutForRgl]
+    () => new Map(gridLayoutForViewport.map((it) => [String(it.i), it])),
+    [gridLayoutForViewport]
   );
   /** Evita mezclar posiciones del panel/dispositivo anterior al cambiar `dashboardGridLayoutKey`. */
   const prevDashboardGridLayoutKeyRef = useRef(dashboardGridLayoutKey);
@@ -2990,8 +3003,6 @@ export default function BudgetSensorsDashboard({
 
   const innerRef = useRef(null);
   const gridWidthMeasureRef = useRef(null);
-  const lastMeasuredGridWidthRef = useRef(0);
-  const [gridWidth, setGridWidth] = useState(1200);
 
   useEffect(() => {
     if (variant !== 'device' || !dashDeviceId) return;
@@ -3004,10 +3015,10 @@ export default function BudgetSensorsDashboard({
     if (!measureEl) return;
     const apply = () => {
       const w = Math.floor(measureEl.getBoundingClientRect().width);
-      const next = Math.max(320, w);
-      if (lastMeasuredGridWidthRef.current !== 0 && Math.abs(next - lastMeasuredGridWidthRef.current) < 12) return;
-      lastMeasuredGridWidthRef.current = next;
-      setGridWidth(next);
+      if (w < 1) return;
+      if (lastMeasuredGridWidthRef.current !== 0 && Math.abs(w - lastMeasuredGridWidthRef.current) < 12) return;
+      lastMeasuredGridWidthRef.current = w;
+      setGridWidth(w);
     };
     apply();
     const ro = new ResizeObserver(() => {
@@ -3071,17 +3082,18 @@ export default function BudgetSensorsDashboard({
       const measureEl = gridWidthMeasureRef.current;
       if (measureEl) {
         const w = Math.floor(measureEl.getBoundingClientRect().width);
-        const next = Math.max(320, w);
-        lastMeasuredGridWidthRef.current = next;
-        setGridWidth(next);
+        if (w >= 1) {
+          lastMeasuredGridWidthRef.current = w;
+          setGridWidth(w);
+        }
       }
       requestAnimationFrame(() => {
         const el = gridWidthMeasureRef.current;
         if (!el) return;
         const w = Math.floor(el.getBoundingClientRect().width);
-        const next = Math.max(320, w);
-        lastMeasuredGridWidthRef.current = next;
-        setGridWidth(next);
+        if (w < 1) return;
+        lastMeasuredGridWidthRef.current = w;
+        setGridWidth(w);
       });
     }
   }, [
@@ -5394,7 +5406,13 @@ export default function BudgetSensorsDashboard({
   };
   const wTitleStyle = (wid) => {
     const c = widgetConfigs[dk(wid)]?.appearance?.titleColor;
-    return c ? { color: c } : undefined;
+    if (!c) return undefined;
+    const hex = String(c).trim().toLowerCase();
+    const lightTheme =
+      typeof document !== 'undefined' && !document.body.classList.contains('theme-dark');
+    /** El default del cristal era blanco; en tarjetas porcelana se deja el color del tema. */
+    if (lightTheme && (hex === '#fff' || hex === '#ffffff' || hex === 'white')) return undefined;
+    return { color: c };
   };
 
   const mergeGridSlotShell = useCallback((slotId) => {
@@ -7324,20 +7342,20 @@ export default function BudgetSensorsDashboard({
              */
             <GridLayout
               key={`bsd-dash-${dashboardGridLayoutKey}-r${gridLayoutRepairEpoch}`}
-              className={`bsd-dash-grid-layout${gridLayoutInteracting ? ' bsd-dash-grid-layout--dragging' : ''}`}
+              className={`bsd-dash-grid-layout${gridLayoutInteracting ? ' bsd-dash-grid-layout--dragging' : ''}${dashStackWidgets ? ' bsd-dash-grid-layout--stacked' : ''}`}
               width={gridWidth}
-              layout={gridLayoutForRgl}
+              layout={gridLayoutForViewport}
               cols={12}
               rowHeight={36}
-              margin={[18, 18]}
+              margin={dashStackWidgets ? [10, 12] : [18, 18]}
               containerPadding={[0, 0]}
               onLayoutChange={handleGridLayoutChange}
               onDragStart={handleGridDragStart}
               onDragStop={handleGridDragStop}
               onResizeStart={handleGridResizeStart}
               onResizeStop={handleGridResizeStop}
-              isDraggable={!dashboardLayoutLocked}
-              isResizable={!dashboardLayoutLocked}
+              isDraggable={!dashboardLayoutLocked && !dashStackWidgets}
+              isResizable={!dashboardLayoutLocked && !dashStackWidgets}
               draggableCancel=".bsd-widget-actions,.bsd-widget-duplicate-btn,.bsd-widget-edit-btn,.bsd-widget-remove-btn,.sensor-card__duplicate,.bsd-widget-menu-summary,.bsd-widget-menu-panel,.bsd-widget-gallery-overlay,.bsd-widget-gallery-modal,.bsd-widget-gallery-card,.bsd-widget-gallery-filters,.bsd-widget-gallery-search,input,textarea,select,option,button,.bsd-switch-3d,.bsd-downlink-btn,.bsd-emergency-body,.sensor-card,.alert-item,.year-btn,.bsd-stream-preset,canvas,.bsd-map-iframe,.leaflet-container,.leaflet-pane,.bsd-map-leaflet,.bsd-tracking-map-leaflet,.bsd-map-layer-menu,.bsd-map-layer-menu__trigger,.bsd-map-layer-menu__list,.bsd-map-layer-menu__opt,.bsd-panel-device-bar-inner label,.bsd-file-label"
               compactType={null}
               preventCollision
