@@ -1,13 +1,13 @@
-.rule-modal {
-  max-width: 900px !important;
-  width: 95% !important;
-  max-height: 90vh;
+.modal-content.rule-modal {
+  width: min(1240px, 96vw) !important;
+  max-width: min(1240px, 96vw) !important;
+  max-height: 92vh;
 }
 
-.modal-body.scrollable {
-  max-height: calc(90vh - 150px);
+.rule-modal .modal-body.scrollable {
+  max-height: calc(92vh - 150px);
   overflow-y: auto;
-  padding: 24px;
+  padding: 24px 28px;
 }
 
 .rule-config-section {
@@ -157,10 +157,27 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 16px;
+  padding: 16px 18px;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.02);
   border: 1px solid var(--border-color);
+}
+
+.condition-main-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.rule-modal .row-label {
+  flex-shrink: 0;
+  min-width: 2.4rem;
+  font-weight: 800;
+  font-size: 0.82rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
 }
 
 .automation-condition-widget-value {
@@ -194,8 +211,9 @@
   flex: 1;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 10px;
   align-items: center;
+  min-width: 0;
 }
 
 .row-fields select, .row-fields input {
@@ -208,15 +226,15 @@
   min-width: 0;
 }
 
-.field-device, .field-prop, .field-target-device, .field-command { flex: 2; min-width: 150px; }
-.field-operator { flex: 1.8; min-width: 168px; }
-.field-value { flex: 1.5; min-width: 100px; }
+.field-device, .field-prop, .field-target-device, .field-command { flex: 1.5; min-width: 160px; }
+.field-operator { flex: 1.1; min-width: 150px; }
+.field-value { flex: 1; min-width: 120px; }
 
 /* Tras Valor: no encoger (si no cabe, baja de fila entero). */
 .condition-hold-inline {
   display: inline-flex;
-  flex: 1 0 320px;
-  min-width: 320px;
+  flex: 1.4 0 300px;
+  min-width: 300px;
   align-items: center;
   gap: 8px;
   margin: 0;
@@ -567,9 +585,20 @@ body.theme-dark .rule-modal .btn-icon.delete:hover {
 }
 
 @media (max-width: 768px) {
+  .modal-content.rule-modal {
+    width: 96vw !important;
+    max-width: 96vw !important;
+  }
+  .condition-main-row {
+    flex-wrap: wrap;
+  }
   .row-fields {
     flex-direction: column;
     align-items: stretch;
+  }
+  .rule-modal .row-fields .condition-hold-inline {
+    min-width: 0;
+    flex: 1 1 100%;
   }
   .action-email-extra,
   .action-webhook-extra,

@@ -535,6 +535,7 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false })
               <div className="conditions-container">
                 {conditions.map((cond, index) => (
                   <div key={index} className="row-item glass border">
+                    <div className="condition-main-row">
                     <span className="row-label">{index === 0 ? 'Si' : 'And'}</span>
                     <div className="row-fields">
                       <select value={cond.deviceId != null ? String(cond.deviceId) : ''} onChange={e => updateCondition(index, 'deviceId', e.target.value)} className="field-device">
@@ -622,6 +623,8 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false })
                         />
                       </label>
                     </div>
+                    <button type="button" className="btn-icon delete" onClick={() => removeCondition(index)}><Trash2 size={16} /></button>
+                    </div>
                     {cond.deviceId && cond.propKey ? (
                       <label className="automation-condition-widget-value">
                         <input
@@ -635,7 +638,6 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false })
                         </span>
                       </label>
                     ) : null}
-                    <button type="button" className="btn-icon delete" onClick={() => removeCondition(index)}><Trash2 size={16} /></button>
                   </div>
                 ))}
                 <button type="button" className="add-row-btn" onClick={addCondition}>
