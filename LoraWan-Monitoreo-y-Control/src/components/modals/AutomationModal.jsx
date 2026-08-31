@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { X, Plus, Trash2, Mail, MessageSquare, Globe, Zap, Clock, Calendar, Bell } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { X, Plus, Trash2, Mail, MessageSquare, Globe, Zap, Clock, Calendar, Bell, ChevronDown } from 'lucide-react';
 import { fetchDevices, fetchDeviceTsl, fetchDeviceProperties } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { getLatestDeviceData } from '../../services/localAuth';
@@ -16,6 +17,94 @@ import {
 import { isTimeOperator, automationOperatorLabel } from '../../utils/automationDuration';
 import './AutomationModal.css';
 
+const CONDITION_OPERATORS = [
+  { id: '<', label: 'menor a' },
+  { id: '<=', label: 'menor o igual a' },
+  { id: '==', label: 'igual a' },
+  { id: '!=', label: 'distinto a' },
+  { id: '>=', label: 'mayor o igual a' },
+  { id: '>', label: 'mayor a' },
+];
+
+function ConditionOperatorPicker({ value, onChange }) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef(null);
+  const [pos, setPos] = useState({ top: 0, left: 0, width: 220 });
+  const current = CONDITION_OPERATORS.find((o) => o.id === value) || CONDITION_OPERATORS.find((o) => o.id === '==');
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const place = () => {
+      const el = btnRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const width = Math.max(r.width, 240);
+      let left = r.left;
+      if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8);
+      setPos({ top: r.bottom + 4, left, width });
+    };
+    place();
+    const onDoc = (e) => {
+      const t = e.target;
+      if (btnRef.current?.contains(t)) return;
+      if (t instanceof Element && t.closest('.condition-op-menu')) return;
+      setOpen(false);
+    };
+    window.addEventListener('resize', place);
+    window.addEventListener('scroll', place, true);
+    document.addEventListener('mousedown', onDoc);
+    return () => {
+      window.removeEventListener('resize', place);
+      window.removeEventListener('scroll', place, true);
+      document.removeEventListener('mousedown', onDoc);
+    };
+  }, [open]);
+
+  const pick = (id) => {
+    onChange(id);
+    setOpen(false);
+  };
+
+  return (
+    <div className="condition-op-wrap">
+      <button
+        ref={btnRef}
+        type="button"
+        className={`field-operator condition-op-trigger${open ? ' is-open' : ''}`}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span>{current?.label || 'igual a'}</span>
+        <ChevronDown size={16} aria-hidden />
+      </button>
+      {open
+        ? createPortal(
+            <div
+              className="condition-op-menu"
+              role="listbox"
+              style={{ top: pos.top, left: pos.left, minWidth: pos.width }}
+            >
+              {CONDITION_OPERATORS.map((op) => (
+                <button
+                  key={op.id}
+                  type="button"
+                  role="option"
+                  aria-selected={value === op.id}
+                  className={`condition-op-menu__opt${value === op.id ? ' is-active' : ''}`}
+                  onClick={() => pick(op.id)}
+                >
+                  {op.label}
+                </button>
+              ))}
+            </div>,
+            document.body
+          )
+        : null}
+    </div>
+  );
+}
+
 function normalizeConditionRow(c) {
   const base = c && typeof c === 'object' ? c : {};
   const propKey = String(
@@ -24,16 +113,27 @@ function normalizeConditionRow(c) {
   const propName = String(
     base.propName ?? base.propertyName ?? base.fieldName ?? base.metricName ?? ''
   ).trim();
+  let operator = base.operator != null ? String(base.operator) : '==';
+  let value = base.value != null ? String(base.value) : '';
+  let holdTime =
+    base.holdTime != null && String(base.holdTime).trim()
+      ? String(base.holdTime).trim()
+      : base.time != null && String(base.time).trim()
+        ? String(base.time).trim()
+        : '';
+  if (isTimeOperator(operator)) {
+    if (!holdTime) holdTime = value;
+    value = '';
+    operator = '==';
+  }
   return {
     deviceId: base.deviceId != null ? String(base.deviceId) : '',
     propKey,
     propName: propName || propKey,
-    operator: base.operator != null ? String(base.operator) : '==',
-    operatorLabel:
-      base.operatorLabel != null && String(base.operatorLabel).trim()
-        ? String(base.operatorLabel).trim()
-        : automationOperatorLabel(base.operator != null ? String(base.operator) : '=='),
-    value: base.value != null ? String(base.value) : '',
+    operator,
+    operatorLabel: automationOperatorLabel(operator),
+    value,
+    holdTime,
     useWidgetValue: Boolean(base.useWidgetValue),
   };
 }
@@ -69,6 +169,7 @@ function defaultConditionRow() {
     operator: '==',
     operatorLabel: automationOperatorLabel('=='),
     value: '',
+    holdTime: '',
     useWidgetValue: false,
   };
 }
@@ -409,13 +510,6 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false })
     { id: 'rose', label: 'Rosa (alerta suave)' },
   ];
 
-  const operators = [
-    { id: '<', label: 'menor a' }, { id: '<=', label: 'menor o igual a' },
-    { id: '==', label: 'igual a' }, { id: '!=', label: 'distinto a' },
-    { id: '>=', label: 'mayor o igual a' }, { id: '>', label: 'mayor a' },
-    { id: 'time_gt', label: 'tiempo mayor a' }, { id: 'time_lt', label: 'tiempo menor a' },
-  ];
-
   if (!isOpen) return null;
 
   return (
@@ -550,16 +644,34 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false })
                         ) : null}
                       </select>
                       <span className="joiner">es</span>
-                      <select value={cond.operator} onChange={e => updateCondition(index, 'operator', e.target.value)} className="field-operator">
-                        {operators.map(op => (<option key={op.id} value={op.id}>{op.label}</option>))}
-                      </select>
+                      <ConditionOperatorPicker
+                        value={cond.operator}
+                        onChange={(id) => updateCondition(index, 'operator', id)}
+                      />
                       <input
                         type="text"
                         value={cond.value}
                         onChange={e => updateCondition(index, 'value', e.target.value)}
-                        placeholder={isTimeOperator(cond.operator) ? '60s o 0.30' : 'Valor'}
+                        placeholder="Valor"
                         className="field-value"
                       />
+                    </div>
+                    <div className="condition-hold-row">
+                      <label className="condition-hold-label" htmlFor={`automation-hold-${index}`}>
+                        Tiempo
+                        <span className="condition-hold-optional">(opcional)</span>
+                      </label>
+                      <input
+                        id={`automation-hold-${index}`}
+                        type="text"
+                        value={cond.holdTime != null ? String(cond.holdTime) : ''}
+                        onChange={(e) => updateCondition(index, 'holdTime', e.target.value)}
+                        placeholder="60s  ·  vacío = al instante"
+                        className="field-hold"
+                      />
+                      <span className="condition-hold-hint">
+                        La comparación debe mantenerse este rato y después se ejecuta THEN. Ej. 60, 60s, 5m o 0.30
+                      </span>
                     </div>
                     {cond.deviceId && cond.propKey ? (
                       <label className="automation-condition-widget-value">
@@ -580,12 +692,11 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false })
                 <button type="button" className="add-row-btn" onClick={addCondition}>
                   <Plus size={16} /> Agregar condición
                 </button>
-                {conditions.some((c) => isTimeOperator(c.operator)) ? (
-                  <p className="hint-text">
-                    Tiempo mayor/menor: compara la lectura (en segundos) con <code>60s</code>, <code>5m</code> o{' '}
-                    <code>0.30</code> (0 minutos y 30 segundos).
-                  </p>
-                ) : null}
+                <p className="hint-text">
+                  <strong>Tiempo</strong> es opcional. Ejemplo: PIR <strong>igual a</strong> Normal y tiempo{' '}
+                  <code>60</code> o <code>60s</code> espera 60 s en ese estado y después ejecuta THEN. Vacío = al
+                  instante. También <code>5m</code> o <code>0.30</code> (30 s).
+                </p>
               </div>
             </div>
             ) : null}

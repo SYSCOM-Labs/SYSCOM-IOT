@@ -103,6 +103,37 @@ function evaluateTimeCondition(actual, operator, target, nowMs = Date.now()) {
   return false;
 }
 
+function parseHoldDurationMs(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return 0;
+  const ms = parseDurationToMs(s, { userInput: true });
+  return ms != null && ms > 0 ? ms : 0;
+}
+
+function conditionHoldMs(cond) {
+  if (!cond || typeof cond !== 'object') return 0;
+  return parseHoldDurationMs(cond.holdTime ?? cond.time);
+}
+
+function applyConditionHold(store, key, comparisonTrue, holdMs, nowMs = Date.now()) {
+  if (!store || typeof store !== 'object') {
+    return { met: Boolean(comparisonTrue) && !(Number(holdMs) > 0), remainingMs: 0 };
+  }
+  if (!comparisonTrue) {
+    delete store[key];
+    return { met: false, remainingMs: 0 };
+  }
+  const wait = Number(holdMs) > 0 ? Number(holdMs) : 0;
+  if (!wait) {
+    delete store[key];
+    return { met: true, remainingMs: 0 };
+  }
+  if (store[key] == null) store[key] = nowMs;
+  const remaining = wait - (nowMs - store[key]);
+  if (remaining <= 0) return { met: true, remainingMs: 0 };
+  return { met: false, remainingMs: remaining };
+}
+
 module.exports = {
   TIME_OPERATOR_GT,
   TIME_OPERATOR_LT,
@@ -111,4 +142,7 @@ module.exports = {
   parseDurationToMs,
   actualValueToDurationMs,
   evaluateTimeCondition,
+  parseHoldDurationMs,
+  conditionHoldMs,
+  applyConditionHold,
 };

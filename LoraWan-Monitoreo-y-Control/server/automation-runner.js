@@ -10,7 +10,12 @@ const {
   effectiveAutomationConditions,
   resolveAutomationRuleMode,
 } = require('./lib/automation-rule-mode.cjs');
-const { isTimeOperator, evaluateTimeCondition } = require('./lib/automation-duration.cjs');
+const {
+  isTimeOperator,
+  evaluateTimeCondition,
+  conditionHoldMs,
+  applyConditionHold,
+} = require('./lib/automation-duration.cjs');
 const {
   resolveAppTimezone,
   getScheduleClockParts,
@@ -27,6 +32,12 @@ const scheduleEdgeState = {};
 
 /** `userId::ruleId` → firma del último uplink que disparó la regla (one-shot por evento, p. ej. botón). */
 const oneShotEventStorage = {};
+
+/** `userId::ruleId::condIndex` → instante en que la comparación empezó a cumplirse (permanencia). */
+const conditionHoldState = {};
+
+/** `userId::ruleId` → timeout para reevaluar cuando vence el tiempo de permanencia. */
+const holdRecheckTimers = {};
 
 /** @type {ReturnType<typeof setTimeout> | null} */
 let _scheduleFirstTimeout = null;
@@ -253,6 +264,35 @@ function buildDevicePropertiesMapForUser(store, userId, overlayDeviceId, overlay
 
 function cooldownKey(userId, ruleId, actionIndex) {
   return `${userId}::${ruleId != null ? String(ruleId) : ''}::${actionIndex}`;
+}
+
+function holdRecheckKey(userId, ruleId) {
+  return `${userId}::${ruleId != null ? String(ruleId) : ''}`;
+}
+
+function clearHoldRecheck(userId, ruleId) {
+  const key = holdRecheckKey(userId, ruleId);
+  const t = holdRecheckTimers[key];
+  if (t) {
+    clearTimeout(t);
+    delete holdRecheckTimers[key];
+  }
+}
+
+function scheduleHoldRecheck(userId, ruleId, delayMs) {
+  const wait = Math.max(50, Math.min(Number(delayMs) || 0, 24 * 60 * 60 * 1000));
+  const key = holdRecheckKey(userId, ruleId);
+  if (holdRecheckTimers[key]) return;
+  holdRecheckTimers[key] = setTimeout(() => {
+    delete holdRecheckTimers[key];
+    if (!_ctx) return;
+    try {
+      const map = buildDevicePropertiesMapForUser(_ctx.store, userId, '', null);
+      runRulesForUser(userId, map);
+    } catch (e) {
+      console.warn('[automation] hold recheck', userId, e && e.message);
+    }
+  }, wait);
 }
 
 /** @param {object} action */
@@ -526,33 +566,45 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
     if (scheduleOnly) continue;
     if (effectiveConditions.length === 0) continue;
 
-    let allConditionsMet = true;
-    for (const cond of effectiveConditions) {
+    const rid = rule.id != null ? String(rule.id) : `r${ridx}`;
+    const nowMs = Date.now();
+    let allComparisonsTrue = true;
+    let allHoldsMet = true;
+    let maxRemain = 0;
+
+    for (let cidx = 0; cidx < effectiveConditions.length; cidx++) {
+      const cond = effectiveConditions[cidx];
       const did = cond.deviceId != null ? String(cond.deviceId) : '';
       const props = did ? deviceProperties[did] : null;
       const rawDeviceValue = getConditionDeviceValue(props, cond.propKey);
-      if (rawDeviceValue === undefined) {
-        allConditionsMet = false;
-        break;
+      let comparisonTrue = false;
+      if (rawDeviceValue !== undefined) {
+        const deviceValue = resolveAutomationConditionCompareValue(
+          rawDeviceValue,
+          cond,
+          props,
+          store,
+          userId
+        );
+        comparisonTrue = evaluateCondition(deviceValue, cond.operator, cond.value);
       }
-      const deviceValue = resolveAutomationConditionCompareValue(
-        rawDeviceValue,
-        cond,
-        props,
-        store,
-        userId
+      if (!comparisonTrue) allComparisonsTrue = false;
+      const hold = applyConditionHold(
+        conditionHoldState,
+        `${userId}::${rid}::${cidx}`,
+        comparisonTrue,
+        conditionHoldMs(cond),
+        nowMs
       );
-      if (!evaluateCondition(deviceValue, cond.operator, cond.value)) {
-        allConditionsMet = false;
-        break;
-      }
+      if (!hold.met) allHoldsMet = false;
+      if (hold.remainingMs > 0) maxRemain = Math.max(maxRemain, hold.remainingMs);
     }
 
-    const rid = rule.id != null ? String(rule.id) : `r${ridx}`;
     const ruleSigKey = `${userId}::${rid}`;
     const eventSig = buildRuleConditionEventSignature(deviceProperties, effectiveConditions);
 
-    if (!allConditionsMet) {
+    if (!allComparisonsTrue) {
+      clearHoldRecheck(userId, rid);
       if (!rule.allowReactivation) {
         delete oneShotEventStorage[ruleSigKey];
         for (let i = 0; i < (rule.actions || []).length; i++) {
@@ -561,6 +613,13 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
       }
       continue;
     }
+
+    if (!allHoldsMet) {
+      scheduleHoldRecheck(userId, rid, maxRemain);
+      continue;
+    }
+
+    clearHoldRecheck(userId, rid);
 
     if (!rule.allowReactivation && eventSig && oneShotEventStorage[ruleSigKey] === eventSig) {
       continue;

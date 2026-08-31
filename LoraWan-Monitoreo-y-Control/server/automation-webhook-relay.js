@@ -69,7 +69,9 @@ function formatConditionLine(c) {
   const op = String(c.operator || '==').trim();
   const val = String(c.value != null ? c.value : '—').trim();
   const opLabel = c.operatorLabel || automationOperatorLabel(op);
-  return `${name} ${opLabel} ${val}`;
+  const hold = String(c.holdTime || c.time || '').trim();
+  const holdBit = hold ? ` durante ${hold}` : '';
+  return `${name} ${opLabel} ${val}${holdBit}`;
 }
 
 function formatTimestampForDisplay(ts) {

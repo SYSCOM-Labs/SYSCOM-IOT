@@ -12,7 +12,7 @@ import {
   effectiveAutomationConditions,
   resolveAutomationRuleMode,
 } from '../utils/automationRuleMode.js';
-import { isTimeOperator, evaluateTimeCondition } from '../utils/automationDuration.js';
+import { isTimeOperator, evaluateTimeCondition, conditionHoldMs, applyConditionHold } from '../utils/automationDuration.js';
 
 /**
  * Automation Engine
@@ -36,6 +36,32 @@ export function showAutomationToast(detail) {
 // Memory cache for last execution times to prevent spam (Debouncing)
 // Key: ruleId-actionIndex
 const cooldownStorage = {};
+
+/** `ruleId::condIndex` → instante en que la comparación empezó a cumplirse. */
+const clientHoldState = {};
+/** `ruleId` → timeout para reevaluar al vencer la permanencia. */
+const clientHoldTimers = {};
+
+function clearClientHoldRecheck(ruleId) {
+  const key = String(ruleId ?? '');
+  const t = clientHoldTimers[key];
+  if (t) {
+    clearTimeout(t);
+    delete clientHoldTimers[key];
+  }
+}
+
+function scheduleClientHoldRecheck(ruleId, delayMs, credentials, token, auth, runOpts) {
+  const key = String(ruleId ?? '');
+  if (clientHoldTimers[key]) return;
+  const wait = Math.max(50, Math.min(Number(delayMs) || 0, 24 * 60 * 60 * 1000));
+  clientHoldTimers[key] = setTimeout(() => {
+    delete clientHoldTimers[key];
+    runAutomationsFromLatest(credentials, token, auth, runOpts).catch((e) => {
+      console.warn('[Automation] hold recheck:', e?.message || e);
+    });
+  }, wait);
+}
 
 let rulesCache = null;
 let rulesCacheAt = 0;
@@ -93,8 +119,14 @@ export const runAutomations = async (devices, deviceProperties, credentials, tok
     // Modo condiciones: sin ventana horaria (evita conflicto horario + IF).
 
     // Check Conditions (All must be true - AND logic)
-    let allConditionsMet = true;
-    for (const cond of effectiveConditions) {
+    const nowMs = Date.now();
+    const rid = rule.id != null ? String(rule.id) : '';
+    let allComparisonsTrue = true;
+    let allHoldsMet = true;
+    let maxRemain = 0;
+
+    for (let cidx = 0; cidx < effectiveConditions.length; cidx++) {
+      const cond = effectiveConditions[cidx];
       const did = cond.deviceId != null ? String(cond.deviceId) : '';
       const props = did ? deviceProperties[did] : null;
       const pk = cond.propKey != null && cond.propKey !== '' ? String(cond.propKey) : '';
@@ -102,25 +134,30 @@ export const runAutomations = async (devices, deviceProperties, credentials, tok
         props && pk
           ? deviceValueForAutomationCondition(props, pk)
           : undefined;
-      if (rawDeviceValue === undefined) {
-        allConditionsMet = false;
-        break;
+      let comparisonTrue = false;
+      if (rawDeviceValue !== undefined) {
+        const deviceValue = resolveAutomationConditionCompareValue(
+          rawDeviceValue,
+          cond,
+          props,
+          widgetConfigsForRules
+        );
+        comparisonTrue = evaluateCondition(deviceValue, cond.operator, cond.value);
       }
-
-      const deviceValue = resolveAutomationConditionCompareValue(
-        rawDeviceValue,
-        cond,
-        props,
-        widgetConfigsForRules
+      if (!comparisonTrue) allComparisonsTrue = false;
+      const hold = applyConditionHold(
+        clientHoldState,
+        `${rid}::${cidx}`,
+        comparisonTrue,
+        conditionHoldMs(cond),
+        nowMs
       );
-
-      if (!evaluateCondition(deviceValue, cond.operator, cond.value)) {
-        allConditionsMet = false;
-        break;
-      }
+      if (!hold.met) allHoldsMet = false;
+      if (hold.remainingMs > 0) maxRemain = Math.max(maxRemain, hold.remainingMs);
     }
 
-    if (!allConditionsMet) {
+    if (!allComparisonsTrue) {
+      clearClientHoldRecheck(rid);
       // One-shot rules must be re-armable once conditions are no longer true.
       if (!rule.allowReactivation) {
         for (let i = 0; i < (rule.actions || []).length; i++) {
@@ -130,6 +167,13 @@ export const runAutomations = async (devices, deviceProperties, credentials, tok
       }
       continue;
     }
+
+    if (!allHoldsMet) {
+      scheduleClientHoldRecheck(rid, maxRemain, credentials, token, auth, runOpts);
+      continue;
+    }
+
+    clearClientHoldRecheck(rid);
 
     // 3. Execute Actions
     for (let i = 0; i < (rule.actions || []).length; i++) {
@@ -236,6 +280,7 @@ const sendWebhookAction = async (action, rule, token) => {
       propKey: c.propKey,
       operator: c.operator,
       value: c.value,
+      holdTime: c.holdTime || c.time || '',
     })),
   };
 

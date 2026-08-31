@@ -197,6 +197,12 @@ body.theme-dark .automations-page .rule-actions .btn-icon {
   font-weight: 500;
 }
 
+.condition-summary .hold {
+  color: var(--text-secondary, #64748b);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
 .join {
   font-size: 0.7rem;
   color: var(--text-secondary);

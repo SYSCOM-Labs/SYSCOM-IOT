@@ -111,3 +111,40 @@ export function evaluateTimeCondition(actual, operator, target, nowMs = Date.now
   if (op === TIME_OPERATOR_LT) return aMs < tMs;
   return false;
 }
+
+/** Vacío = sin espera. `60`, `60s`, `5m`, `0.30`. */
+export function parseHoldDurationMs(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return 0;
+  const ms = parseDurationToMs(s, { userInput: true });
+  return ms != null && ms > 0 ? ms : 0;
+}
+
+export function conditionHoldMs(cond) {
+  if (!cond || typeof cond !== 'object') return 0;
+  return parseHoldDurationMs(cond.holdTime ?? cond.time);
+}
+
+/**
+ * Permanencia: la comparación debe seguir verdadera `holdMs`.
+ * @param {Record<string, number>} store clave → instante en que empezó a cumplirse
+ * @returns {{ met: boolean, remainingMs: number }}
+ */
+export function applyConditionHold(store, key, comparisonTrue, holdMs, nowMs = Date.now()) {
+  if (!store || typeof store !== 'object') {
+    return { met: Boolean(comparisonTrue) && !(Number(holdMs) > 0), remainingMs: 0 };
+  }
+  if (!comparisonTrue) {
+    delete store[key];
+    return { met: false, remainingMs: 0 };
+  }
+  const wait = Number(holdMs) > 0 ? Number(holdMs) : 0;
+  if (!wait) {
+    delete store[key];
+    return { met: true, remainingMs: 0 };
+  }
+  if (store[key] == null) store[key] = nowMs;
+  const remaining = wait - (nowMs - store[key]);
+  if (remaining <= 0) return { met: true, remainingMs: 0 };
+  return { met: false, remainingMs: remaining };
+}

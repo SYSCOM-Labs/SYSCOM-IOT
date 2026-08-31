@@ -7,6 +7,8 @@ const {
   actualValueToDurationMs,
   evaluateTimeCondition,
   isTimeOperator,
+  parseHoldDurationMs,
+  applyConditionHold,
 } = require('../lib/automation-duration.cjs');
 const { __test: { evaluateCondition } } = require('../automation-runner');
 
@@ -34,5 +36,26 @@ describe('automation duration conditions', () => {
     assert.equal(evaluateCondition(90, 'time_gt', '60s'), true);
     assert.equal(evaluateCondition(10, 'time_lt', '0.30'), true);
     assert.equal(evaluateCondition(10, '>', '5'), true);
+  });
+
+  it('parseHoldDurationMs vacío es 0 y 60s son 60 segundos', () => {
+    assert.equal(parseHoldDurationMs(''), 0);
+    assert.equal(parseHoldDurationMs('   '), 0);
+    assert.equal(parseHoldDurationMs('60'), 60000);
+    assert.equal(parseHoldDurationMs('60s'), 60000);
+    assert.equal(parseHoldDurationMs('0.30'), 30000);
+  });
+
+  it('applyConditionHold espera la permanencia y reinicia si deja de cumplirse', () => {
+    const store = {};
+    const t0 = 1_000_000;
+    assert.equal(applyConditionHold(store, 'k', true, 0, t0).met, true);
+    assert.equal(applyConditionHold(store, 'k', true, 60000, t0).met, false);
+    assert.equal(applyConditionHold(store, 'k', true, 60000, t0 + 59999).met, false);
+    assert.equal(applyConditionHold(store, 'k', true, 60000, t0 + 60000).met, true);
+    assert.equal(applyConditionHold(store, 'k', false, 60000, t0 + 70000).met, false);
+    const again = applyConditionHold(store, 'k', true, 60000, t0 + 70001);
+    assert.equal(again.met, false);
+    assert.equal(again.remainingMs, 60000);
   });
 });

@@ -278,6 +278,11 @@ const AutomationsPage = () => {
                           <span className="prop">{c.propName || c.propKey || 'Prop'}</span>{' '}
                           {c.operatorLabel || automationOperatorLabel(c.operator) || '=='}{' '}
                           <span className="val">{c.value ?? '0'}</span>
+                          {String(c.holdTime || c.time || '').trim() ? (
+                            <span className="hold">
+                              {' '}durante {String(c.holdTime || c.time).trim()}
+                            </span>
+                          ) : null}
                         </div>
                       ))
                   )}
