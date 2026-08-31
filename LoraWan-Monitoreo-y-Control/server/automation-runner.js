@@ -10,6 +10,7 @@ const {
   effectiveAutomationConditions,
   resolveAutomationRuleMode,
 } = require('./lib/automation-rule-mode.cjs');
+const { isTimeOperator, evaluateTimeCondition } = require('./lib/automation-duration.cjs');
 const {
   resolveAppTimezone,
   getScheduleClockParts,
@@ -79,6 +80,9 @@ function isTimeInRange(current, start, end) {
 }
 
 function evaluateCondition(actual, operator, target) {
+  if (isTimeOperator(operator)) {
+    return evaluateTimeCondition(actual, operator, target);
+  }
   const a = parseFloat(actual);
   const t = parseFloat(target);
   if (Number.isNaN(a) || Number.isNaN(t)) {

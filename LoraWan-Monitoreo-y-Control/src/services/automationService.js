@@ -12,6 +12,7 @@ import {
   effectiveAutomationConditions,
   resolveAutomationRuleMode,
 } from '../utils/automationRuleMode.js';
+import { isTimeOperator, evaluateTimeCondition } from '../utils/automationDuration.js';
 
 /**
  * Automation Engine
@@ -404,6 +405,9 @@ const isTimeInRange = (current, start, end) => {
 };
 
 const evaluateCondition = (actual, operator, target) => {
+  if (isTimeOperator(operator)) {
+    return evaluateTimeCondition(actual, operator, target);
+  }
   const a = parseFloat(actual);
   const t = parseFloat(target);
   

@@ -13,6 +13,7 @@ import {
   effectiveAutomationConditions,
   isScheduleAutomationRule,
 } from '../utils/automationRuleMode';
+import { automationOperatorLabel } from '../utils/automationDuration';
 import './Automations.css';
 
 const AutomationsPage = () => {
@@ -275,7 +276,7 @@ const AutomationsPage = () => {
                         <div key={i} className="condition-summary">
                           {i > 0 && <span className="join">AND</span>}
                           <span className="prop">{c.propName || c.propKey || 'Prop'}</span>{' '}
-                          {c.operatorLabel || c.operator || '=='}{' '}
+                          {c.operatorLabel || automationOperatorLabel(c.operator) || '=='}{' '}
                           <span className="val">{c.value ?? '0'}</span>
                         </div>
                       ))

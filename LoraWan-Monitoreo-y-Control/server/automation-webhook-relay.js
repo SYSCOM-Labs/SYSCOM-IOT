@@ -2,6 +2,7 @@
 
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const IS_PRODUCTION = NODE_ENV === 'production';
+const { automationOperatorLabel } = require('./lib/automation-duration.cjs');
 
 /**
  * @param {string} urlString
@@ -67,8 +68,7 @@ function formatConditionLine(c) {
   const name = String(c.propName || c.propKey || '—').trim();
   const op = String(c.operator || '==').trim();
   const val = String(c.value != null ? c.value : '—').trim();
-  const opLabel =
-    op === '==' ? 'es igual a' : op === '!=' ? 'distinto de' : op === '>=' ? 'mayor o igual a' : op;
+  const opLabel = c.operatorLabel || automationOperatorLabel(op);
   return `${name} ${opLabel} ${val}`;
 }
 

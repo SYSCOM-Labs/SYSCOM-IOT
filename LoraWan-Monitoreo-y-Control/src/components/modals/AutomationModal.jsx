@@ -13,6 +13,7 @@ import {
   effectiveAutomationConditions,
   resolveAutomationRuleMode,
 } from '../../utils/automationRuleMode';
+import { isTimeOperator, automationOperatorLabel } from '../../utils/automationDuration';
 import './AutomationModal.css';
 
 function normalizeConditionRow(c) {
@@ -28,6 +29,10 @@ function normalizeConditionRow(c) {
     propKey,
     propName: propName || propKey,
     operator: base.operator != null ? String(base.operator) : '==',
+    operatorLabel:
+      base.operatorLabel != null && String(base.operatorLabel).trim()
+        ? String(base.operatorLabel).trim()
+        : automationOperatorLabel(base.operator != null ? String(base.operator) : '=='),
     value: base.value != null ? String(base.value) : '',
     useWidgetValue: Boolean(base.useWidgetValue),
   };
@@ -62,6 +67,7 @@ function defaultConditionRow() {
     propKey: '',
     propName: '',
     operator: '==',
+    operatorLabel: automationOperatorLabel('=='),
     value: '',
     useWidgetValue: false,
   };
@@ -277,6 +283,10 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false })
     const newConditions = [...conditions];
     newConditions[index][field] = value;
     if (field === 'deviceId') { fetchProps(value); newConditions[index].propKey = ''; }
+    if (field === 'operator') {
+      newConditions[index].operator = value;
+      newConditions[index].operatorLabel = automationOperatorLabel(value);
+    }
     if (field === 'propKey') {
       const pk = String(value || '').trim();
       newConditions[index].propKey = pk;
@@ -351,6 +361,7 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false })
       ? []
       : conditions.map((c) => {
           const row = normalizeConditionRow(c);
+          row.operatorLabel = automationOperatorLabel(row.operator);
           if (row.deviceId && row.propKey) {
             const p = findPropertyMeta(deviceProperties[row.deviceId], row.propKey);
             if (p?.name) row.propName = p.name;
@@ -401,7 +412,8 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false })
   const operators = [
     { id: '<', label: 'menor a' }, { id: '<=', label: 'menor o igual a' },
     { id: '==', label: 'igual a' }, { id: '!=', label: 'distinto a' },
-    { id: '>=', label: 'mayor o igual a' }, { id: '>', label: 'mayor a' }
+    { id: '>=', label: 'mayor o igual a' }, { id: '>', label: 'mayor a' },
+    { id: 'time_gt', label: 'tiempo mayor a' }, { id: 'time_lt', label: 'tiempo menor a' },
   ];
 
   if (!isOpen) return null;
@@ -541,7 +553,13 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false })
                       <select value={cond.operator} onChange={e => updateCondition(index, 'operator', e.target.value)} className="field-operator">
                         {operators.map(op => (<option key={op.id} value={op.id}>{op.label}</option>))}
                       </select>
-                      <input type="text" value={cond.value} onChange={e => updateCondition(index, 'value', e.target.value)} placeholder="Valor" className="field-value" />
+                      <input
+                        type="text"
+                        value={cond.value}
+                        onChange={e => updateCondition(index, 'value', e.target.value)}
+                        placeholder={isTimeOperator(cond.operator) ? '60s o 0.30' : 'Valor'}
+                        className="field-value"
+                      />
                     </div>
                     {cond.deviceId && cond.propKey ? (
                       <label className="automation-condition-widget-value">
@@ -562,6 +580,12 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false })
                 <button type="button" className="add-row-btn" onClick={addCondition}>
                   <Plus size={16} /> Agregar condición
                 </button>
+                {conditions.some((c) => isTimeOperator(c.operator)) ? (
+                  <p className="hint-text">
+                    Tiempo mayor/menor: compara la lectura (en segundos) con <code>60s</code>, <code>5m</code> o{' '}
+                    <code>0.30</code> (0 minutos y 30 segundos).
+                  </p>
+                ) : null}
               </div>
             </div>
             ) : null}
