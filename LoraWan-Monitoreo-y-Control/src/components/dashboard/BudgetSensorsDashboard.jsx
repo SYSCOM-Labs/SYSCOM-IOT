@@ -79,6 +79,10 @@ import {
 } from '../../constants/liveRefreshMs';
 import { pushAppActivityLog } from '../../utils/appActivityLog';
 import WidgetEditModal from './WidgetEditModal';
+import {
+  ValueWidgetDateFilterButtons,
+  ValueWidgetDateFilterCustomFields,
+} from './ValueWidgetDateFilter';
 import BsdWindVaneWidget from './BsdWindVaneWidget';
 import BsdSwitchWidgetSlot from './BsdSwitchWidgetSlot';
 import BsdDownlinkWidgetSlot from './BsdDownlinkWidgetSlot';
@@ -124,6 +128,12 @@ import {
   normalizeBarChartGranularity,
   barChartHistoryFetchFromMs,
   BAR_CHART_WIDGET_GRANULARITY_OPTIONS,
+  applyValueDateFilterPreset,
+  normalizeValueDateFilterPreset,
+  isValueDateFilterActive,
+  resolveValueDateFilterWindow,
+  formatValueDateFilterLabel,
+  normalizeValueDateFilterOperation,
   MULTI_INSTANCE_DASH_WIDGETS,
   dashboardWidgetBaseId,
   makeDashboardWidgetCloneId,
@@ -370,6 +380,14 @@ const STREAM_TIME_PRESETS = [
 ];
 
 const STREAM_PRESET_IDS = new Set(STREAM_TIME_PRESETS.map((p) => p.id));
+
+const VALUE_DATE_FILTER_DASH_BASES = [
+  DASH_WIDGET.TEXT,
+  DASH_WIDGET.METRIC_CIRCULAR,
+  DASH_WIDGET.SATISFACTION,
+  DASH_WIDGET.CONTAINER,
+  DASH_WIDGET.BATTERY_LEVEL,
+];
 
 function formatStreamChartLabel(tsMs, presetId) {
   const d = new Date(tsMs);
@@ -1096,6 +1114,77 @@ function applyAggOpToVals(vals, op) {
   if (op === 'sum') return vals.reduce((a, b) => a + b, 0);
   const m = vals.reduce((a, b) => a + b, 0) / vals.length;
   return Number.isFinite(m) ? m : null;
+}
+
+/**
+ * Incremento en el periodo: último − primero. Si el contador se reinicia (delta negativo),
+ * suma solo los tramos positivos (medidores de agua / personas acumuladas).
+ */
+function incrementalTotalFromPoints(points) {
+  if (!Array.isArray(points) || points.length === 0) return null;
+  if (points.length === 1) return 0;
+  const first = points[0].val;
+  const last = points[points.length - 1].val;
+  if (!Number.isFinite(first) || !Number.isFinite(last)) return null;
+  const simple = last - first;
+  if (simple >= 0) return simple;
+  let sum = 0;
+  for (let i = 1; i < points.length; i += 1) {
+    const a = points[i - 1].val;
+    const b = points[i].val;
+    if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
+    const d = b - a;
+    sum += d >= 0 ? d : Math.max(0, b);
+  }
+  return sum;
+}
+
+function aggregateValueDateFilterPoints(points, operation) {
+  const op = normalizeValueDateFilterOperation(operation);
+  if (!Array.isArray(points) || !points.length) return null;
+  if (op === 'delta') return incrementalTotalFromPoints(points);
+  if (op === 'last') {
+    const v = points[points.length - 1]?.val;
+    return Number.isFinite(v) ? v : null;
+  }
+  return applyAggOpToBucketEntries(
+    points.map((p) => ({ ts: p.ts, val: p.val })),
+    op
+  );
+}
+
+function applyDateFilterUiFooter(ui, cfg, agg) {
+  if (!ui || !isValueDateFilterActive(cfg)) return ui;
+  const lastAtLine = agg?.loading
+    ? 'Cargando periodo…'
+    : agg?.error
+      ? String(agg.error)
+      : agg?.label || formatValueDateFilterLabel(cfg);
+  const next = { ...ui, lastAtLine };
+  const hasVal = agg != null && agg.value != null && Number.isFinite(Number(agg.value));
+  if (!agg?.loading && !hasVal) {
+    if (Object.prototype.hasOwnProperty.call(next, 'display')) next.display = '—';
+    if (Object.prototype.hasOwnProperty.call(next, 'hint')) next.hint = 'Sin datos en el periodo';
+  }
+  return next;
+}
+
+/** Si el filtro está activo, sustituye la telemetría en vivo por el agregado del periodo (o vacío). */
+function overlayDateFilterTelemetry(baseTel, cfg, agg) {
+  if (!isValueDateFilterActive(cfg)) return null;
+  const fkRaw = cfg?.data?.fieldKey;
+  const fk = fkRaw != null ? String(fkRaw).trim() : '';
+  const overlay = {
+    lastUpdateTime: baseTel && typeof baseTel === 'object' ? baseTel.lastUpdateTime : undefined,
+  };
+  if (!fk || fk.startsWith('__bsd_')) return overlay;
+  const readFk = telemetryFieldKeyForFormula(cfg, fk);
+  if (agg && agg.value != null && Number.isFinite(Number(agg.value))) {
+    const v = Number(agg.value);
+    if (readFk) overlay[readFk] = v;
+    if (fk) overlay[fk] = v;
+  }
+  return overlay;
 }
 
 /** Puntos por intervalo con marca de tiempo (último evento gana en pulsadores / estados). */
@@ -2426,6 +2515,11 @@ export default function BudgetSensorsDashboard({
   /** Último escalar por `deviceId|fieldKey` desde SQLite cuando el uplink en vivo no trae el campo. */
   const [dbScalarByDeviceField, setDbScalarByDeviceField] = useState({});
   const dbScalarFetchGenRef = useRef(0);
+  /** Agregado del filtro por fechas en widgets de valor (`storageKey` → { value, label, error, loading }). */
+  const [dateFilterAggByKey, setDateFilterAggByKey] = useState({});
+  const [dateFilterEpoch, setDateFilterEpoch] = useState(0);
+  const [dateFilterCustomSlotId, setDateFilterCustomSlotId] = useState(null);
+  const [dateFilterCustomDraft, setDateFilterCustomDraft] = useState({ from: '', to: '' });
   const telemetryLiveProps = useMemo(() => {
     const deviceKey =
       variant === 'device' && dashDeviceId != null && String(dashDeviceId).trim().length
@@ -3452,15 +3546,21 @@ export default function BudgetSensorsDashboard({
         const pk = s.propertyKey;
         const ak = `${sid}|${pk}`;
         const cfg = widgetConfigs[configKeyForSensor(s)];
-        if (!sid || sid === 'demo' || !cfg || cfg.timeframe?.mode !== 'interval' || !cfg.timeframe?.operation) {
+        if (!sid || sid === 'demo' || !cfg) {
           continue;
         }
+        const dateWin = resolveValueDateFilterWindow(cfg, Date.now());
+        const intervalOn =
+          cfg.timeframe?.mode === 'interval' && Boolean(cfg.timeframe?.operation);
+        if (!dateWin && !intervalOn) continue;
         const now = Date.now();
-        const fromMs = parseRelativeTime(cfg.timeframe.from, now, 'from') ?? now - 86400000;
-        const toMs = parseRelativeTime(cfg.timeframe.to, now, 'to') ?? now;
+        const fromMs = dateWin
+          ? dateWin.fromMs
+          : parseRelativeTime(cfg.timeframe.from, now, 'from') ?? now - 86400000;
+        const toMs = dateWin ? dateWin.toMs : parseRelativeTime(cfg.timeframe.to, now, 'to') ?? now;
         try {
-          const rows = await queryTelemetry(sid, pk, fromMs, toMs);
           const field = cfg.data?.fieldKey || pk;
+          const rows = await queryTelemetry(sid, field || pk, fromMs, toMs, 4000);
           const points = telemetryValuePoints(rows, field, cfg);
           if (!points.length) {
             next[ak] = null;
@@ -3468,6 +3568,11 @@ export default function BudgetSensorsDashboard({
             continue;
           }
           const op = cfg.timeframe.operation;
+          if (dateWin || op === 'delta') {
+            next[ak] = aggregateValueDateFilterPoints(points, op);
+            nextSeries[ak] = [];
+            continue;
+          }
           const gran = cfg.timeframe.granularity || '';
           const { aggregate, series } = aggregateHistoryFromPoints(points, gran, op, field);
           next[ak] = aggregate;
@@ -3485,7 +3590,7 @@ export default function BudgetSensorsDashboard({
     return () => {
       cancelled = true;
     };
-  }, [sensors, widgetConfigs, configKeyForSensor, variant, panelLoading]);
+  }, [sensors, widgetConfigs, configKeyForSensor, variant, panelLoading, dateFilterEpoch]);
 
   useEffect(() => {
     if (variant !== 'panel') return;
@@ -3845,17 +3950,19 @@ export default function BudgetSensorsDashboard({
     const out = {};
     for (const slotId of dashWidgetSlotIds(DASH_WIDGET.SATISFACTION)) {
       const cfg = widgetConfigs[dk(slotId)];
+      const baseTel = telemetryLivePropsForPanelWidget(slotId);
+      const tel = overlayDateFilterTelemetry(baseTel, cfg, dateFilterAggByKey[dk(slotId)]) || baseTel;
       let ui = computeSatisfactionRingUi(
         cfg,
-        telemetryLivePropsForPanelWidget(slotId),
+        tel,
         resolveLiveDeviceModelForPanelWidget(slotId),
         resolveTelemetryHintsForPanelWidget(slotId)
       );
-      if (ui.rawValue == null && slotId === DASH_WIDGET.SATISFACTION) {
+      if (ui.rawValue == null && slotId === DASH_WIDGET.SATISFACTION && !isValueDateFilterActive(cfg)) {
         const fallback = satisfactionPct;
         ui = { ...ui, ringPct: fallback, centerLabel: `${fallback}%` };
       }
-      out[slotId] = ui;
+      out[slotId] = applyDateFilterUiFooter(ui, cfg, dateFilterAggByKey[dk(slotId)]);
     }
     return out;
   }, [
@@ -3866,17 +3973,22 @@ export default function BudgetSensorsDashboard({
     telemetryLivePropsForPanelWidget,
     resolveLiveDeviceModelForPanelWidget,
     resolveTelemetryHintsForPanelWidget,
+    dateFilterAggByKey,
   ]);
 
   const containerUiBySlot = useMemo(() => {
     const out = {};
     for (const slotId of dashWidgetSlotIds(DASH_WIDGET.CONTAINER)) {
-      out[slotId] = computeContainerTankUi(
-        widgetConfigs[dk(slotId)],
-        telemetryLivePropsForPanelWidget(slotId),
+      const cfg = widgetConfigs[dk(slotId)];
+      const baseTel = telemetryLivePropsForPanelWidget(slotId);
+      const tel = overlayDateFilterTelemetry(baseTel, cfg, dateFilterAggByKey[dk(slotId)]) || baseTel;
+      const ui = computeContainerTankUi(
+        cfg,
+        tel,
         resolveLiveDeviceModelForPanelWidget(slotId),
         resolveTelemetryHintsForPanelWidget(slotId)
       );
+      out[slotId] = applyDateFilterUiFooter(ui, cfg, dateFilterAggByKey[dk(slotId)]);
     }
     return out;
   }, [
@@ -3886,17 +3998,22 @@ export default function BudgetSensorsDashboard({
     telemetryLivePropsForPanelWidget,
     resolveLiveDeviceModelForPanelWidget,
     resolveTelemetryHintsForPanelWidget,
+    dateFilterAggByKey,
   ]);
 
   const batteryLevelUiBySlot = useMemo(() => {
     const out = {};
     for (const slotId of dashWidgetSlotIds(DASH_WIDGET.BATTERY_LEVEL)) {
-      out[slotId] = computeBatteryLevelUi(
-        widgetConfigs[dk(slotId)],
-        telemetryLivePropsForPanelWidget(slotId),
+      const cfg = widgetConfigs[dk(slotId)];
+      const baseTel = telemetryLivePropsForPanelWidget(slotId);
+      const tel = overlayDateFilterTelemetry(baseTel, cfg, dateFilterAggByKey[dk(slotId)]) || baseTel;
+      const ui = computeBatteryLevelUi(
+        cfg,
+        tel,
         resolveLiveDeviceModelForPanelWidget(slotId),
         resolveTelemetryHintsForPanelWidget(slotId)
       );
+      out[slotId] = applyDateFilterUiFooter(ui, cfg, dateFilterAggByKey[dk(slotId)]);
     }
     return out;
   }, [
@@ -3906,6 +4023,7 @@ export default function BudgetSensorsDashboard({
     telemetryLivePropsForPanelWidget,
     resolveLiveDeviceModelForPanelWidget,
     resolveTelemetryHintsForPanelWidget,
+    dateFilterAggByKey,
   ]);
 
   const imageUrlBySlot = useMemo(() => {
@@ -3956,6 +4074,13 @@ export default function BudgetSensorsDashboard({
         variant === 'device'
           ? device?.deviceId
           : resolveWidgetBoundDeviceId(wid) || controlDeviceId;
+      if (isValueDateFilterActive(cfg) && fk && !fk.startsWith('__bsd_')) {
+        return (
+          overlayDateFilterTelemetry(baseTel, cfg, dateFilterAggByKey[configKey]) || {
+            lastUpdateTime: baseTel && typeof baseTel === 'object' ? baseTel.lastUpdateTime : undefined,
+          }
+        );
+      }
       return enrichTelemetryWithDbFallback(
         baseTel,
         devId,
@@ -3973,6 +4098,7 @@ export default function BudgetSensorsDashboard({
       dk,
       dbScalarByDeviceField,
       resolveWidgetBoundDeviceId,
+      dateFilterAggByKey,
     ]
   );
 
@@ -4044,18 +4170,88 @@ export default function BudgetSensorsDashboard({
     resolveWidgetBoundDeviceId,
   ]);
 
+  useEffect(() => {
+    const t = window.setInterval(() => setDateFilterEpoch((n) => n + 1), DASH_CHART_HISTORY_POLL_MS);
+    return () => window.clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    if (variant === 'panel' && panelLoading) return undefined;
+    let cancelled = false;
+    (async () => {
+      const next = {};
+      const jobs = [];
+      for (const baseId of VALUE_DATE_FILTER_DASH_BASES) {
+        for (const slotId of dashWidgetSlotIds(baseId)) {
+          const configKey = dk(slotId);
+          const cfg = widgetConfigs[configKey];
+          if (!isValueDateFilterActive(cfg)) continue;
+          const win = resolveValueDateFilterWindow(cfg, Date.now());
+          if (!win) continue;
+          const fkRaw = cfg?.data?.fieldKey;
+          const fk = fkRaw != null ? String(fkRaw).trim() : '';
+          const field = telemetryFieldKeyForFormula(cfg, fk);
+          if (!field || field.startsWith('__bsd_')) continue;
+          const sid =
+            variant === 'device'
+              ? device?.deviceId
+              : resolveWidgetBoundDeviceId(slotId) || controlDeviceId;
+          if (!sid || String(sid) === 'demo') continue;
+          jobs.push({ configKey, cfg, win, field, sid });
+        }
+      }
+      await Promise.all(
+        jobs.map(async (job) => {
+          const label = formatValueDateFilterLabel(job.cfg, Date.now());
+          try {
+            const rows = await queryTelemetry(job.sid, job.field, job.win.fromMs, job.win.toMs, 4000);
+            if (cancelled) return;
+            const points = telemetryValuePoints(rows, job.field, job.cfg);
+            const value = aggregateValueDateFilterPoints(points, job.cfg.timeframe?.operation);
+            next[job.configKey] = { value, label, error: null, loading: false };
+          } catch (e) {
+            next[job.configKey] = {
+              value: null,
+              label,
+              error: e?.message ? String(e.message) : 'No se pudo cargar el periodo',
+              loading: false,
+            };
+          }
+        })
+      );
+      if (!cancelled) setDateFilterAggByKey(next);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    variant,
+    panelLoading,
+    device?.deviceId,
+    controlDeviceId,
+    widgetConfigs,
+    dk,
+    dashWidgetSlotIds,
+    resolveWidgetBoundDeviceId,
+    dateFilterEpoch,
+  ]);
+
   /** Medidor semicircular por celda del grid (`dw_metric_circular` o `dw_metric_circular__…`). */
   const metricCircularUiBySlot = useMemo(() => {
     const out = {};
     for (const slotId of metricCircularDashSlotIds) {
       const tel = enrichTelemetryForValueWidget(telemetryLivePropsForPanelWidget(slotId), slotId);
-      out[slotId] = computeMetricCircularUiForSlot(
-        dk,
-        widgetConfigs,
-        slotId,
-        tel,
-        resolveLiveDeviceModelForPanelWidget(slotId),
-        resolveTelemetryHintsForPanelWidget(slotId)
+      out[slotId] = applyDateFilterUiFooter(
+        computeMetricCircularUiForSlot(
+          dk,
+          widgetConfigs,
+          slotId,
+          tel,
+          resolveLiveDeviceModelForPanelWidget(slotId),
+          resolveTelemetryHintsForPanelWidget(slotId)
+        ),
+        widgetConfigs[dk(slotId)],
+        dateFilterAggByKey[dk(slotId)]
       );
     }
     return out;
@@ -4067,6 +4263,7 @@ export default function BudgetSensorsDashboard({
     enrichTelemetryForValueWidget,
     resolveLiveDeviceModelForPanelWidget,
     resolveTelemetryHintsForPanelWidget,
+    dateFilterAggByKey,
   ]);
 
   /** Texto por celda del grid. */
@@ -4077,6 +4274,8 @@ export default function BudgetSensorsDashboard({
       const configKey = dk(slotId);
       const fkRaw = widgetConfigs[configKey]?.data?.fieldKey;
       const fkStr = fkRaw != null ? String(fkRaw).trim() : '';
+      const cfg = widgetConfigs[configKey];
+      const filterOn = isValueDateFilterActive(cfg);
       const tel = enrichTelemetryForValueWidget(telemetryLivePropsForPanelWidget(slotId), slotId);
       let ui = computeTextWidgetUiForSlot(
         dk,
@@ -4086,28 +4285,30 @@ export default function BudgetSensorsDashboard({
         resolveLiveDeviceModelForPanelWidget(slotId),
         resolveTelemetryHintsForPanelWidget(slotId)
       );
-      const noLive =
-        fkStr &&
-        !fkStr.startsWith('__bsd_') &&
-        (ui.display === '—' || ui.hint === 'Sin dato en vivo');
-      if (noLive) {
-        const prev = stickyText[configKey];
-        if (prev && prev.fkStr === fkStr && prev.display && prev.display !== '—') {
-          ui = {
-            ...ui,
-            display: prev.display,
-            hint:
-              fkStr && (!prev.hint || prev.hint === 'Sin dato en vivo')
-                ? `Último estatus · ${fkStr}`
-                : prev.hint && prev.hint !== 'Sin dato en vivo'
-                  ? prev.hint
-                  : fkStr || 'Último estatus',
-          };
+      if (!filterOn) {
+        const noLive =
+          fkStr &&
+          !fkStr.startsWith('__bsd_') &&
+          (ui.display === '—' || ui.hint === 'Sin dato en vivo');
+        if (noLive) {
+          const prev = stickyText[configKey];
+          if (prev && prev.fkStr === fkStr && prev.display && prev.display !== '—') {
+            ui = {
+              ...ui,
+              display: prev.display,
+              hint:
+                fkStr && (!prev.hint || prev.hint === 'Sin dato en vivo')
+                  ? `Último estatus · ${fkStr}`
+                  : prev.hint && prev.hint !== 'Sin dato en vivo'
+                    ? prev.hint
+                    : fkStr || 'Último estatus',
+            };
+          }
+        } else if (fkStr && !fkStr.startsWith('__bsd_') && ui.display && ui.display !== '—') {
+          stickyText[configKey] = { fkStr, display: ui.display, hint: ui.hint };
         }
-      } else if (fkStr && !fkStr.startsWith('__bsd_') && ui.display && ui.display !== '—') {
-        stickyText[configKey] = { fkStr, display: ui.display, hint: ui.hint };
       }
-      out[slotId] = ui;
+      out[slotId] = applyDateFilterUiFooter(ui, cfg, dateFilterAggByKey[configKey]);
     }
     return out;
   }, [
@@ -4122,6 +4323,7 @@ export default function BudgetSensorsDashboard({
     dbScalarByDeviceField,
     resolveLiveDeviceModelForPanelWidget,
     resolveTelemetryHintsForPanelWidget,
+    dateFilterAggByKey,
   ]);
 
   const veletaWidgetUiBySlot = useMemo(() => {
@@ -5528,6 +5730,58 @@ export default function BudgetSensorsDashboard({
     setWidgetConfigs(loadAllWidgetConfigs());
   }, [dk]);
 
+  const applyValueDateFilter = useCallback(
+    (slotId, preset, customPatch) => {
+      const k = dk(slotId);
+      const prev = widgetConfigsRef.current[k];
+      const draft = mergeWidgetConfig(dashboardWidgetSensorStub(slotId), prev || {});
+      if (customPatch && typeof customPatch === 'object') {
+        draft.timeframe = { ...(draft.timeframe || {}) };
+        if (customPatch.from != null) draft.timeframe.customFrom = customPatch.from;
+        if (customPatch.to != null) draft.timeframe.customTo = customPatch.to;
+      }
+      applyValueDateFilterPreset(draft, preset);
+      saveWidgetConfig(k, draft);
+      scheduleBsdServerPersistRef.current?.();
+      setWidgetConfigs(loadAllWidgetConfigs());
+      if (preset === 'custom') {
+        setDateFilterCustomSlotId(slotId);
+        setDateFilterCustomDraft({
+          from: String(draft.timeframe?.customFrom || ''),
+          to: String(draft.timeframe?.customTo || ''),
+        });
+      } else {
+        setDateFilterCustomSlotId((cur) => (cur === slotId ? null : cur));
+      }
+    },
+    [dk]
+  );
+
+  const valueDateFilterBar = (slotId) => {
+    const cfg = widgetConfigs[dk(slotId)];
+    const preset = normalizeValueDateFilterPreset(cfg?.timeframe?.filterPreset);
+    return (
+      <>
+        <ValueWidgetDateFilterButtons
+          variant="widget"
+          activePreset={preset}
+          onSelect={(id) => applyValueDateFilter(slotId, id)}
+        />
+        {preset === 'custom' && dateFilterCustomSlotId === slotId ? (
+          <ValueWidgetDateFilterCustomFields
+            compact
+            showApply
+            customFrom={dateFilterCustomDraft.from}
+            customTo={dateFilterCustomDraft.to}
+            onChangeFrom={(v) => setDateFilterCustomDraft((d) => ({ ...d, from: v }))}
+            onChangeTo={(v) => setDateFilterCustomDraft((d) => ({ ...d, to: v }))}
+            onApply={() => applyValueDateFilter(slotId, 'custom', dateFilterCustomDraft)}
+          />
+        ) : null}
+      </>
+    );
+  };
+
   const applyBarChartGranularity = useCallback((slotId, gran) => {
     const k = dk(slotId);
     const prev = widgetConfigs[k];
@@ -6721,7 +6975,7 @@ export default function BudgetSensorsDashboard({
               return (
           <div key={slotId} {...mergeShell(slotId, 'widget bsd-widget-editable bsd-circular-widget')}>
             {dashWidgetChrome(slotId, (e) => { e.stopPropagation(); openDashWidgetEdit(slotId, () => ({ id: 0, name: 'Circular', value: satisfactionUi?.rawValue != null ? satisfactionUi.rawValue : satisfactionUi?.ringPct ?? 0, unit: '%', icon: '◎', threshold: 100, propertyKey: `__bsd_${slotId}`, sourceDeviceId: 'dashboard' })); })}
-            <div className="widget-header"><div className="widget-title" style={wTitleStyle(slotId)}><span>◎</span> {wTitle(slotId, 'Circular')}</div></div>
+            <div className="widget-header bsd-value-date-filter-header"><div className="widget-title" style={wTitleStyle(slotId)}><span>◎</span> {wTitle(slotId, 'Circular')}</div>{valueDateFilterBar(slotId)}</div>
             <div className="bsd-circular-gauge">
               <svg className="bsd-circular-gauge__svg" viewBox="0 0 200 200" width="100%" height="100%" aria-hidden>
                 <defs><linearGradient id={`bsd-circ-grad-${slotGradId}`} x1="28%" y1="12%" x2="72%" y2="92%"><stop offset="0%" stopColor="#ff9a8b" /><stop offset="45%" stopColor="#ff7b7a" /><stop offset="100%" stopColor="#ff5569" /></linearGradient></defs>
@@ -6745,7 +6999,7 @@ export default function BudgetSensorsDashboard({
               return (
           <div key={slotId} {...mergeShell(slotId, 'widget bsd-widget-editable')}>
             {dashWidgetChrome(slotId, (e) => { e.stopPropagation(); openDashWidgetEdit(slotId, () => ({ id: 0, name: 'Contenedor', value: containerUi?.rawValue != null ? containerUi.rawValue : containerUi?.ringPct ?? 0, unit: '%', icon: '🛢', threshold: 100, propertyKey: `__bsd_${slotId}`, sourceDeviceId: 'dashboard' })); })}
-            <div className="widget-header"><div className="widget-title" style={wTitleStyle(slotId)}><span aria-hidden>🛢</span> {wTitle(slotId, 'Contenedor')}</div></div>
+            <div className="widget-header bsd-value-date-filter-header"><div className="widget-title" style={wTitleStyle(slotId)}><span aria-hidden>🛢</span> {wTitle(slotId, 'Contenedor')}</div>{valueDateFilterBar(slotId)}</div>
             <BsdContainerTankView fillPct={containerUi?.ringPct ?? 0} fillColor={containerLiquidColor} centerLabel={containerUi?.centerLabel ?? '—'} lastAtLine={containerUi?.lastAtLine} titleColor={wTitleStyle(slotId)?.color} />
           </div>
               );
@@ -6808,10 +7062,11 @@ export default function BudgetSensorsDashboard({
                       sourceDeviceId: 'dashboard',
                     }));
                   })}
-                  <div className="widget-header">
+                  <div className="widget-header bsd-value-date-filter-header">
                     <div className="widget-title" style={wTitleStyle(slotId)}>
                       <span aria-hidden>◔</span> {wTitle(slotId, 'Métrica circular')}
                     </div>
+                    {valueDateFilterBar(slotId)}
                   </div>
                   <div className="bsd-metric-circular">
                     <div className="bsd-metric-circular__chart">
@@ -6967,11 +7222,12 @@ export default function BudgetSensorsDashboard({
                       sourceDeviceId: 'dashboard',
                     }));
                   })}
-                  <div className="widget-header bsd-text-widget__header">
+                  <div className="widget-header bsd-text-widget__header bsd-value-date-filter-header">
                     <div className="widget-title bsd-text-widget__title" style={wTitleStyle(slotId)}>
                       <BsdTextWidgetSignalIcon className="bsd-text-widget__title-icon" />
                       {wTitle(slotId, 'Texto')}
                     </div>
+                    {valueDateFilterBar(slotId)}
                   </div>
                   <div className="bsd-text-widget__body">
                     <div className="bsd-text-widget__value">{tw?.display}</div>
@@ -7124,8 +7380,9 @@ export default function BudgetSensorsDashboard({
             const cardTitle = cfg?.basics?.title || sensor.name;
             const titleColor = cfg?.appearance?.titleColor || '#f97316';
             const gran = cfg?.timeframe?.granularity;
-            const subtitleBase =
-              cfg?.timeframe?.mode === 'interval'
+            const subtitleBase = isValueDateFilterActive(cfg)
+              ? formatValueDateFilterLabel(cfg)
+              : cfg?.timeframe?.mode === 'interval'
                 ? gran
                   ? `Historial (${gran})`
                   : 'Intervalo'

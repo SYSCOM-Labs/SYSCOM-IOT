@@ -792,6 +792,169 @@ function startOfLocalDayMs(nowMs) {
   return d.getTime();
 }
 
+/** Lunes 00:00 local de la semana que contiene `nowMs`. */
+function startOfLocalWeekMondayMs(nowMs) {
+  const d = new Date(nowMs);
+  d.setHours(0, 0, 0, 0);
+  const day = d.getDay();
+  const diff = day === 0 ? 6 : day - 1;
+  d.setDate(d.getDate() - diff);
+  return d.getTime();
+}
+
+/** Día 1 del mes, 00:00 local. */
+function startOfLocalMonthMs(nowMs) {
+  const d = new Date(nowMs);
+  d.setDate(1);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/** Presets del filtro por fechas en widgets de valor (conteo, consumo, etc.). */
+export const VALUE_DATE_FILTER_PRESETS = [
+  { id: 'live', label: 'En vivo' },
+  { id: 'day', label: 'Día' },
+  { id: 'week', label: 'Semana' },
+  { id: 'month', label: 'Mes' },
+  { id: 'custom', label: 'Personalizado' },
+];
+
+export const VALUE_DATE_FILTER_OPERATIONS = [
+  { value: 'sum', label: 'Suma (eventos / pulsos)' },
+  { value: 'delta', label: 'Incremento (acumulado)' },
+  { value: 'avg', label: 'Promedio' },
+  { value: 'min', label: 'Mínimo' },
+  { value: 'max', label: 'Máximo' },
+];
+
+export function normalizeValueDateFilterPreset(raw) {
+  const s = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  if (s === 'day' || s === 'week' || s === 'month' || s === 'custom') return s;
+  return 'live';
+}
+
+export function normalizeValueDateFilterOperation(raw) {
+  const s = String(raw ?? '')
+    .trim()
+    .toLowerCase();
+  if (s === 'sum' || s === 'delta' || s === 'avg' || s === 'min' || s === 'max' || s === 'last') return s;
+  return 'sum';
+}
+
+/** `datetime-local` (hora local, sin zona). */
+export function msToDatetimeLocalValue(ms) {
+  if (!Number.isFinite(Number(ms))) return '';
+  const d = new Date(Number(ms));
+  if (!Number.isFinite(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+export function datetimeLocalValueToMs(str) {
+  const s = String(str || '').trim();
+  if (!s) return null;
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? t : null;
+}
+
+export function isValueDateFilterActive(cfg) {
+  return normalizeValueDateFilterPreset(cfg?.timeframe?.filterPreset) !== 'live';
+}
+
+/**
+ * Ventana [fromMs, toMs] según el filtro por fechas. Día/semana/mes son calendarios locales (no rolling).
+ * @returns {{ fromMs: number, toMs: number, preset: string } | null}
+ */
+export function resolveValueDateFilterWindow(cfg, nowMs = Date.now()) {
+  const p = normalizeValueDateFilterPreset(cfg?.timeframe?.filterPreset);
+  if (p === 'live') return null;
+  let fromMs;
+  let toMs = Number(nowMs);
+  if (p === 'day') {
+    fromMs = startOfLocalDayMs(nowMs);
+  } else if (p === 'week') {
+    fromMs = startOfLocalWeekMondayMs(nowMs);
+  } else if (p === 'month') {
+    fromMs = startOfLocalMonthMs(nowMs);
+  } else if (p === 'custom') {
+    fromMs = datetimeLocalValueToMs(cfg?.timeframe?.customFrom);
+    const customTo = datetimeLocalValueToMs(cfg?.timeframe?.customTo);
+    if (customTo != null) toMs = customTo;
+    if (fromMs == null) {
+      fromMs = parseRelativeTime(cfg?.timeframe?.from, nowMs, 'from');
+    }
+    if (customTo == null) {
+      const parsedTo = parseRelativeTime(cfg?.timeframe?.to, nowMs, 'to');
+      if (parsedTo != null) toMs = parsedTo;
+    }
+  }
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs)) return null;
+  if (toMs < fromMs) {
+    const tmp = fromMs;
+    fromMs = toMs;
+    toMs = tmp;
+  }
+  return { fromMs, toMs, preset: p };
+}
+
+export function formatValueDateFilterLabel(cfg, nowMs = Date.now()) {
+  const win = resolveValueDateFilterWindow(cfg, nowMs);
+  if (!win) return 'En vivo';
+  const names = { day: 'Hoy', week: 'Esta semana', month: 'Este mes', custom: 'Personalizado' };
+  const opts = { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' };
+  try {
+    const a = new Date(win.fromMs).toLocaleString(undefined, opts);
+    const b = new Date(win.toMs).toLocaleString(undefined, opts);
+    return `${names[win.preset] || 'Periodo'} · ${a} → ${b}`;
+  } catch {
+    return names[win.preset] || 'Periodo';
+  }
+}
+
+/**
+ * Activa el filtro por fechas y rellena `timeframe` (modo intervalo, operación suma por defecto).
+ * @param {Record<string, unknown>} draft
+ * @param {string} preset
+ * @param {number} [nowMs]
+ */
+export function applyValueDateFilterPreset(draft, preset, nowMs = Date.now()) {
+  draft.timeframe = draft.timeframe && typeof draft.timeframe === 'object' ? draft.timeframe : {};
+  const p = normalizeValueDateFilterPreset(preset);
+  draft.timeframe.filterPreset = p;
+  if (p === 'live') {
+    draft.timeframe.mode = 'current';
+    return;
+  }
+  draft.timeframe.mode = 'interval';
+  draft.timeframe.granularity = '';
+  if (!draft.timeframe.operation || draft.timeframe.operation === '') {
+    draft.timeframe.operation = 'sum';
+  }
+  if (p === 'day') {
+    draft.timeframe.from = 'hoy';
+    draft.timeframe.to = 'now';
+  } else if (p === 'week') {
+    draft.timeframe.from = 'esta semana';
+    draft.timeframe.to = 'now';
+  } else if (p === 'month') {
+    draft.timeframe.from = 'este mes';
+    draft.timeframe.to = 'now';
+  } else if (p === 'custom') {
+    if (!String(draft.timeframe.customFrom || '').trim()) {
+      draft.timeframe.customFrom = msToDatetimeLocalValue(startOfLocalDayMs(nowMs));
+    }
+    if (!String(draft.timeframe.customTo || '').trim()) {
+      draft.timeframe.customTo = msToDatetimeLocalValue(nowMs);
+    }
+    const fromMs = datetimeLocalValueToMs(draft.timeframe.customFrom) ?? startOfLocalDayMs(nowMs);
+    const toMs = datetimeLocalValueToMs(draft.timeframe.customTo) ?? nowMs;
+    draft.timeframe.from = new Date(fromMs).toISOString();
+    draft.timeframe.to = new Date(toMs).toISOString();
+  }
+}
+
 /**
  * @param {number} value
  * @param {Array<{ value: number; color?: string }>} ranges sorted optional
@@ -1746,6 +1909,14 @@ export function parseRelativeTime(str, nowMs, role = 'auto') {
   if (s === 'hoy' || s === 'today') {
     if (role === 'to') return nowMs;
     return startOfLocalDayMs(nowMs);
+  }
+  if (s === 'esta semana' || s === 'this week') {
+    if (role === 'to') return nowMs;
+    return startOfLocalWeekMondayMs(nowMs);
+  }
+  if (s === 'este mes' || s === 'this month') {
+    if (role === 'to') return nowMs;
+    return startOfLocalMonthMs(nowMs);
   }
   if (s === 'ayer' || s === 'yesterday') {
     return startOfLocalDayMs(nowMs) - 86400000;

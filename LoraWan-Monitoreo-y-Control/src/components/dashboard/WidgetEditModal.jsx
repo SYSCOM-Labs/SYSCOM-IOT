@@ -28,6 +28,9 @@ import {
   BAR_CHART_WIDGET_GRANULARITY_OPTIONS,
   applyHistoryGranularityPreset,
   normalizeBarChartGranularity,
+  applyValueDateFilterPreset,
+  normalizeValueDateFilterPreset,
+  formatValueDateFilterLabel,
   normalizeStreamSeriesConfig,
   resolveTextWidgetRawScalar,
   dashboardWidgetBaseId,
@@ -45,6 +48,11 @@ import {
 import { fetchDeviceProperties } from '../../services/api';
 import './WidgetEditModal.css';
 import { applyWidgetFormula, transformWidgetNumeric } from '../../utils/widgetFormula';
+import {
+  ValueWidgetDateFilterButtons,
+  ValueWidgetDateFilterCustomFields,
+  ValueWidgetDateFilterOperationSelect,
+} from './ValueWidgetDateFilter';
 import BsdWindVaneWidget from './BsdWindVaneWidget';
 import BsdRealisticSwitch from './BsdRealisticSwitch';
 import { pickSwitchToggleKey, readSwitchOnFromTelemetry } from './switchWidgetUi';
@@ -1887,6 +1895,18 @@ export default function WidgetEditModal({
 
   const showTrackingMapDataSection = previewBaseDashId === DASH_WIDGET.TRACKING_MAP;
 
+  const showDateFilterSection =
+    editScope === 'value' &&
+    !showDownlinkDataSection &&
+    !showStreamDataSection &&
+    !showBarChartSection &&
+    !showImageDataSection &&
+    !showMapDataSection &&
+    !showTrackingMapDataSection &&
+    !showVeletaWidgetSection;
+
+  const dateFilterPreset = normalizeValueDateFilterPreset(draft.timeframe?.filterPreset);
+
   const hideGaugeForWidget =
     showDownlinkDataSection ||
     showStreamDataSection ||
@@ -2099,9 +2119,20 @@ export default function WidgetEditModal({
   ]);
 
   const previewSensorSubtitle = useMemo(() => {
+    if (normalizeValueDateFilterPreset(draft.timeframe?.filterPreset) !== 'live') {
+      return formatValueDateFilterLabel(draft);
+    }
     const gran = draft.timeframe?.granularity;
     return draft.timeframe?.mode === 'interval' ? (gran ? `Historial (${gran})` : 'Intervalo') : 'En vivo';
-  }, [draft.timeframe?.mode, draft.timeframe?.granularity]);
+  }, [
+    draft.timeframe?.mode,
+    draft.timeframe?.granularity,
+    draft.timeframe?.filterPreset,
+    draft.timeframe?.customFrom,
+    draft.timeframe?.customTo,
+    draft.timeframe?.from,
+    draft.timeframe?.to,
+  ]);
 
   const modalTextWidgetUi = useMemo(
     () => computeModalTextWidgetUi(previewMergedLiveProps, draft, previewLiveDeviceModel, previewTelemetryHints),
@@ -3003,6 +3034,64 @@ export default function WidgetEditModal({
                       </label>
                     </>
                   )}
+                  {showDateFilterSection ? (
+                    <div className="widget-edit-date-filter">
+                      <div className="widget-edit-label">Filtro por fechas</div>
+                      <p className="widget-edit-hint">
+                        Calcula el valor con la telemetría del periodo: útil para conteo de personas, consumo de agua o
+                        electricidad. <strong>Día</strong> = desde las 00:00 de hoy; <strong>Semana</strong> = desde el
+                        lunes; <strong>Mes</strong> = desde el día 1. <strong>Personalizado</strong> permite elegir día y
+                        hora de inicio y fin.
+                      </p>
+                      <ValueWidgetDateFilterButtons
+                        activePreset={dateFilterPreset}
+                        onSelect={(id) => {
+                          setDraft((d) => {
+                            const next = deepClone(d);
+                            applyValueDateFilterPreset(next, id);
+                            return next;
+                          });
+                        }}
+                      />
+                      {dateFilterPreset !== 'live' ? (
+                        <>
+                          <ValueWidgetDateFilterOperationSelect
+                            value={draft.timeframe?.operation}
+                            onChange={(v) => update('timeframe.operation', v)}
+                          />
+                          <p className="widget-edit-hint">
+                            <strong>Suma</strong> para pulsos o eventos (entradas, litros por envío).{' '}
+                            <strong>Incremento</strong> para medidores acumulativos (último valor − primero del periodo).
+                          </p>
+                        </>
+                      ) : null}
+                      {dateFilterPreset === 'custom' ? (
+                        <ValueWidgetDateFilterCustomFields
+                          customFrom={draft.timeframe?.customFrom || ''}
+                          customTo={draft.timeframe?.customTo || ''}
+                          onChangeFrom={(v) => {
+                            setDraft((d) => {
+                              const next = deepClone(d);
+                              next.timeframe = { ...(next.timeframe || {}), customFrom: v };
+                              applyValueDateFilterPreset(next, 'custom');
+                              return next;
+                            });
+                          }}
+                          onChangeTo={(v) => {
+                            setDraft((d) => {
+                              const next = deepClone(d);
+                              next.timeframe = { ...(next.timeframe || {}), customTo: v };
+                              applyValueDateFilterPreset(next, 'custom');
+                              return next;
+                            });
+                          }}
+                        />
+                      ) : null}
+                      {dateFilterPreset !== 'live' ? (
+                        <p className="widget-edit-hint">{formatValueDateFilterLabel(draft)}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {previewBaseDashId === DASH_WIDGET.BAR_CHART && (
                     <>
                       <p className="widget-edit-hint">
@@ -3443,7 +3532,8 @@ export default function WidgetEditModal({
                 Operadores: <code>*</code> <code>/</code> <code>+</code> <code>-</code> y paréntesis; también{' '}
                 <code>×</code> y <code>÷</code>. Puede omitir «Valor» al inicio: <code>/10</code> equivale a{' '}
                 <code>(Valor)/10</code>. Ejemplos: <code>(Valor) / 1000</code>, <code>(127×10×5) / 1000</code>. Puede
-                terminar en <code>=</code>.
+                terminar en <code>=</code>. Si activó un filtro por fechas en <strong>Datos</strong>, la fórmula se
+                aplica al resultado del periodo (suma, incremento, etc.), no a cada muestra.
               </p>
               <label className="widget-edit-label widget-edit-label--inline widget-edit-lorawan-toggle">
                 <input

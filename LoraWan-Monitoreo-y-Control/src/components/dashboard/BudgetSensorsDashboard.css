@@ -1973,6 +1973,78 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
 }
 
+.bsd-root .widget-header.bsd-value-date-filter-header {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bsd-root .bsd-value-date-filter {
+  max-width: 100%;
+}
+
+.bsd-root .bsd-value-date-filter-custom {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  align-items: end;
+  width: 100%;
+  padding: 8px 10px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  background: rgba(15, 23, 42, 0.28);
+}
+
+.bsd-root .bsd-value-date-filter-custom__lab {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+.bsd-root .bsd-value-date-filter-custom__input {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.92);
+  color: #0f172a;
+  padding: 6px 8px;
+  min-width: 0;
+}
+
+.bsd-root .bsd-value-date-filter-apply {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  border: none;
+  border-radius: 999px;
+  padding: 8px 12px;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.95);
+  color: #075985;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .bsd-root .bsd-value-date-filter-custom {
+    grid-template-columns: 1fr;
+  }
+}
+
+body:not(.theme-dark) .bsd-root .bsd-value-date-filter-custom {
+  background: rgba(248, 250, 252, 0.95);
+  border-color: rgba(15, 23, 42, 0.12);
+}
+
+body:not(.theme-dark) .bsd-root .bsd-value-date-filter-custom__lab {
+  color: #334155;
+}
+
 .bsd-root .bsd-bar-chart-status {
   font-size: 12px;
   font-weight: 600;
