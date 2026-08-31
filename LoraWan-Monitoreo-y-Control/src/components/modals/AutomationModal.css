@@ -1,7 +1,26 @@
-.modal-content.rule-modal {
-  width: min(1240px, 96vw) !important;
-  max-width: min(1240px, 96vw) !important;
+/* Overlay propio: no hereda max-width: 500px de .modal-content global. */
+.automation-rule-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 12000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px 28px;
+  box-sizing: border-box;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+.automation-rule-overlay .modal-content.rule-modal,
+.automation-rule-dialog {
+  width: min(1400px, 94vw) !important;
+  max-width: 94vw !important;
+  min-width: min(1400px, 94vw) !important;
+  flex: 0 0 auto !important;
   max-height: 92vh;
+  box-sizing: border-box;
 }
 
 .rule-modal .modal-body.scrollable {
@@ -585,9 +604,14 @@ body.theme-dark .rule-modal .btn-icon.delete:hover {
 }
 
 @media (max-width: 768px) {
-  .modal-content.rule-modal {
+  .automation-rule-overlay {
+    padding: 12px;
+  }
+  .automation-rule-overlay .modal-content.rule-modal,
+  .automation-rule-dialog {
     width: 96vw !important;
     max-width: 96vw !important;
+    min-width: 0 !important;
   }
   .condition-main-row {
     flex-wrap: wrap;

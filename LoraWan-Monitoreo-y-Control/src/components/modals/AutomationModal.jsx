@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { X, Plus, Trash2, Mail, MessageSquare, Globe, Zap, Clock, Calendar, Bell } from 'lucide-react';
 import { fetchDevices, fetchDeviceTsl, fetchDeviceProperties } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
@@ -443,9 +444,9 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false })
 
   if (!isOpen) return null;
 
-  return (
-    <div className="modal-overlay">
-      <div className="modal-content rule-modal">
+  return createPortal(
+    <div className="automation-rule-overlay" role="presentation">
+      <div className="modal-content rule-modal automation-rule-dialog">
         <header className="modal-header">
           <h2>{isDuplicate ? 'Duplicar regla' : rule ? 'Editar regla' : 'Nueva regla'}</h2>
           <button className="btn-icon" onClick={onClose}><X size={20} /></button>
@@ -830,7 +831,8 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false })
           </footer>
         </form>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 
