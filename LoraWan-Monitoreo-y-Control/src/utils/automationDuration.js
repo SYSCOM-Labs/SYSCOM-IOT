@@ -112,7 +112,24 @@ export function evaluateTimeCondition(actual, operator, target, nowMs = Date.now
   return false;
 }
 
-/** Vacío = sin espera. `60`, `60s`, `5m`, `0.30`. */
+export const HOLD_OP_GT = 'gt';
+export const HOLD_OP_LT = 'lt';
+
+export function normalizeHoldOp(raw) {
+  const s = String(raw ?? '').trim().toLowerCase();
+  if (s === 'lt' || s === TIME_OPERATOR_LT || s === 'time_lt') return HOLD_OP_LT;
+  if (s === 'gt' || s === TIME_OPERATOR_GT || s === 'time_gt') return HOLD_OP_GT;
+  return '';
+}
+
+export function holdOpLabel(holdOp) {
+  const op = normalizeHoldOp(holdOp);
+  if (op === HOLD_OP_LT) return 'tiempo menor a';
+  if (op === HOLD_OP_GT) return 'tiempo mayor a';
+  return '';
+}
+
+/** Vacío = sin espera. `60`, `60s`, `5m`, `10m`, `0.30`. */
 export function parseHoldDurationMs(raw) {
   const s = String(raw ?? '').trim();
   if (!s) return 0;
@@ -125,26 +142,75 @@ export function conditionHoldMs(cond) {
   return parseHoldDurationMs(cond.holdTime ?? cond.time);
 }
 
+export function conditionHoldOp(cond) {
+  if (!cond || typeof cond !== 'object') return '';
+  const ms = conditionHoldMs(cond);
+  const op = normalizeHoldOp(cond.holdOp ?? cond.holdOperator);
+  if (op) return ms > 0 ? op : '';
+  return ms > 0 ? HOLD_OP_GT : '';
+}
+
+export function formatHoldConditionLabel(cond) {
+  const op = conditionHoldOp(cond);
+  const raw = String(cond?.holdTime ?? cond?.time ?? '').trim();
+  if (!op || !raw) return '';
+  return `${holdOpLabel(op)} ${raw}`;
+}
+
+function readHoldState(store, key) {
+  const v = store[key];
+  if (v && typeof v === 'object' && v.since != null) return v;
+  if (typeof v === 'number') return { since: v, expired: false };
+  return null;
+}
+
 /**
- * Permanencia: la comparación debe seguir verdadera `holdMs`.
- * @param {Record<string, number>} store clave → instante en que empezó a cumplirse
- * @returns {{ met: boolean, remainingMs: number }}
+ * Permanencia sobre la comparación (p. ej. PIR ocupado).
+ * - gt: debe seguir verdadera más de `holdMs` y entonces se cumple.
+ * - lt: se cumple al dejar de ser verdadera si duró menos de `holdMs`.
+ * @param {Record<string, object | number>} store
+ * @returns {{ met: boolean, remainingMs: number, waiting: boolean }}
  */
-export function applyConditionHold(store, key, comparisonTrue, holdMs, nowMs = Date.now()) {
-  if (!store || typeof store !== 'object') {
-    return { met: Boolean(comparisonTrue) && !(Number(holdMs) > 0), remainingMs: 0 };
-  }
-  if (!comparisonTrue) {
-    delete store[key];
-    return { met: false, remainingMs: 0 };
-  }
+export function applyConditionHold(store, key, comparisonTrue, holdMs, nowMs = Date.now(), holdOp = HOLD_OP_GT) {
   const wait = Number(holdMs) > 0 ? Number(holdMs) : 0;
-  if (!wait) {
-    delete store[key];
-    return { met: true, remainingMs: 0 };
+  const op = normalizeHoldOp(holdOp) || (wait ? HOLD_OP_GT : '');
+  if (!store || typeof store !== 'object') {
+    return { met: Boolean(comparisonTrue) && !wait, remainingMs: 0, waiting: false };
   }
-  if (store[key] == null) store[key] = nowMs;
-  const remaining = wait - (nowMs - store[key]);
-  if (remaining <= 0) return { met: true, remainingMs: 0 };
-  return { met: false, remainingMs: remaining };
+  if (!wait || !op) {
+    delete store[key];
+    return { met: Boolean(comparisonTrue), remainingMs: 0, waiting: false };
+  }
+
+  if (op === HOLD_OP_GT) {
+    if (!comparisonTrue) {
+      delete store[key];
+      return { met: false, remainingMs: 0, waiting: false };
+    }
+    let st = readHoldState(store, key);
+    if (!st) {
+      st = { since: nowMs, expired: false };
+      store[key] = st;
+    }
+    const remaining = wait - (nowMs - st.since);
+    if (remaining <= 0) return { met: true, remainingMs: 0, waiting: false };
+    return { met: false, remainingMs: remaining, waiting: true };
+  }
+
+  let st = readHoldState(store, key);
+  if (comparisonTrue) {
+    if (!st) {
+      st = { since: nowMs, expired: false };
+      store[key] = st;
+    }
+    if (nowMs - st.since >= wait) st.expired = true;
+    const remaining = st.expired ? 0 : Math.max(0, wait - (nowMs - st.since));
+    return { met: false, remainingMs: remaining, waiting: true };
+  }
+  if (st && !st.expired && st.since != null && nowMs - st.since < wait) {
+    delete store[key];
+    return { met: true, remainingMs: 0, waiting: false };
+  }
+  delete store[key];
+  return { met: false, remainingMs: 0, waiting: false };
 }

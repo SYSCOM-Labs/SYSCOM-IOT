@@ -1,6 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { createPortal } from 'react-dom';
-import { X, Plus, Trash2, Mail, MessageSquare, Globe, Zap, Clock, Calendar, Bell, ChevronDown } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { X, Plus, Trash2, Mail, MessageSquare, Globe, Zap, Clock, Calendar, Bell } from 'lucide-react';
 import { fetchDevices, fetchDeviceTsl, fetchDeviceProperties } from '../../services/api';
 import { useAuth } from '../../context/AuthContext';
 import { getLatestDeviceData } from '../../services/localAuth';
@@ -14,7 +13,7 @@ import {
   effectiveAutomationConditions,
   resolveAutomationRuleMode,
 } from '../../utils/automationRuleMode';
-import { isTimeOperator, automationOperatorLabel } from '../../utils/automationDuration';
+import { isTimeOperator, automationOperatorLabel, TIME_OPERATOR_LT, normalizeHoldOp } from '../../utils/automationDuration';
 import './AutomationModal.css';
 
 const CONDITION_OPERATORS = [
@@ -26,84 +25,11 @@ const CONDITION_OPERATORS = [
   { id: '>', label: 'mayor a' },
 ];
 
-function ConditionOperatorPicker({ value, onChange }) {
-  const [open, setOpen] = useState(false);
-  const btnRef = useRef(null);
-  const [pos, setPos] = useState({ top: 0, left: 0, width: 220 });
-  const current = CONDITION_OPERATORS.find((o) => o.id === value) || CONDITION_OPERATORS.find((o) => o.id === '==');
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const place = () => {
-      const el = btnRef.current;
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      const width = Math.max(r.width, 240);
-      let left = r.left;
-      if (left + width > window.innerWidth - 8) left = Math.max(8, window.innerWidth - width - 8);
-      setPos({ top: r.bottom + 4, left, width });
-    };
-    place();
-    const onDoc = (e) => {
-      const t = e.target;
-      if (btnRef.current?.contains(t)) return;
-      if (t instanceof Element && t.closest('.condition-op-menu')) return;
-      setOpen(false);
-    };
-    window.addEventListener('resize', place);
-    window.addEventListener('scroll', place, true);
-    document.addEventListener('mousedown', onDoc);
-    return () => {
-      window.removeEventListener('resize', place);
-      window.removeEventListener('scroll', place, true);
-      document.removeEventListener('mousedown', onDoc);
-    };
-  }, [open]);
-
-  const pick = (id) => {
-    onChange(id);
-    setOpen(false);
-  };
-
-  return (
-    <div className="condition-op-wrap">
-      <button
-        ref={btnRef}
-        type="button"
-        className={`field-operator condition-op-trigger${open ? ' is-open' : ''}`}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span>{current?.label || 'igual a'}</span>
-        <ChevronDown size={16} aria-hidden />
-      </button>
-      {open
-        ? createPortal(
-            <div
-              className="condition-op-menu"
-              role="listbox"
-              style={{ top: pos.top, left: pos.left, minWidth: pos.width }}
-            >
-              {CONDITION_OPERATORS.map((op) => (
-                <button
-                  key={op.id}
-                  type="button"
-                  role="option"
-                  aria-selected={value === op.id}
-                  className={`condition-op-menu__opt${value === op.id ? ' is-active' : ''}`}
-                  onClick={() => pick(op.id)}
-                >
-                  {op.label}
-                </button>
-              ))}
-            </div>,
-            document.body
-          )
-        : null}
-    </div>
-  );
-}
+const HOLD_OPERATORS = [
+  { id: '', label: '(sin tiempo)' },
+  { id: 'gt', label: 'tiempo mayor a' },
+  { id: 'lt', label: 'tiempo menor a' },
+];
 
 function normalizeConditionRow(c) {
   const base = c && typeof c === 'object' ? c : {};
@@ -121,11 +47,14 @@ function normalizeConditionRow(c) {
       : base.time != null && String(base.time).trim()
         ? String(base.time).trim()
         : '';
+  let holdOp = normalizeHoldOp(base.holdOp ?? base.holdOperator);
   if (isTimeOperator(operator)) {
+    holdOp = operator === TIME_OPERATOR_LT ? 'lt' : 'gt';
     if (!holdTime) holdTime = value;
     value = '';
     operator = '==';
   }
+  if (!holdOp && holdTime) holdOp = 'gt';
   return {
     deviceId: base.deviceId != null ? String(base.deviceId) : '',
     propKey,
@@ -133,6 +62,7 @@ function normalizeConditionRow(c) {
     operator,
     operatorLabel: automationOperatorLabel(operator),
     value,
+    holdOp,
     holdTime,
     useWidgetValue: Boolean(base.useWidgetValue),
   };
@@ -169,6 +99,7 @@ function defaultConditionRow() {
     operator: '==',
     operatorLabel: automationOperatorLabel('=='),
     value: '',
+    holdOp: '',
     holdTime: '',
     useWidgetValue: false,
   };
@@ -644,10 +575,20 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false })
                         ) : null}
                       </select>
                       <span className="joiner">es</span>
-                      <ConditionOperatorPicker
-                        value={cond.operator}
-                        onChange={(id) => updateCondition(index, 'operator', id)}
-                      />
+                      <select
+                        value={
+                          CONDITION_OPERATORS.some((o) => o.id === cond.operator) ? cond.operator : '=='
+                        }
+                        onChange={(e) => updateCondition(index, 'operator', e.target.value)}
+                        className="field-operator"
+                        aria-label="Operador de comparación"
+                      >
+                        {CONDITION_OPERATORS.map((op) => (
+                          <option key={op.id} value={op.id}>
+                            {op.label}
+                          </option>
+                        ))}
+                      </select>
                       <input
                         type="text"
                         value={cond.value}
@@ -655,23 +596,31 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false })
                         placeholder="Valor"
                         className="field-value"
                       />
-                    </div>
-                    <div className="condition-hold-row">
-                      <label className="condition-hold-label" htmlFor={`automation-hold-${index}`}>
-                        Tiempo
-                        <span className="condition-hold-optional">(opcional)</span>
+                      <label className="condition-hold-inline">
+                        <span className="condition-hold-label">Tiempo</span>
+                        <select
+                          value={cond.holdOp === 'lt' ? 'lt' : cond.holdOp === 'gt' ? 'gt' : ''}
+                          onChange={(e) => updateCondition(index, 'holdOp', e.target.value)}
+                          className="field-hold-op"
+                          aria-label="Operador de tiempo"
+                        >
+                          {HOLD_OPERATORS.map((op) => (
+                            <option key={op.id || 'none'} value={op.id}>
+                              {op.label}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          id={`automation-hold-${index}`}
+                          type="text"
+                          value={cond.holdTime != null ? String(cond.holdTime) : ''}
+                          onChange={(e) => updateCondition(index, 'holdTime', e.target.value)}
+                          placeholder="10m"
+                          className="field-hold"
+                          disabled={!cond.holdOp}
+                          aria-label="Duración del tiempo"
+                        />
                       </label>
-                      <input
-                        id={`automation-hold-${index}`}
-                        type="text"
-                        value={cond.holdTime != null ? String(cond.holdTime) : ''}
-                        onChange={(e) => updateCondition(index, 'holdTime', e.target.value)}
-                        placeholder="60s  ·  vacío = al instante"
-                        className="field-hold"
-                      />
-                      <span className="condition-hold-hint">
-                        La comparación debe mantenerse este rato y después se ejecuta THEN. Ej. 60, 60s, 5m o 0.30
-                      </span>
                     </div>
                     {cond.deviceId && cond.propKey ? (
                       <label className="automation-condition-widget-value">
@@ -693,9 +642,11 @@ const AutomationModal = ({ isOpen, onClose, onSave, rule, isDuplicate = false })
                   <Plus size={16} /> Agregar condición
                 </button>
                 <p className="hint-text">
-                  <strong>Tiempo</strong> es opcional. Ejemplo: PIR <strong>igual a</strong> Normal y tiempo{' '}
-                  <code>60</code> o <code>60s</code> espera 60 s en ese estado y después ejecuta THEN. Vacío = al
-                  instante. También <code>5m</code> o <code>0.30</code> (30 s).
+                  Ejemplo: PIR <strong>igual a</strong> ocupado (o el valor que envíe al detectar personas) y{' '}
+                  <strong>tiempo mayor a</strong> <code>10m</code>: THEN se ejecuta si sigue detectando personas más
+                  de 10 minutos. <strong>Tiempo menor a</strong> dispara al dejar de detectarlas si duró menos de ese
+                  rato. <code>(sin tiempo)</code> = al instante. Duración: <code>10m</code>, <code>60s</code>,{' '}
+                  <code>0.30</code>.
                 </p>
               </div>
             </div>

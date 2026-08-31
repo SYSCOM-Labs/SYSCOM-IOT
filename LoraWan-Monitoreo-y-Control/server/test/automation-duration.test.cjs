@@ -58,4 +58,20 @@ describe('automation duration conditions', () => {
     assert.equal(again.met, false);
     assert.equal(again.remainingMs, 60000);
   });
+
+  it('tiempo menor a se cumple al dejar de ser verdadera antes del umbral', () => {
+    const store = {};
+    const t0 = 2_000_000;
+    assert.equal(applyConditionHold(store, 'k', true, 600000, t0, 'lt').met, false);
+    assert.equal(applyConditionHold(store, 'k', true, 600000, t0 + 120000, 'lt').met, false);
+    assert.equal(applyConditionHold(store, 'k', false, 600000, t0 + 180000, 'lt').met, true);
+  });
+
+  it('tiempo menor a no dispara si se mantuvo más del umbral', () => {
+    const store = {};
+    const t0 = 3_000_000;
+    assert.equal(applyConditionHold(store, 'k', true, 600000, t0, 'lt').met, false);
+    assert.equal(applyConditionHold(store, 'k', true, 600000, t0 + 600000, 'lt').met, false);
+    assert.equal(applyConditionHold(store, 'k', false, 600000, t0 + 601000, 'lt').met, false);
+  });
 });

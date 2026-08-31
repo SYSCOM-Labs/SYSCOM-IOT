@@ -110,39 +110,109 @@ function parseHoldDurationMs(raw) {
   return ms != null && ms > 0 ? ms : 0;
 }
 
+const HOLD_OP_GT = 'gt';
+const HOLD_OP_LT = 'lt';
+
+function normalizeHoldOp(raw) {
+  const s = String(raw ?? '').trim().toLowerCase();
+  if (s === 'lt' || s === TIME_OPERATOR_LT || s === 'time_lt') return HOLD_OP_LT;
+  if (s === 'gt' || s === TIME_OPERATOR_GT || s === 'time_gt') return HOLD_OP_GT;
+  return '';
+}
+
+function holdOpLabel(holdOp) {
+  const op = normalizeHoldOp(holdOp);
+  if (op === HOLD_OP_LT) return 'tiempo menor a';
+  if (op === HOLD_OP_GT) return 'tiempo mayor a';
+  return '';
+}
+
 function conditionHoldMs(cond) {
   if (!cond || typeof cond !== 'object') return 0;
   return parseHoldDurationMs(cond.holdTime ?? cond.time);
 }
 
-function applyConditionHold(store, key, comparisonTrue, holdMs, nowMs = Date.now()) {
-  if (!store || typeof store !== 'object') {
-    return { met: Boolean(comparisonTrue) && !(Number(holdMs) > 0), remainingMs: 0 };
-  }
-  if (!comparisonTrue) {
-    delete store[key];
-    return { met: false, remainingMs: 0 };
-  }
+function conditionHoldOp(cond) {
+  if (!cond || typeof cond !== 'object') return '';
+  const ms = conditionHoldMs(cond);
+  const op = normalizeHoldOp(cond.holdOp ?? cond.holdOperator);
+  if (op) return ms > 0 ? op : '';
+  return ms > 0 ? HOLD_OP_GT : '';
+}
+
+function formatHoldConditionLabel(cond) {
+  const op = conditionHoldOp(cond);
+  const raw = String(cond?.holdTime ?? cond?.time ?? '').trim();
+  if (!op || !raw) return '';
+  return `${holdOpLabel(op)} ${raw}`;
+}
+
+function readHoldState(store, key) {
+  const v = store[key];
+  if (v && typeof v === 'object' && v.since != null) return v;
+  if (typeof v === 'number') return { since: v, expired: false };
+  return null;
+}
+
+function applyConditionHold(store, key, comparisonTrue, holdMs, nowMs = Date.now(), holdOp = HOLD_OP_GT) {
   const wait = Number(holdMs) > 0 ? Number(holdMs) : 0;
-  if (!wait) {
-    delete store[key];
-    return { met: true, remainingMs: 0 };
+  const op = normalizeHoldOp(holdOp) || (wait ? HOLD_OP_GT : '');
+  if (!store || typeof store !== 'object') {
+    return { met: Boolean(comparisonTrue) && !wait, remainingMs: 0, waiting: false };
   }
-  if (store[key] == null) store[key] = nowMs;
-  const remaining = wait - (nowMs - store[key]);
-  if (remaining <= 0) return { met: true, remainingMs: 0 };
-  return { met: false, remainingMs: remaining };
+  if (!wait || !op) {
+    delete store[key];
+    return { met: Boolean(comparisonTrue), remainingMs: 0, waiting: false };
+  }
+
+  if (op === HOLD_OP_GT) {
+    if (!comparisonTrue) {
+      delete store[key];
+      return { met: false, remainingMs: 0, waiting: false };
+    }
+    let st = readHoldState(store, key);
+    if (!st) {
+      st = { since: nowMs, expired: false };
+      store[key] = st;
+    }
+    const remaining = wait - (nowMs - st.since);
+    if (remaining <= 0) return { met: true, remainingMs: 0, waiting: false };
+    return { met: false, remainingMs: remaining, waiting: true };
+  }
+
+  let st = readHoldState(store, key);
+  if (comparisonTrue) {
+    if (!st) {
+      st = { since: nowMs, expired: false };
+      store[key] = st;
+    }
+    if (nowMs - st.since >= wait) st.expired = true;
+    const remaining = st.expired ? 0 : Math.max(0, wait - (nowMs - st.since));
+    return { met: false, remainingMs: remaining, waiting: true };
+  }
+  if (st && !st.expired && st.since != null && nowMs - st.since < wait) {
+    delete store[key];
+    return { met: true, remainingMs: 0, waiting: false };
+  }
+  delete store[key];
+  return { met: false, remainingMs: 0, waiting: false };
 }
 
 module.exports = {
   TIME_OPERATOR_GT,
   TIME_OPERATOR_LT,
+  HOLD_OP_GT,
+  HOLD_OP_LT,
   isTimeOperator,
   automationOperatorLabel,
   parseDurationToMs,
   actualValueToDurationMs,
   evaluateTimeCondition,
   parseHoldDurationMs,
+  normalizeHoldOp,
+  holdOpLabel,
   conditionHoldMs,
+  conditionHoldOp,
+  formatHoldConditionLabel,
   applyConditionHold,
 };

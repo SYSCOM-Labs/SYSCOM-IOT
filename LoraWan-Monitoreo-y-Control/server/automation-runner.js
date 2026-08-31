@@ -14,6 +14,7 @@ const {
   isTimeOperator,
   evaluateTimeCondition,
   conditionHoldMs,
+  conditionHoldOp,
   applyConditionHold,
 } = require('./lib/automation-duration.cjs');
 const {
@@ -568,8 +569,8 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
 
     const rid = rule.id != null ? String(rule.id) : `r${ridx}`;
     const nowMs = Date.now();
-    let allComparisonsTrue = true;
-    let allHoldsMet = true;
+    let allFullyMet = true;
+    let anyWaiting = false;
     let maxRemain = 0;
 
     for (let cidx = 0; cidx < effectiveConditions.length; cidx++) {
@@ -588,34 +589,37 @@ function runRulesForUser(userId, deviceProperties, opts = {}) {
         );
         comparisonTrue = evaluateCondition(deviceValue, cond.operator, cond.value);
       }
-      if (!comparisonTrue) allComparisonsTrue = false;
       const hold = applyConditionHold(
         conditionHoldState,
         `${userId}::${rid}::${cidx}`,
         comparisonTrue,
         conditionHoldMs(cond),
-        nowMs
+        nowMs,
+        conditionHoldOp(cond)
       );
-      if (!hold.met) allHoldsMet = false;
-      if (hold.remainingMs > 0) maxRemain = Math.max(maxRemain, hold.remainingMs);
+      if (hold.met) continue;
+      allFullyMet = false;
+      if (hold.waiting) {
+        anyWaiting = true;
+        if (hold.remainingMs > 0) maxRemain = Math.max(maxRemain, hold.remainingMs);
+      }
     }
 
     const ruleSigKey = `${userId}::${rid}`;
     const eventSig = buildRuleConditionEventSignature(deviceProperties, effectiveConditions);
 
-    if (!allComparisonsTrue) {
-      clearHoldRecheck(userId, rid);
-      if (!rule.allowReactivation) {
-        delete oneShotEventStorage[ruleSigKey];
-        for (let i = 0; i < (rule.actions || []).length; i++) {
-          cooldownStorage[cooldownKey(userId, rule.id, i)] = 0;
+    if (!allFullyMet) {
+      if (!anyWaiting) {
+        clearHoldRecheck(userId, rid);
+        if (!rule.allowReactivation) {
+          delete oneShotEventStorage[ruleSigKey];
+          for (let i = 0; i < (rule.actions || []).length; i++) {
+            cooldownStorage[cooldownKey(userId, rule.id, i)] = 0;
+          }
         }
+      } else if (maxRemain > 0) {
+        scheduleHoldRecheck(userId, rid, maxRemain);
       }
-      continue;
-    }
-
-    if (!allHoldsMet) {
-      scheduleHoldRecheck(userId, rid, maxRemain);
       continue;
     }
 

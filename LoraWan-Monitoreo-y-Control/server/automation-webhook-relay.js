@@ -2,7 +2,7 @@
 
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const IS_PRODUCTION = NODE_ENV === 'production';
-const { automationOperatorLabel } = require('./lib/automation-duration.cjs');
+const { automationOperatorLabel, formatHoldConditionLabel } = require('./lib/automation-duration.cjs');
 
 /**
  * @param {string} urlString
@@ -69,9 +69,8 @@ function formatConditionLine(c) {
   const op = String(c.operator || '==').trim();
   const val = String(c.value != null ? c.value : '—').trim();
   const opLabel = c.operatorLabel || automationOperatorLabel(op);
-  const hold = String(c.holdTime || c.time || '').trim();
-  const holdBit = hold ? ` durante ${hold}` : '';
-  return `${name} ${opLabel} ${val}${holdBit}`;
+  const holdBit = formatHoldConditionLabel(c);
+  return holdBit ? `${name} ${opLabel} ${val} ${holdBit}` : `${name} ${opLabel} ${val}`;
 }
 
 function formatTimestampForDisplay(ts) {

@@ -13,7 +13,7 @@ import {
   effectiveAutomationConditions,
   isScheduleAutomationRule,
 } from '../utils/automationRuleMode';
-import { automationOperatorLabel } from '../utils/automationDuration';
+import { automationOperatorLabel, formatHoldConditionLabel } from '../utils/automationDuration';
 import './Automations.css';
 
 const AutomationsPage = () => {
@@ -278,10 +278,8 @@ const AutomationsPage = () => {
                           <span className="prop">{c.propName || c.propKey || 'Prop'}</span>{' '}
                           {c.operatorLabel || automationOperatorLabel(c.operator) || '=='}{' '}
                           <span className="val">{c.value ?? '0'}</span>
-                          {String(c.holdTime || c.time || '').trim() ? (
-                            <span className="hold">
-                              {' '}durante {String(c.holdTime || c.time).trim()}
-                            </span>
+                          {formatHoldConditionLabel(c) ? (
+                            <span className="hold"> {formatHoldConditionLabel(c)}</span>
                           ) : null}
                         </div>
                       ))

@@ -12,7 +12,7 @@ import {
   effectiveAutomationConditions,
   resolveAutomationRuleMode,
 } from '../utils/automationRuleMode.js';
-import { isTimeOperator, evaluateTimeCondition, conditionHoldMs, applyConditionHold } from '../utils/automationDuration.js';
+import { isTimeOperator, evaluateTimeCondition, conditionHoldMs, conditionHoldOp, applyConditionHold } from '../utils/automationDuration.js';
 
 /**
  * Automation Engine
@@ -121,8 +121,8 @@ export const runAutomations = async (devices, deviceProperties, credentials, tok
     // Check Conditions (All must be true - AND logic)
     const nowMs = Date.now();
     const rid = rule.id != null ? String(rule.id) : '';
-    let allComparisonsTrue = true;
-    let allHoldsMet = true;
+    let allFullyMet = true;
+    let anyWaiting = false;
     let maxRemain = 0;
 
     for (let cidx = 0; cidx < effectiveConditions.length; cidx++) {
@@ -144,32 +144,34 @@ export const runAutomations = async (devices, deviceProperties, credentials, tok
         );
         comparisonTrue = evaluateCondition(deviceValue, cond.operator, cond.value);
       }
-      if (!comparisonTrue) allComparisonsTrue = false;
       const hold = applyConditionHold(
         clientHoldState,
         `${rid}::${cidx}`,
         comparisonTrue,
         conditionHoldMs(cond),
-        nowMs
+        nowMs,
+        conditionHoldOp(cond)
       );
-      if (!hold.met) allHoldsMet = false;
-      if (hold.remainingMs > 0) maxRemain = Math.max(maxRemain, hold.remainingMs);
-    }
-
-    if (!allComparisonsTrue) {
-      clearClientHoldRecheck(rid);
-      // One-shot rules must be re-armable once conditions are no longer true.
-      if (!rule.allowReactivation) {
-        for (let i = 0; i < (rule.actions || []).length; i++) {
-          const cooldownKey = `${rule.id}-${i}`;
-          cooldownStorage[cooldownKey] = 0;
-        }
+      if (hold.met) continue;
+      allFullyMet = false;
+      if (hold.waiting) {
+        anyWaiting = true;
+        if (hold.remainingMs > 0) maxRemain = Math.max(maxRemain, hold.remainingMs);
       }
-      continue;
     }
 
-    if (!allHoldsMet) {
-      scheduleClientHoldRecheck(rid, maxRemain, credentials, token, auth, runOpts);
+    if (!allFullyMet) {
+      if (!anyWaiting) {
+        clearClientHoldRecheck(rid);
+        if (!rule.allowReactivation) {
+          for (let i = 0; i < (rule.actions || []).length; i++) {
+            const cooldownKey = `${rule.id}-${i}`;
+            cooldownStorage[cooldownKey] = 0;
+          }
+        }
+      } else if (maxRemain > 0) {
+        scheduleClientHoldRecheck(rid, maxRemain, credentials, token, auth, runOpts);
+      }
       continue;
     }
 
@@ -281,6 +283,7 @@ const sendWebhookAction = async (action, rule, token) => {
       operator: c.operator,
       value: c.value,
       holdTime: c.holdTime || c.time || '',
+      holdOp: c.holdOp || '',
     })),
   };
 
