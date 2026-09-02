@@ -760,13 +760,13 @@ export function applyHistoryGranularityPreset(draft, granularity) {
       draft.timeframe.from = '60 minutos atrás';
       break;
     case 'day':
-      draft.timeframe.from = '24 horas atrás';
+      draft.timeframe.from = 'hoy';
       break;
     case 'week':
-      draft.timeframe.from = '7 días atrás';
+      draft.timeframe.from = 'esta semana';
       break;
     case 'month':
-      draft.timeframe.from = '30 días atrás';
+      draft.timeframe.from = 'este mes';
       break;
     case 'year': {
       const now = Date.now();
@@ -786,14 +786,15 @@ export function applyHistoryGranularityPreset(draft, granularity) {
   if (!draft.timeframe.operation) draft.timeframe.operation = 'avg';
 }
 
-function startOfLocalDayMs(nowMs) {
+/** Medianoche local del día que contiene `nowMs`. */
+export function startOfLocalDayMs(nowMs) {
   const d = new Date(nowMs);
   d.setHours(0, 0, 0, 0);
   return d.getTime();
 }
 
 /** Lunes 00:00 local de la semana que contiene `nowMs`. */
-function startOfLocalWeekMondayMs(nowMs) {
+export function startOfLocalWeekMondayMs(nowMs) {
   const d = new Date(nowMs);
   d.setHours(0, 0, 0, 0);
   const day = d.getDay();
@@ -803,11 +804,40 @@ function startOfLocalWeekMondayMs(nowMs) {
 }
 
 /** Día 1 del mes, 00:00 local. */
-function startOfLocalMonthMs(nowMs) {
+export function startOfLocalMonthMs(nowMs) {
   const d = new Date(nowMs);
   d.setDate(1);
   d.setHours(0, 0, 0, 0);
   return d.getTime();
+}
+
+/**
+ * Ventana de gráficos Hora/Día/Semana/Mes.
+ * Hora = últimos 60 min; Día/Semana/Mes = calendario local hasta ahora (no rolling UTC).
+ * @returns {{ fromMs: number, toMs: number } | null}
+ */
+export function streamHistoryDisplayBounds(presetId, nowMs = Date.now()) {
+  const id = String(presetId || '').trim().toLowerCase();
+  const toMs = Number(nowMs);
+  if (!Number.isFinite(toMs)) return null;
+  if (id === 'hour') return { fromMs: toMs - 60 * 60000, toMs };
+  if (id === 'day') return { fromMs: startOfLocalDayMs(toMs), toMs };
+  if (id === 'week') return { fromMs: startOfLocalWeekMondayMs(toMs), toMs };
+  if (id === 'month') return { fromMs: startOfLocalMonthMs(toMs), toMs };
+  return null;
+}
+
+/**
+ * Cubo de muestreo en SQLite para que Día/Semana/Mes cubran todo el periodo
+ * aunque haya más filas que el LIMIT (si no, el gráfico arranca a media mañana).
+ */
+export function historyChartBucketMs(presetId) {
+  const id = String(presetId || '').trim().toLowerCase();
+  if (id === 'hour' || id === 'minute') return 60 * 1000;
+  if (id === 'day') return 15 * 60 * 1000;
+  if (id === 'week') return 60 * 60 * 1000;
+  if (id === 'month') return 6 * 60 * 60 * 1000;
+  return 0;
 }
 
 /** Presets del filtro por fechas en widgets de valor (conteo, consumo, etc.). */

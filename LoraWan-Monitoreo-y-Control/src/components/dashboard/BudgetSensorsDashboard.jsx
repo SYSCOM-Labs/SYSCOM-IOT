@@ -127,6 +127,11 @@ import {
   applyHistoryGranularityPreset,
   normalizeBarChartGranularity,
   barChartHistoryFetchFromMs,
+  startOfLocalDayMs,
+  startOfLocalWeekMondayMs,
+  startOfLocalMonthMs,
+  streamHistoryDisplayBounds,
+  historyChartBucketMs,
   BAR_CHART_WIDGET_GRANULARITY_OPTIONS,
   applyValueDateFilterPreset,
   normalizeValueDateFilterPreset,
@@ -1100,13 +1105,6 @@ function unixHourFloor(tsMs) {
   return Math.floor(tsMs / 3600000) * 3600000;
 }
 
-/** Inicio del día UTC (00:00) en ms epoch. */
-function startOfUtcDayMs(tsMs) {
-  const d = new Date(tsMs);
-  if (!Number.isFinite(d.getTime())) return 0;
-  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
-}
-
 function applyAggOpToVals(vals, op) {
   if (!vals.length) return null;
   if (op === 'min') return Math.min(...vals);
@@ -1266,15 +1264,34 @@ function valuesForQuarterHourSlots(slotStartsMs, qMap, op) {
   });
 }
 
-/** @returns {Map<number, { ts: number, val: number }[]>} clave = inicio del día UTC en ms */
-function pointsByUtcDay(points) {
+/** @returns {Map<number, { ts: number, val: number }[]>} clave = medianoche local en ms */
+function pointsByLocalDay(points) {
   const map = new Map();
   for (const p of points) {
-    const k = startOfUtcDayMs(p.ts);
+    const k = startOfLocalDayMs(p.ts);
     if (!map.has(k)) map.set(k, []);
     map.get(k).push({ ts: p.ts, val: p.val });
   }
   return map;
+}
+
+function localCalendarDaySlots(fromMs, toMs) {
+  const slots = [];
+  const d = new Date(startOfLocalDayMs(fromMs));
+  const end = startOfLocalDayMs(toMs);
+  while (d.getTime() <= end) {
+    slots.push(d.getTime());
+    d.setDate(d.getDate() + 1);
+  }
+  return slots;
+}
+
+function localDayQuarterHourSlots(endMs) {
+  const start = startOfLocalDayMs(endMs);
+  const endQ = unixQuarterHourFloor(endMs);
+  const slotStarts = [];
+  for (let t = start; t <= endQ; t += STREAM_DAY_BUCKET_MS) slotStarts.push(t);
+  return slotStarts;
 }
 
 function valuesForDaySlots(slotStartsMs, dayMap, op) {
@@ -1286,35 +1303,14 @@ function valuesForDaySlots(slotStartsMs, dayMap, op) {
   });
 }
 
-/** Ventana de fetch del gráfico lineal (misma amplitud que los buckets del eje X). */
-function streamHistoryFetchWindowMs(presetId) {
-  switch (presetId) {
-    case 'hour':
-      return 60 * 60000;
-    case 'day':
-      return 24 * 3600000;
-    case 'week':
-      return 7 * 86400000;
-    case 'month':
-      return 30 * 86400000;
-    default:
-      return 0;
-  }
-}
-
 /**
- * Presets Hora–Mes del gráfico de barras: misma ventana rolling que el gráfico lineal (`to` = ahora).
+ * Presets Hora–Mes del gráfico de barras: misma ventana que el gráfico lineal (`to` = ahora).
  * Evita filtrar con `cfg.timeframe.to` fijo u obsoleto mientras el fetch ya usa `now`.
  * @returns {({ fromMs: number, toMs: number }) | null}
  */
 function barChartPresetDisplayBounds(granularity, nowMs) {
   const g = normalizeBarChartGranularity(granularity);
-  if (g !== 'hour' && g !== 'day' && g !== 'week' && g !== 'month') return null;
-  const toMs = Number(nowMs);
-  if (!Number.isFinite(toMs)) return null;
-  const w = streamHistoryFetchWindowMs(g);
-  if (!w) return null;
-  return { fromMs: toMs - w, toMs };
+  return streamHistoryDisplayBounds(g, nowMs);
 }
 
 /** Tope de filas por preset: el eje ya limita puntos (p. ej. ≤500 por evento); menos filas = menos JSON/CPU en Mes. */
@@ -1345,25 +1341,16 @@ function bucketSlotsForStreamPreset(presetId, endMs) {
   }
   if (presetId === 'day') {
     /**
-     * 24 h en pasos de 15 min (96 ranuras). Con 24 buckets horarios, todo lo ocurrido dentro de la misma
-     * hora UTC (p. ej. 08:50–09:21) se colapsaba en **un solo** punto y parecía «un solo evento».
+     * Desde las 00:00 locales hasta ahora, en pasos de 15 min.
+     * Con 24 buckets horarios, todo lo ocurrido dentro de la misma hora se colapsaba en un solo punto.
      */
-    const endQ = unixQuarterHourFloor(end);
-    const slotStarts = [];
-    for (let i = 95; i >= 0; i -= 1) slotStarts.push(endQ - i * STREAM_DAY_BUCKET_MS);
-    return { slotStarts, bucketKind: 'quarterHour' };
+    return { slotStarts: localDayQuarterHourSlots(end), bucketKind: 'quarterHour' };
   }
   if (presetId === 'week') {
-    const endD = startOfUtcDayMs(end);
-    const slotStarts = [];
-    for (let i = 6; i >= 0; i -= 1) slotStarts.push(endD - i * 86400000);
-    return { slotStarts, bucketKind: 'day' };
+    return { slotStarts: localCalendarDaySlots(startOfLocalWeekMondayMs(end), end), bucketKind: 'day' };
   }
   if (presetId === 'month') {
-    const endD = startOfUtcDayMs(end);
-    const slotStarts = [];
-    for (let i = 29; i >= 0; i -= 1) slotStarts.push(endD - i * 86400000);
-    return { slotStarts, bucketKind: 'day' };
+    return { slotStarts: localCalendarDaySlots(startOfLocalMonthMs(end), end), bucketKind: 'day' };
   }
   return { slotStarts: [], bucketKind: null };
 }
@@ -1376,7 +1363,7 @@ function aggregatePointsToStreamSlots(points, slotStarts, bucketKind, fieldKey) 
   if (bucketKind === 'hour') return valuesForHourSlots(slotStarts, pointsByUnixHour(points), op);
   if (bucketKind === 'quarterHour')
     return valuesForQuarterHourSlots(slotStarts, pointsByUnixQuarterHour(points), op);
-  if (bucketKind === 'day') return valuesForDaySlots(slotStarts, pointsByUtcDay(points), op);
+  if (bucketKind === 'day') return valuesForDaySlots(slotStarts, pointsByLocalDay(points), op);
   return [];
 }
 
@@ -1496,8 +1483,8 @@ function buildBarChartPerEventSeries(points, fromMs, toMs, granularity) {
 }
 
 /**
- * Series del widget de barras: «Hora» = 60 barras (1 min c/u), «Día» = 96×15 min (como el lineal),
- * «Semana» = 7 días UTC, «Mes» = 30 días UTC (evita miles de categorías que deforman el eje X).
+ * Series del widget de barras: «Hora» = 60 barras (1 min c/u), «Día» = 15 min desde las 00:00 locales,
+ * «Semana»/«Mes» = días del calendario local (evita miles de categorías que deforman el eje X).
  * @returns {{ labels: string[], values: (number|null)[], fullLabels: string[], truncated: boolean }}
  */
 function buildBarChartBucketSeries(points, granularity, op, fromMs, toMs, fieldKey = '') {
@@ -1551,10 +1538,8 @@ function buildBarChartBucketSeries(points, granularity, op, fromMs, toMs, fieldK
   }
 
   if (g === 'day') {
-    /** Misma resolución que el gráfico lineal en «Día»: 96 × 15 min (evita un solo bucket con toda la actividad). */
-    const endQ = unixQuarterHourFloor(toMs);
-    const slotStartsMs = [];
-    for (let i = 95; i >= 0; i -= 1) slotStartsMs.push(endQ - i * STREAM_DAY_BUCKET_MS);
+    /** Misma resolución que el gráfico lineal en «Día»: 15 min desde las 00:00 locales. */
+    const slotStartsMs = localDayQuarterHourSlots(toMs);
     const qMap = pointsByUnixQuarterHour(points);
     const values = valuesForQuarterHourSlots(slotStartsMs, qMap, effOp);
     const labels = slotStartsMs.map((ts) =>
@@ -1573,10 +1558,8 @@ function buildBarChartBucketSeries(points, granularity, op, fromMs, toMs, fieldK
   }
 
   if (g === 'week') {
-    const endD = startOfUtcDayMs(toMs);
-    const slotStartsMs = [];
-    for (let i = 6; i >= 0; i -= 1) slotStartsMs.push(endD - i * 86400000);
-    const dayMap = pointsByUtcDay(points);
+    const slotStartsMs = localCalendarDaySlots(startOfLocalWeekMondayMs(toMs), toMs);
+    const dayMap = pointsByLocalDay(points);
     const values = valuesForDaySlots(slotStartsMs, dayMap, effOp);
     const labels = slotStartsMs.map((ts) =>
       new Date(ts).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })
@@ -1588,10 +1571,8 @@ function buildBarChartBucketSeries(points, granularity, op, fromMs, toMs, fieldK
   }
 
   if (g === 'month') {
-    const endD = startOfUtcDayMs(toMs);
-    const slotStartsMs = [];
-    for (let i = 29; i >= 0; i -= 1) slotStartsMs.push(endD - i * 86400000);
-    const dayMap = pointsByUtcDay(points);
+    const slotStartsMs = localCalendarDaySlots(startOfLocalMonthMs(toMs), toMs);
+    const dayMap = pointsByLocalDay(points);
     const values = valuesForDaySlots(slotStartsMs, dayMap, effOp);
     const labels = slotStartsMs.map((ts) =>
       new Date(ts).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
@@ -1702,10 +1683,10 @@ function collapseBarChartButtonBurstPoints(points, fieldKey) {
  */
 function streamPerEventTimelineForPreset(points, fieldKey, presetId, endMs = Date.now()) {
   if (!isLikelyButtonOrStatusFieldKey(fieldKey)) return null;
-  const windowMs = streamHistoryFetchWindowMs(presetId);
-  if (!windowMs) return null;
-  const lo = endMs - windowMs;
-  const hi = endMs;
+  const bounds = streamHistoryDisplayBounds(presetId, endMs);
+  if (!bounds) return null;
+  const lo = bounds.fromMs;
+  const hi = bounds.toMs;
   let pts = (Array.isArray(points) ? points : [])
     .filter((p) => p && Number.isFinite(p.ts) && Number.isFinite(p.val) && p.ts >= lo && p.ts <= hi)
     .sort((a, b) => a.ts - b.ts);
@@ -4874,10 +4855,10 @@ export default function BudgetSensorsDashboard({
     let cancelled = false;
     const ticket = ++streamHistoryFetchTicketRef.current;
     const isCurrentFetch = () => ticket === streamHistoryFetchTicketRef.current;
-    const windowMs = streamHistoryFetchWindowMs(streamTimePreset);
-    if (!windowMs) return undefined;
     const now = Date.now();
-    const startMs = now - windowMs;
+    const bounds = streamHistoryDisplayBounds(streamTimePreset, now);
+    if (!bounds) return undefined;
+    const startMs = bounds.fromMs;
     const endMs = now;
     const series = streamSeriesNormalized;
 
@@ -4923,7 +4904,9 @@ export default function BudgetSensorsDashboard({
         let sharedRows = [];
         try {
           const local = await withTimeout(
-            queryTelemetry(streamHistoryDeviceId, null, startMs, endMs, pageCap),
+            queryTelemetry(streamHistoryDeviceId, null, startMs, endMs, pageCap, {
+              bucketMs: historyChartBucketMs(streamTimePreset),
+            }),
             STREAM_HISTORY_FETCH_TIMEOUT_MS,
             'stream_telemetry_timeout'
           );
@@ -5207,7 +5190,9 @@ export default function BudgetSensorsDashboard({
       } else {
         try {
           const raw = await withTimeout(
-            queryTelemetry(barChartHistoryDeviceId, fk, fetchFrom, fetchTo, pageSize),
+            queryTelemetry(barChartHistoryDeviceId, fk, fetchFrom, fetchTo, pageSize, {
+              bucketMs: historyChartBucketMs(gran),
+            }),
             BAR_CHART_FETCH_TIMEOUT_MS,
             'bar_telemetry_timeout'
           );

@@ -24,7 +24,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "verify": "node scripts/verify-integration.mjs",
-    "test": "node --test server/test/selfhosted.test.cjs server/test/device-latest.test.cjs server/test/telemetry-persist.test.cjs",
+    "test": "node --test server/test/selfhosted.test.cjs server/test/device-latest.test.cjs server/test/telemetry-persist.test.cjs server/test/telemetry-series-sample.test.cjs",
     "simulate:lns": "node scripts/simulate-lorawan-classes.mjs",
     "reset:bootstrap": "node scripts/reset-bootstrap-local.mjs",
     "db:stats": "node scripts/db-telemetry-stats.mjs",

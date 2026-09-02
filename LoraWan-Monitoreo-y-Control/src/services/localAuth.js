@@ -324,14 +324,19 @@ export const saveTelemetry = async (deviceId, deviceName, properties) => {
 /**
  * propKey opcional: si falta o está vacío, devuelve todas las propiedades en el rango.
  * @param {number} [limit] — máximo de filas (servidor: hasta ~4000); útil para históricos largos en widgets.
+ * @param {{ bucketMs?: number }} [opts] — si hay `bucketMs`, el servidor devuelve una fila por cubo (cubre todo el periodo).
  */
-export const queryTelemetry = async (deviceId, propKey, startMs, endMs, limit) => {
+export const queryTelemetry = async (deviceId, propKey, startMs, endMs, limit, opts) => {
   const params = new URLSearchParams();
   params.set('startMs', String(startMs));
   params.set('endMs', String(endMs));
   if (propKey != null && propKey !== '') params.set('propKey', propKey);
   if (limit != null && Number.isFinite(Number(limit))) {
     params.set('limit', String(Math.min(4000, Math.max(1, Math.floor(Number(limit))))));
+  }
+  const bucketMs = Number(opts?.bucketMs);
+  if (Number.isFinite(bucketMs) && bucketMs >= 1000) {
+    params.set('bucketMs', String(Math.min(7 * 86400000, Math.floor(bucketMs))));
   }
   return handle(
     await fetchWithTimeout(

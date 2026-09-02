@@ -3095,8 +3095,9 @@ export default function WidgetEditModal({
                   {previewBaseDashId === DASH_WIDGET.BAR_CHART && (
                     <>
                       <p className="widget-edit-hint">
-                        Hora = últimos 60 minutos; Día = 24 barras por hora; Semana = 7 días; Mes = 30 días. Los botones
-                        ajustan el intervalo sugerido (puedes refinar desde/hasta abajo).
+                        Hora = últimos 60 minutos; Día = desde las 00:00 de hoy (cuartos de hora); Semana = desde el
+                        lunes; Mes = desde el día 1. Los botones ajustan el intervalo sugerido (puedes refinar desde/hasta
+                        abajo).
                       </p>
                       <div className="widget-edit-label">Agrupar por</div>
                       <div className="widget-edit-granularity-row">

@@ -348,6 +348,12 @@ function rowToUser(row) {
   };
 }
 
+function clampTelemetrySampleBucketMs(raw) {
+  const n = Math.floor(Number(raw));
+  if (!Number.isFinite(n) || n < 1000) return 0;
+  return Math.min(n, 7 * 86400000);
+}
+
 function rowToTelemetryRow(row) {
   let properties = {};
   try {
@@ -2137,28 +2143,37 @@ class Store {
    * Serie temporal acotada para gráficos / historial.
    * Antes: `telemetryRange` sin LIMIT leía **todas** las filas del intervalo (mes = cientos de MB JSON) → muy lento.
    * Ahora: `telemetryHistory` con LIMIT (más recientes en el rango), orden cronológico ASC para el cliente.
+   * Con `bucketMs`, una fila por cubo de tiempo (cubre todo el periodo; evita que Día arranque a media mañana).
    */
-  getTelemetrySeries(userId, deviceId, startMs, endMs, propKey, maxRows) {
+  getTelemetrySeries(userId, deviceId, startMs, endMs, propKey, maxRows, bucketMs) {
     const did = String(deviceId);
     const uid = this._telemetryOwnerUserId(did, userId);
     const s = parseInt(startMs, 10) || 0;
     const e = parseInt(endMs, 10) || Date.now();
     const cap = Math.min(maxRows || 500, 4000);
     const pk = propKey != null && String(propKey).trim() !== '' ? String(propKey).trim() : '';
+    const bucket = clampTelemetrySampleBucketMs(bucketMs);
     const cacheTtl = Math.max(
       1000,
       parseInt(String(process.env.SYSCOM_TELEMETRY_SERIES_CACHE_MS || '4000').trim(), 10) || 4000
     );
-    const cacheKey = `${uid}|${did}|${s}|${e}|${pk}|${cap}`;
+    const cacheKey = `${uid}|${did}|${s}|${e}|${pk}|${cap}|${bucket}`;
     const hit = this._telemetrySeriesCache.get(cacheKey);
     if (hit && Date.now() - hit.at < cacheTtl) return hit.data;
 
     /** Con filtro por clave, pedir más filas porque muchas no traen la propiedad (mismo tope duro 4000). */
     const fetchLimit = pk ? Math.min(4000, Math.max(cap * 3, cap, 120)) : cap;
 
-    const rows = this.st.telemetryHistory.all(uid, did, s, e, fetchLimit);
-    const chron = rows.slice().reverse();
-    let list = chron.map(rowToTelemetryRow);
+    let list;
+    if (bucket > 0) {
+      const needle = pk ? `"${pk.replace(/"/g, '')}"` : '';
+      const rows = this._telemetryHistorySampledStmt(bucket).all(needle, needle, uid, did, s, e, fetchLimit);
+      list = rows.map(rowToTelemetryRow);
+    } else {
+      const rows = this.st.telemetryHistory.all(uid, did, s, e, fetchLimit);
+      const chron = rows.slice().reverse();
+      list = chron.map(rowToTelemetryRow);
+    }
     if (pk) {
       list = list.filter((t) => t.properties && telemetryRowHasPropertyKey(t.properties, pk));
       if (list.length > cap) list = list.slice(-cap);
@@ -2171,6 +2186,29 @@ class Store {
       }
     }
     return list;
+  }
+
+  _telemetryHistorySampledStmt(bucketMs) {
+    const b = clampTelemetrySampleBucketMs(bucketMs);
+    if (!this._telemetrySampledStmt) this._telemetrySampledStmt = new Map();
+    let stmt = this._telemetrySampledStmt.get(b);
+    if (!stmt) {
+      stmt = this.db.prepare(`
+        SELECT id, user_id, device_id, device_name, properties_json, ts FROM (
+          SELECT id, user_id, device_id, device_name, properties_json, ts,
+            ROW_NUMBER() OVER (
+              PARTITION BY (ts / ${b})
+              ORDER BY CASE WHEN ? = '' THEN 0 WHEN instr(properties_json, ?) > 0 THEN 0 ELSE 1 END ASC, ts DESC, id DESC
+            ) AS rn
+          FROM telemetry
+          WHERE user_id = ? AND device_id = ? AND ts >= ? AND ts <= ?
+        ) WHERE rn = 1
+        ORDER BY ts ASC
+        LIMIT ?
+      `);
+      this._telemetrySampledStmt.set(b, stmt);
+    }
+    return stmt;
   }
 
   getLastTelemetryRow(userId, deviceId) {

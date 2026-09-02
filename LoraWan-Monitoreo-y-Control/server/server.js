@@ -5123,20 +5123,22 @@ app.post('/api/telemetry', authMiddleware, staffOnlyMiddleware, (req, res) => {
 });
 
 app.get('/api/telemetry/:deviceId', authMiddleware, deviceAssignmentMiddleware, (req, res) => {
-  const { startMs, endMs, propKey, limit } = req.query;
+  const { startMs, endMs, propKey, limit, bucketMs } = req.query;
   let maxRows = 500;
   if (limit != null && limit !== '') {
     const n = parseInt(String(limit), 10);
     if (Number.isFinite(n)) maxRows = Math.min(4000, Math.max(50, n));
   }
   const tuid = telemetryUserIdForRequest(req, req.params.deviceId);
+  const sampleBucket = bucketMs != null && bucketMs !== '' ? Number(bucketMs) : 0;
   const entries = store.getTelemetrySeries(
     tuid,
     req.params.deviceId,
     startMs,
     endMs,
     propKey,
-    maxRows
+    maxRows,
+    sampleBucket
   );
   res.json(
     entries.map((t) => ({
