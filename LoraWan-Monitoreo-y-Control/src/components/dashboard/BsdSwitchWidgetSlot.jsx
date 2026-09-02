@@ -35,6 +35,7 @@ export default function BsdSwitchWidgetSlot({
   panelDevices,
   credentials,
   token,
+  isDemo = false,
   expandTelemetryLive,
   wTitle,
   wTitleStyle,
@@ -90,6 +91,10 @@ export default function BsdSwitchWidgetSlot({
   const [switchProcessing, setSwitchProcessing] = useState(false);
 
   const handleSwitchClick = useCallback(async () => {
+    if (isDemo) {
+      setManualSwitchState(!switchOn);
+      return;
+    }
     if (!canSendLnsCommands || !targetDeviceId || switchProcessing) return;
     const dls = switchWidgetDownlinkList;
     if (dls.length === 0) {
@@ -127,6 +132,7 @@ export default function BsdSwitchWidgetSlot({
       setSwitchProcessing(false);
     }
   }, [
+    isDemo,
     canSendLnsCommands,
     targetDeviceId,
     switchProcessing,
@@ -168,12 +174,18 @@ export default function BsdSwitchWidgetSlot({
         <BsdRealisticSwitch
           isOn={switchOn}
           busy={switchProcessing}
-          disabled={!canSendLnsCommands || !targetDeviceId || switchWidgetDownlinkList.length === 0}
+          disabled={
+            isDemo
+              ? switchProcessing
+              : !canSendLnsCommands || !targetDeviceId || switchWidgetDownlinkList.length === 0
+          }
           onClick={handleSwitchClick}
         />
-        {!canSendLnsCommands && (
+        {isDemo ? (
+          <p className="bsd-control-hint">Cuenta demo: el interruptor no envía comandos reales.</p>
+        ) : !canSendLnsCommands ? (
           <p className="bsd-control-hint">Inicie sesión para enviar comandos LoRaWAN desde el panel.</p>
-        )}
+        ) : null}
       </div>
     </div>
   );

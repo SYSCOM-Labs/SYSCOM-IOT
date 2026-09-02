@@ -67,6 +67,15 @@ import {
   deviceBsdBundleIsEmpty,
 } from '../../utils/deviceBsdPreferencesBundle';
 import { applyPanelBsdBundle, collectPanelBsdBundle, purgePanelInstanceStorage } from '../../utils/panelBsdPreferencesBundle';
+import {
+  DEMO_SHOWCASE_DEVICE_ID,
+  applyDemoShowcaseIfNeeded,
+  buildDemoShowcaseHistoryRows,
+  buildDemoShowcaseLiveTelemetry,
+  buildDemoShowcaseTrackingRows,
+  normalizeDemoShowcasePanelId,
+  readDemoShowcasePanel,
+} from './demoShowcaseDashboard';
 import { applyStaleOfflineConnectStatus, isDeviceVisuallyOnline } from '../../utils/deviceConnectionStatus';
 import { SYSCOM_REALTIME_TELEMETRY, SYSCOM_REALTIME_LNS } from '../../constants/realtimeEvents';
 import {
@@ -2285,6 +2294,12 @@ export default function BudgetSensorsDashboard({
   const dashDeviceId = variant === 'device' ? resolveDeviceDashboardStorageId(device) : null;
 
   const panelOwnerSegment = useMemo(() => resolvePanelOwnerSegment(userProfile ?? user), [userProfile, user]);
+  const isDemoPanel = Boolean(isDemo && variant === 'panel');
+  const [demoTick, setDemoTick] = useState(0);
+  const demoLiveTelemetry = useMemo(
+    () => (isDemoPanel ? buildDemoShowcaseLiveTelemetry(Date.now()) : null),
+    [isDemoPanel, demoTick]
+  );
 
   const [panelWorkspace, setPanelWorkspace] = useState(() => ({
     panels: [{ id: 'main', name: 'Panel principal' }],
@@ -2299,9 +2314,21 @@ export default function BudgetSensorsDashboard({
     if (variant !== 'panel') return;
     const seg = resolvePanelOwnerSegment(userProfile ?? user);
     if (!seg) return;
+    if (isDemo) {
+      applyDemoShowcaseIfNeeded(seg);
+      const snap = readDemoShowcasePanel(seg, panelWorkspaceRef.current?.activePanelId || 'main');
+      setPanelWorkspace(snap.workspace);
+      return;
+    }
     const ws = loadPanelWorkspace(seg);
     if (ws) setPanelWorkspace(ws);
-  }, [variant, userProfile, user]);
+  }, [variant, userProfile, user, isDemo]);
+
+  useEffect(() => {
+    if (!isDemoPanel) return undefined;
+    const id = window.setInterval(() => setDemoTick((n) => n + 1), 2000);
+    return () => window.clearInterval(id);
+  }, [isDemoPanel]);
   const panelInstanceId =
     variant === 'panel' ? panelWorkspace.activePanelId || 'main' : 'main';
 
@@ -2745,13 +2772,27 @@ export default function BudgetSensorsDashboard({
 
   const telemetryLivePropsForPanelWidget = useCallback(
     (wid) => {
-      if (variant !== 'panel') return telemetryLiveProps;
-      const id = resolveWidgetBoundDeviceId(wid);
-      if (!id) return telemetryLiveProps;
-      if (controlDeviceId && String(id) === String(controlDeviceId)) return telemetryLiveProps;
-      return panelTelemetryExpandedByDeviceId[id] || {};
+      let base = telemetryLiveProps;
+      if (variant === 'panel') {
+        const id = resolveWidgetBoundDeviceId(wid);
+        if (!id) base = telemetryLiveProps;
+        else if (controlDeviceId && String(id) === String(controlDeviceId)) base = telemetryLiveProps;
+        else base = panelTelemetryExpandedByDeviceId[id] || {};
+      }
+      if (isDemoPanel && demoLiveTelemetry) {
+        return { ...(base && typeof base === 'object' && !Array.isArray(base) ? base : {}), ...demoLiveTelemetry };
+      }
+      return base;
     },
-    [variant, telemetryLiveProps, controlDeviceId, resolveWidgetBoundDeviceId, panelTelemetryExpandedByDeviceId]
+    [
+      variant,
+      telemetryLiveProps,
+      controlDeviceId,
+      resolveWidgetBoundDeviceId,
+      panelTelemetryExpandedByDeviceId,
+      isDemoPanel,
+      demoLiveTelemetry,
+    ]
   );
 
   const resolveLiveDeviceModelForPanelWidget = useCallback(
@@ -2876,6 +2917,7 @@ export default function BudgetSensorsDashboard({
   streamWidgetTelSnapshotRef.current = telemetryLivePropsForPanelWidget(DASH_WIDGET.STREAM);
 
   useEffect(() => {
+    if (isDemoPanel) return;
     setVisibilityMap(
       loadDashboardVisibility(
         variant,
@@ -2884,7 +2926,7 @@ export default function BudgetSensorsDashboard({
         variant === 'panel' ? panelOwnerSegment : undefined
       )
     );
-  }, [variant, dashDeviceId, panelInstanceId, panelOwnerSegment]);
+  }, [variant, dashDeviceId, panelInstanceId, panelOwnerSegment, isDemoPanel]);
 
   const hiddenCardsScope = variant === 'device' ? device?.deviceId : controlDeviceId;
   useEffect(() => {
@@ -2911,6 +2953,7 @@ export default function BudgetSensorsDashboard({
   /** Tras cada cambio local del BSD, subir el bundle al servidor con debounce (vista dispositivo: por equipo; panel: por segmento y pestaña). */
   useEffect(() => {
     const runServerPush = async () => {
+      if (isDemo) return;
       if (!token) return;
       const uid = String((user && user.id) || (userProfile && userProfile.id) || '').trim();
       if (!uid) return;
@@ -2980,7 +3023,7 @@ export default function BudgetSensorsDashboard({
         void runServerPush();
       }, 900);
     };
-  }, [variant, dashDeviceId, panelInstanceId, panelOwnerSegment, token, user?.id, userProfile?.id]);
+  }, [variant, dashDeviceId, panelInstanceId, panelOwnerSegment, token, user?.id, userProfile?.id, isDemo]);
 
   useEffect(() => {
     return () => {
@@ -2994,6 +3037,7 @@ export default function BudgetSensorsDashboard({
   /** Sin `dashDeviceId` en vista dispositivo, no escribir en `bsd_dash_grid_v1_default` (evita mezclar equipos). */
   const persistBsdGridLayoutDisk = useCallback(
     (normalizedLayout) => {
+      if (isDemo) return;
       if (variant === 'device' && !dashDeviceId) return;
       try {
         /** Posiciones y tamaños del grid (rejilla 12 cols): persistencia por dispositivo o panel (`dashboardGridLayoutStorageKey`). */
@@ -3005,7 +3049,7 @@ export default function BudgetSensorsDashboard({
         scheduleBsdServerPersistRef.current?.();
       }
     },
-    [variant, dashDeviceId, dashboardGridLayoutKey]
+    [variant, dashDeviceId, dashboardGridLayoutKey, isDemo]
   );
   const loadInitialGridLayout = (gk, vis, panelDevicesLen = 0) =>
     resolveBsdDashboardGridLayout(
@@ -3097,6 +3141,33 @@ export default function BudgetSensorsDashboard({
   }, [variant, dashDeviceId]);
 
   useLayoutEffect(() => {
+    if (!isDemoPanel || !panelOwnerSegment) return;
+    applyDemoShowcaseIfNeeded(panelOwnerSegment);
+    const pid = normalizeDemoShowcasePanelId(panelInstanceId);
+    const snap = readDemoShowcasePanel(panelOwnerSegment, pid);
+    setPanelWorkspace((prev) => {
+      const same =
+        prev.activePanelId === snap.workspace.activePanelId &&
+        prev.panels.length === snap.workspace.panels.length &&
+        prev.panels.every((p, i) => p.id === snap.workspace.panels[i]?.id && p.name === snap.workspace.panels[i]?.name);
+      return same ? prev : snap.workspace;
+    });
+    visibilityMapRef.current = snap.visibility;
+    setVisibilityMap((prev) => {
+      try {
+        if (JSON.stringify(prev) === JSON.stringify(snap.visibility)) return prev;
+      } catch {
+        /* ignore */
+      }
+      return snap.visibility;
+    });
+    const nextGrid = resolveBsdDashboardGridLayout(snap.gridLayout, snap.visibility);
+    gridLayoutLatestRef.current = nextGrid;
+    setGridLayout((prev) => (layoutsEqualStable(prev, nextGrid) ? prev : nextGrid));
+    setWidgetConfigs((prev) => ({ ...prev, ...snap.valueWidgets }));
+  }, [isDemoPanel, panelOwnerSegment, panelInstanceId]);
+
+  useLayoutEffect(() => {
     const inner = innerRef.current;
     const measureEl = gridWidthMeasureRef.current || inner?.parentElement || inner;
     if (!measureEl) return;
@@ -3116,6 +3187,7 @@ export default function BudgetSensorsDashboard({
   }, [embedded, variant, panelLoading, loadingExternal, dashboardGridLayoutKey]);
 
   useLayoutEffect(() => {
+    if (isDemoPanel) return;
     const keyChanged = prevDashboardGridLayoutKeyRef.current !== dashboardGridLayoutKey;
     prevDashboardGridLayoutKeyRef.current = dashboardGridLayoutKey;
 
@@ -3190,6 +3262,7 @@ export default function BudgetSensorsDashboard({
     dashDeviceId,
     panelInstanceId,
     panelOwnerSegment,
+    isDemoPanel,
   ]);
 
   /** Persiste layout reparado (sin solapes) cuando el estado en memoria difiere del resuelto. */
@@ -3370,7 +3443,7 @@ export default function BudgetSensorsDashboard({
 
   /** Sincroniza BSD del panel desde el servidor (otro navegador o caché limpiada). Una fila por (usuario, segmento, id de pestaña). */
   useEffect(() => {
-    if (variant !== 'panel' || !token) return undefined;
+    if (variant !== 'panel' || !token || isDemo) return undefined;
     const uid = String((user && user.id) || (userProfile && userProfile.id) || '').trim();
     if (!uid) return undefined;
     const seg =
@@ -3418,7 +3491,7 @@ export default function BudgetSensorsDashboard({
     return () => {
       cancelled = true;
     };
-  }, [variant, token, user?.id, userProfile?.id, panelOwnerSegment, panelInstanceId]);
+  }, [variant, token, user?.id, userProfile?.id, panelOwnerSegment, panelInstanceId, isDemo]);
 
   useEffect(() => {
     if (!canEditDashboard) {
@@ -3477,6 +3550,13 @@ export default function BudgetSensorsDashboard({
           if (alt != null) return alt;
         }
       }
+      if (isDemoPanel && demoLiveTelemetry && field) {
+        const demoRaw = demoLiveTelemetry[field];
+        if (demoRaw != null && demoRaw !== '') {
+          const n = typeof demoRaw === 'number' && Number.isFinite(demoRaw) ? demoRaw : parseNumeric(demoRaw);
+          if (n != null && Number.isFinite(n)) return n;
+        }
+      }
       if (String(field) === String(aggField)) {
         const v = s.value;
         return typeof v === 'number' && Number.isFinite(v) ? v : parseNumeric(v);
@@ -3490,6 +3570,8 @@ export default function BudgetSensorsDashboard({
       dashDeviceId,
       controlDeviceId,
       panelTelemetryExpandedByDeviceId,
+      isDemoPanel,
+      demoLiveTelemetry,
     ]
   );
 
@@ -4716,6 +4798,7 @@ export default function BudgetSensorsDashboard({
   }, [variant, widgetConfigs, dk]);
 
   const streamHistoryDeviceId = useMemo(() => {
+    if (isDemoPanel) return DEMO_SHOWCASE_DEVICE_ID;
     if (variant === 'device') {
       return dashDeviceId != null && String(dashDeviceId).trim().length
         ? String(dashDeviceId).trim()
@@ -4724,9 +4807,10 @@ export default function BudgetSensorsDashboard({
     if (variant !== 'panel') return controlDeviceId ? String(controlDeviceId) : null;
     if (streamPanelDeviceSig) return streamPanelDeviceSig;
     return controlDeviceId ? String(controlDeviceId) : null;
-  }, [variant, streamPanelDeviceSig, controlDeviceId, dashDeviceId]);
+  }, [isDemoPanel, variant, streamPanelDeviceSig, controlDeviceId, dashDeviceId]);
 
   const barChartHistoryDeviceId = useMemo(() => {
+    if (isDemoPanel) return DEMO_SHOWCASE_DEVICE_ID;
     if (variant === 'device') {
       return dashDeviceId != null && String(dashDeviceId).trim().length
         ? String(dashDeviceId).trim()
@@ -4735,7 +4819,7 @@ export default function BudgetSensorsDashboard({
     if (variant !== 'panel') return controlDeviceId ? String(controlDeviceId) : null;
     if (barPanelDeviceSig) return barPanelDeviceSig;
     return controlDeviceId ? String(controlDeviceId) : null;
-  }, [variant, barPanelDeviceSig, controlDeviceId, dashDeviceId]);
+  }, [isDemoPanel, variant, barPanelDeviceSig, controlDeviceId, dashDeviceId]);
 
   useEffect(() => {
     barChartLivePulseBufferRef.current = [];
@@ -4778,6 +4862,7 @@ export default function BudgetSensorsDashboard({
   }, [barChartLiveValueSig, visibilityMap[DASH_WIDGET.BAR_CHART], dk]);
 
   const trackingMapHistoryDeviceId = useMemo(() => {
+    if (isDemoPanel) return DEMO_SHOWCASE_DEVICE_ID;
     if (variant === 'device') {
       return dashDeviceId != null && String(dashDeviceId).trim().length
         ? String(dashDeviceId).trim()
@@ -4786,7 +4871,7 @@ export default function BudgetSensorsDashboard({
     if (variant !== 'panel') return controlDeviceId ? String(controlDeviceId) : null;
     if (trackingPanelDeviceSig) return trackingPanelDeviceSig;
     return controlDeviceId ? String(controlDeviceId) : null;
-  }, [variant, trackingPanelDeviceSig, controlDeviceId, dashDeviceId]);
+  }, [isDemoPanel, variant, trackingPanelDeviceSig, controlDeviceId, dashDeviceId]);
 
   useEffect(() => {
     if (streamTimePreset !== 'live') return undefined;
@@ -4914,6 +4999,10 @@ export default function BudgetSensorsDashboard({
         /** Una sola consulta sin filtro por clave: cada fila trae el JSON completo de propiedades (SQLite `telemetry`). */
         const pageCap = streamHistoryPageSize(streamTimePreset);
         let sharedRows = [];
+        if (isDemoPanel) {
+          const bucket = historyChartBucketMs(streamTimePreset) || 15 * 60 * 1000;
+          sharedRows = buildDemoShowcaseHistoryRows(startMs, endMs, bucket);
+        } else {
         try {
           const local = await withTimeout(
             queryTelemetry(streamHistoryDeviceId, null, startMs, endMs, pageCap, {
@@ -4948,6 +5037,7 @@ export default function BudgetSensorsDashboard({
           } catch (e2) {
             console.warn('[BSD stream] fetchDeviceHistory', e2);
           }
+        }
         }
 
         if (cancelled || !isCurrentFetch()) return;
@@ -5016,6 +5106,7 @@ export default function BudgetSensorsDashboard({
     credentials,
     token,
     visibilityMap[DASH_WIDGET.STREAM],
+    isDemoPanel,
   ]);
 
   /** Misma curva histórica + última lectura en vivo (sin nuevo fetch a BD). */
@@ -5199,6 +5290,11 @@ export default function BudgetSensorsDashboard({
       let historyFetchTimedOut = false;
       if (fastPath) {
         rows = barHistoryRowsRef.current;
+      } else if (isDemoPanel) {
+        const step = historyChartBucketMs(gran) || 60 * 60 * 1000;
+        rows = buildDemoShowcaseHistoryRows(fetchFrom, fetchTo, step);
+        barHistoryRowsRef.current = rows;
+        barHistoryRowsCacheKeyRef.current = rowCacheKey;
       } else {
         try {
           const raw = await withTimeout(
@@ -5332,6 +5428,7 @@ export default function BudgetSensorsDashboard({
     token,
     variant,
     visibilityMap[DASH_WIDGET.BAR_CHART],
+    isDemoPanel,
   ]);
 
   /** Precarga del gráfico de barras en cuanto hay telemetría (listado o /properties), sin esperar al historial. */
@@ -5529,6 +5626,9 @@ export default function BudgetSensorsDashboard({
       };
       let rows = [];
       const propKey = telemetryField || null;
+      if (isDemoPanel) {
+        rows = buildDemoShowcaseTrackingRows(startMs, endMs);
+      } else {
       try {
         rows = await queryTelemetry(trackingMapHistoryDeviceId, propKey, startMs, endMs);
       } catch (e) {
@@ -5565,6 +5665,7 @@ export default function BudgetSensorsDashboard({
           return;
         }
       }
+      }
       if (cancelled) return;
       const rawPts = collectTrackingPointsFromTelemetryRows(rows, keys);
       const slack = 120000;
@@ -5584,6 +5685,7 @@ export default function BudgetSensorsDashboard({
     token,
     trackingMapFetchSig,
     trackingMapStorageKey,
+    isDemoPanel,
   ]);
 
   const editSensorValue = (id) => {
@@ -6620,6 +6722,7 @@ export default function BudgetSensorsDashboard({
                     );
                   })}
                 </div>
+                {!isDemo ? (
                 <div className="bsd-panel-workspace-actions">
                   <button type="button" className="bsd-panel-workspace-btn" onClick={addPanelTab}>
                     <Plus size={14} strokeWidth={2.25} aria-hidden /> Panel
@@ -6633,6 +6736,7 @@ export default function BudgetSensorsDashboard({
                     <Pencil size={14} aria-hidden /> Renombrar
                   </button>
                 </div>
+                ) : null}
               </div>
             )}
           </div>
@@ -6723,6 +6827,7 @@ export default function BudgetSensorsDashboard({
                 panelDevices={panelDevices}
                 credentials={credentials}
                 token={token}
+                isDemo={isDemo}
                 expandTelemetryLive={expandMergedDeviceTelemetryLive}
                 wTitle={wTitle}
                 wTitleStyle={wTitleStyle}
@@ -6749,6 +6854,7 @@ export default function BudgetSensorsDashboard({
                 panelDevices={panelDevices}
                 credentials={credentials}
                 token={token}
+                isDemo={isDemo}
                 lastTelemetryAtLabel={lastTelemetryAtLabel}
                 wTitle={wTitle}
                 wTitleStyle={wTitleStyle}

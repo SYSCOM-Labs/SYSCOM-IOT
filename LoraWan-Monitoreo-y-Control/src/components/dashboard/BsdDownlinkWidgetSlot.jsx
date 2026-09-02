@@ -37,6 +37,7 @@ export default function BsdDownlinkWidgetSlot({
   panelDevices,
   credentials,
   token,
+  isDemo = false,
   lastTelemetryAtLabel,
   wTitle,
   wTitleStyle,
@@ -76,6 +77,11 @@ export default function BsdDownlinkWidgetSlot({
       .map((r) => {
         const n = normalizeDownlinkHex(r.hex);
         if (!n) return null;
+        if (isDemo) {
+          const label = String(r.label || '').trim() || 'Comando';
+          const buttonColor = parseCssHex(r.buttonColor) || '';
+          return { hex: n, label, buttonColor };
+        }
         const hit = downlinkWidgetDownlinkList.find((d) => normalizeDownlinkHex(d.hex) === n);
         if (!hit) return null;
         const label = String(r.label || '').trim() || String(hit.name || '').trim() || 'Enviar';
@@ -101,7 +107,7 @@ export default function BsdDownlinkWidgetSlot({
       ];
     }
     return [];
-  }, [downlinkWidgetDownlinkList, widgetConfigs, dk, slotId]);
+  }, [downlinkWidgetDownlinkList, widgetConfigs, dk, slotId, isDemo]);
 
   const downlinkWidgetTitleColor = useMemo(
     () => widgetConfigs[dk(slotId)]?.appearance?.titleColor || '#f97316',
@@ -175,14 +181,7 @@ export default function BsdDownlinkWidgetSlot({
         </div>
       </div>
       <div className="bsd-downlink-widget-body">
-        {downlinkWidgetDownlinkList.length === 0 ? (
-          <div className="bsd-control-hint">
-            Sin comandos guardados. Créalos en la ficha del dispositivo → Downlink y define los botones en Editar widget →
-            Datos.
-          </div>
-        ) : panelDownlinkActions.length === 0 ? (
-          <div className="bsd-control-hint">Añade al menos un comando con HEX válido en Editar widget → Datos.</div>
-        ) : (
+        {panelDownlinkActions.length > 0 ? (
           <div className="bsd-downlink-stack" data-downlink-sending={downlinkSendingVersion}>
             {panelDownlinkActions.map((act, i) => {
               const hexKey = normalizeDownlinkHex(act.hex);
@@ -192,7 +191,7 @@ export default function BsdDownlinkWidgetSlot({
                   key={`${hexKey}_${i}`}
                   type="button"
                   className={`bsd-downlink-btn bsd-downlink-btn--send${isSending ? ' bsd-downlink-btn--sending' : ''}`}
-                  disabled={!canSendLnsCommands || !targetDeviceId || isSending}
+                  disabled={isDemo || !canSendLnsCommands || !targetDeviceId || isSending}
                   aria-busy={isSending}
                   onClick={() => handlePanelDownlinkClick(act.hex)}
                   style={
@@ -210,11 +209,20 @@ export default function BsdDownlinkWidgetSlot({
               );
             })}
           </div>
+        ) : downlinkWidgetDownlinkList.length === 0 ? (
+          <div className="bsd-control-hint">
+            Sin comandos guardados. Créalos en la ficha del dispositivo → Downlink y define los botones en Editar widget →
+            Datos.
+          </div>
+        ) : (
+          <div className="bsd-control-hint">Añade al menos un comando con HEX válido en Editar widget → Datos.</div>
         )}
       </div>
-      {!canSendLnsCommands && (
+      {isDemo ? (
+        <p className="bsd-control-hint">Cuenta demo: los botones no envían comandos reales.</p>
+      ) : !canSendLnsCommands ? (
         <p className="bsd-control-hint">Inicie sesión para enviar downlinks desde el panel.</p>
-      )}
+      ) : null}
       {lastTelemetryAtLabel ? (
         <div className="bsd-widget-footnote" style={wTitleStyle(slotId)}>
           {lastTelemetryAtLabel}
