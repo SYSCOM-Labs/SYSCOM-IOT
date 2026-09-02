@@ -1715,6 +1715,53 @@ body:not(.theme-dark) .widget-edit-field-list::-webkit-scrollbar-thumb {
   background: rgba(15, 23, 42, 0.22);
 }
 
+.widget-edit-date-range-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.28);
+  color: #e2e8f0;
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 650;
+  cursor: pointer;
+  text-align: left;
+}
+
+.widget-edit-date-range-toggle:hover {
+  border-color: rgba(94, 234, 212, 0.5);
+}
+
+.widget-edit-date-range-toggle__label {
+  flex: 0 0 auto;
+}
+
+.widget-edit-date-range-toggle__meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: rgba(226, 232, 240, 0.72);
+}
+
+.widget-edit-date-range-toggle__chev {
+  flex: 0 0 auto;
+  margin-left: auto;
+  transition: transform 0.16s ease;
+}
+
+.widget-edit-date-range-toggle.is-open .widget-edit-date-range-toggle__chev {
+  transform: rotate(180deg);
+}
+
 .widget-edit-date-filter-custom {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1748,6 +1795,20 @@ body:not(.theme-dark) .widget-edit-granularity-btn.is-active {
 body:not(.theme-dark) .widget-edit-date-filter {
   background: #f8fafc;
   border-color: rgba(99, 102, 241, 0.18);
+}
+
+body:not(.theme-dark) .widget-edit-date-range-toggle {
+  background: #ffffff;
+  color: #1e293b;
+  border-color: rgba(99, 102, 241, 0.28);
+}
+
+body:not(.theme-dark) .widget-edit-date-range-toggle:hover {
+  border-color: rgba(79, 70, 229, 0.45);
+}
+
+body:not(.theme-dark) .widget-edit-date-range-toggle__meta {
+  color: #64748b;
 }
 
 /* Widget Imagen (tablero): vista previa y origen en Básicos */

@@ -79,10 +79,6 @@ import {
 } from '../../constants/liveRefreshMs';
 import { pushAppActivityLog } from '../../utils/appActivityLog';
 import WidgetEditModal from './WidgetEditModal';
-import {
-  ValueWidgetDateFilterButtons,
-  ValueWidgetDateFilterCustomFields,
-} from './ValueWidgetDateFilter';
 import BsdWindVaneWidget from './BsdWindVaneWidget';
 import BsdSwitchWidgetSlot from './BsdSwitchWidgetSlot';
 import BsdDownlinkWidgetSlot from './BsdDownlinkWidgetSlot';
@@ -124,7 +120,6 @@ import {
   resolveTextWidgetRawScalar,
   ensureDownlinkButtonsDraft,
   normalizeStreamSeriesConfig,
-  applyHistoryGranularityPreset,
   normalizeBarChartGranularity,
   barChartHistoryFetchFromMs,
   startOfLocalDayMs,
@@ -132,8 +127,6 @@ import {
   startOfLocalMonthMs,
   streamHistoryDisplayBounds,
   historyChartBucketMs,
-  BAR_CHART_WIDGET_GRANULARITY_OPTIONS,
-  applyValueDateFilterPreset,
   normalizeValueDateFilterPreset,
   isValueDateFilterActive,
   resolveValueDateFilterWindow,
@@ -2499,8 +2492,6 @@ export default function BudgetSensorsDashboard({
   /** Agregado del filtro por fechas en widgets de valor (`storageKey` → { value, label, error, loading }). */
   const [dateFilterAggByKey, setDateFilterAggByKey] = useState({});
   const [dateFilterEpoch, setDateFilterEpoch] = useState(0);
-  const [dateFilterCustomSlotId, setDateFilterCustomSlotId] = useState(null);
-  const [dateFilterCustomDraft, setDateFilterCustomDraft] = useState({ from: '', to: '' });
   const telemetryLiveProps = useMemo(() => {
     const deviceKey =
       variant === 'device' && dashDeviceId != null && String(dashDeviceId).trim().length
@@ -5715,89 +5706,6 @@ export default function BudgetSensorsDashboard({
     setWidgetConfigs(loadAllWidgetConfigs());
   }, [dk]);
 
-  const applyValueDateFilter = useCallback(
-    (slotId, preset, customPatch) => {
-      const k = dk(slotId);
-      const prev = widgetConfigsRef.current[k];
-      const draft = mergeWidgetConfig(dashboardWidgetSensorStub(slotId), prev || {});
-      if (customPatch && typeof customPatch === 'object') {
-        draft.timeframe = { ...(draft.timeframe || {}) };
-        if (customPatch.from != null) draft.timeframe.customFrom = customPatch.from;
-        if (customPatch.to != null) draft.timeframe.customTo = customPatch.to;
-      }
-      applyValueDateFilterPreset(draft, preset);
-      saveWidgetConfig(k, draft);
-      scheduleBsdServerPersistRef.current?.();
-      setWidgetConfigs(loadAllWidgetConfigs());
-      if (preset === 'custom') {
-        setDateFilterCustomSlotId(slotId);
-        setDateFilterCustomDraft({
-          from: String(draft.timeframe?.customFrom || ''),
-          to: String(draft.timeframe?.customTo || ''),
-        });
-      } else {
-        setDateFilterCustomSlotId((cur) => (cur === slotId ? null : cur));
-      }
-    },
-    [dk]
-  );
-
-  const valueDateFilterBar = (slotId) => {
-    const cfg = widgetConfigs[dk(slotId)];
-    const preset = normalizeValueDateFilterPreset(cfg?.timeframe?.filterPreset);
-    return (
-      <>
-        <ValueWidgetDateFilterButtons
-          variant="widget"
-          activePreset={preset}
-          onSelect={(id) => applyValueDateFilter(slotId, id)}
-        />
-        {preset === 'custom' && dateFilterCustomSlotId === slotId ? (
-          <ValueWidgetDateFilterCustomFields
-            compact
-            showApply
-            customFrom={dateFilterCustomDraft.from}
-            customTo={dateFilterCustomDraft.to}
-            onChangeFrom={(v) => setDateFilterCustomDraft((d) => ({ ...d, from: v }))}
-            onChangeTo={(v) => setDateFilterCustomDraft((d) => ({ ...d, to: v }))}
-            onApply={() => applyValueDateFilter(slotId, 'custom', dateFilterCustomDraft)}
-          />
-        ) : null}
-      </>
-    );
-  };
-
-  const applyBarChartGranularity = useCallback((slotId, gran) => {
-    const k = dk(slotId);
-    const prev = widgetConfigs[k];
-    const draft = mergeWidgetConfig(dashboardWidgetSensorStub(DASH_WIDGET.BAR_CHART), prev);
-    if (gran) applyHistoryGranularityPreset(draft, gran);
-    else {
-      draft.timeframe = draft.timeframe || {};
-      draft.timeframe.granularity = '';
-      draft.timeframe.mode = 'interval';
-      if (!draft.timeframe.from) draft.timeframe.from = '90 días atrás';
-      if (!draft.timeframe.to) draft.timeframe.to = 'now';
-      if (!draft.timeframe.operation) draft.timeframe.operation = 'avg';
-    }
-    saveWidgetConfig(k, draft);
-    scheduleBsdServerPersistRef.current?.();
-    setWidgetConfigs(loadAllWidgetConfigs());
-  }, [variant, widgetConfigs, dk]);
-
-  const applyTrackingTimeRange = useCallback(
-    (slotId, range) => {
-      const k = dk(slotId);
-      const prev = widgetConfigs[k];
-      const draft = mergeWidgetConfig(dashboardWidgetSensorStub(DASH_WIDGET.TRACKING_MAP), prev);
-      draft.data = { ...draft.data, trackingTimeRange: range };
-      saveWidgetConfig(k, draft);
-      scheduleBsdServerPersistRef.current?.();
-      setWidgetConfigs(loadAllWidgetConfigs());
-    },
-    [widgetConfigs, dk]
-  );
-
   const applyMapBaseLayer = useCallback(
     (wid, layerId) => {
       const k = dk(wid);
@@ -6930,11 +6838,6 @@ export default function BudgetSensorsDashboard({
               <div className="widget-title" style={wTitleStyle(slotId)}>
                 <Route size={18} className="bsd-lucide-glow" strokeWidth={2} /> {wTitle(slotId, 'Mapa de rastreo')}
               </div>
-              <div className="bsd-tracking-map-presets" role="group" aria-label="Periodo del historial GPS">
-                {[{ id: 'day', lab: 'Día' }, { id: 'week', lab: 'Semana' }, { id: 'month', lab: 'Mes' }].map(({ id, lab }) => (
-                  <button key={id} type="button" className={`bsd-bar-chart-preset${(widgetConfigs[dk(slotId)]?.data?.trackingTimeRange || 'day') === id ? ' active' : ''}`} onClick={() => applyTrackingTimeRange(slotId, id)}>{lab}</button>
-                ))}
-              </div>
             </div>
             <div className="bsd-tracking-map-status" style={wTitleStyle(slotId)}>
               {trackingLoading ? 'Cargando trayectoria…' : [trackingError || (trackingPathPoints.length ? `${trackingPathPoints.length} puntos` : ''), lastTelemetryAtLabel].filter(Boolean).join(' · ')}
@@ -6960,7 +6863,7 @@ export default function BudgetSensorsDashboard({
               return (
           <div key={slotId} {...mergeShell(slotId, 'widget bsd-widget-editable bsd-circular-widget')}>
             {dashWidgetChrome(slotId, (e) => { e.stopPropagation(); openDashWidgetEdit(slotId, () => ({ id: 0, name: 'Circular', value: satisfactionUi?.rawValue != null ? satisfactionUi.rawValue : satisfactionUi?.ringPct ?? 0, unit: '%', icon: '◎', threshold: 100, propertyKey: `__bsd_${slotId}`, sourceDeviceId: 'dashboard' })); })}
-            <div className="widget-header bsd-value-date-filter-header"><div className="widget-title" style={wTitleStyle(slotId)}><span>◎</span> {wTitle(slotId, 'Circular')}</div>{valueDateFilterBar(slotId)}</div>
+            <div className="widget-header"><div className="widget-title" style={wTitleStyle(slotId)}><span>◎</span> {wTitle(slotId, 'Circular')}</div></div>
             <div className="bsd-circular-gauge">
               <svg className="bsd-circular-gauge__svg" viewBox="0 0 200 200" width="100%" height="100%" aria-hidden>
                 <defs><linearGradient id={`bsd-circ-grad-${slotGradId}`} x1="28%" y1="12%" x2="72%" y2="92%"><stop offset="0%" stopColor="#ff9a8b" /><stop offset="45%" stopColor="#ff7b7a" /><stop offset="100%" stopColor="#ff5569" /></linearGradient></defs>
@@ -6984,7 +6887,7 @@ export default function BudgetSensorsDashboard({
               return (
           <div key={slotId} {...mergeShell(slotId, 'widget bsd-widget-editable')}>
             {dashWidgetChrome(slotId, (e) => { e.stopPropagation(); openDashWidgetEdit(slotId, () => ({ id: 0, name: 'Contenedor', value: containerUi?.rawValue != null ? containerUi.rawValue : containerUi?.ringPct ?? 0, unit: '%', icon: '🛢', threshold: 100, propertyKey: `__bsd_${slotId}`, sourceDeviceId: 'dashboard' })); })}
-            <div className="widget-header bsd-value-date-filter-header"><div className="widget-title" style={wTitleStyle(slotId)}><span aria-hidden>🛢</span> {wTitle(slotId, 'Contenedor')}</div>{valueDateFilterBar(slotId)}</div>
+            <div className="widget-header"><div className="widget-title" style={wTitleStyle(slotId)}><span aria-hidden>🛢</span> {wTitle(slotId, 'Contenedor')}</div></div>
             <BsdContainerTankView fillPct={containerUi?.ringPct ?? 0} fillColor={containerLiquidColor} centerLabel={containerUi?.centerLabel ?? '—'} lastAtLine={containerUi?.lastAtLine} titleColor={wTitleStyle(slotId)?.color} />
           </div>
               );
@@ -7047,11 +6950,10 @@ export default function BudgetSensorsDashboard({
                       sourceDeviceId: 'dashboard',
                     }));
                   })}
-                  <div className="widget-header bsd-value-date-filter-header">
+                  <div className="widget-header">
                     <div className="widget-title" style={wTitleStyle(slotId)}>
                       <span aria-hidden>◔</span> {wTitle(slotId, 'Métrica circular')}
                     </div>
-                    {valueDateFilterBar(slotId)}
                   </div>
                   <div className="bsd-metric-circular">
                     <div className="bsd-metric-circular__chart">
@@ -7207,12 +7109,11 @@ export default function BudgetSensorsDashboard({
                       sourceDeviceId: 'dashboard',
                     }));
                   })}
-                  <div className="widget-header bsd-text-widget__header bsd-value-date-filter-header">
+                  <div className="widget-header bsd-text-widget__header">
                     <div className="widget-title bsd-text-widget__title" style={wTitleStyle(slotId)}>
                       <BsdTextWidgetSignalIcon className="bsd-text-widget__title-icon" />
                       {wTitle(slotId, 'Texto')}
                     </div>
-                    {valueDateFilterBar(slotId)}
                   </div>
                   <div className="bsd-text-widget__body">
                     <div className="bsd-text-widget__value">{tw?.display}</div>
@@ -7288,15 +7189,6 @@ export default function BudgetSensorsDashboard({
             <div className="widget-header bsd-bar-chart-widget__header">
               <div className="widget-title" style={wTitleStyle(slotId)}>
                 <span aria-hidden>📊</span> {wTitle(slotId, 'Grafico Barras')}
-              </div>
-              <div className="bsd-bar-chart-presets" role="group" aria-label="Agrupación del historial">
-                {(() => {
-                  const raw = normalizeBarChartGranularity(widgetConfigs[dk(slotId)]?.timeframe?.granularity);
-                  const activeGran = BAR_CHART_WIDGET_GRANULARITY_OPTIONS.some((o) => o.value === raw) ? raw : 'hour';
-                  return BAR_CHART_WIDGET_GRANULARITY_OPTIONS.map(({ value, label }) => (
-                    <button key={value} type="button" className={`bsd-bar-chart-preset${activeGran === value ? ' active' : ''}`} onClick={() => applyBarChartGranularity(slotId, value)}>{label}</button>
-                  ));
-                })()}
               </div>
             </div>
             <div className="bsd-bar-chart-status" style={wTitleStyle(slotId)}>
