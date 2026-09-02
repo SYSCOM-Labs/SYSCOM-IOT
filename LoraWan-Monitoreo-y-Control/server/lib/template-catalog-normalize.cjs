@@ -15,8 +15,19 @@ function defaultLorawanClassForModelo(modelo) {
   const m = String(modelo || '')
     .trim()
     .toUpperCase();
-  if (m === 'WT201' || m === 'WS501' || m === 'UC701') return 'C';
+  if (m === 'WT201' || m === 'WS501' || m === 'UC701' || m === 'UC300') return 'C';
   return 'A';
+}
+
+/** Modelos que no deben conservar clase A heredada de semillas/catálogos antiguos. */
+function coerceCatalogLorawanClass(modelo, stored) {
+  const m = String(modelo || '')
+    .trim()
+    .toUpperCase();
+  if (m === 'UC300') return 'C';
+  return stored != null && String(stored).trim() !== ''
+    ? stored
+    : defaultLorawanClassForModelo(modelo);
 }
 
 /**
@@ -48,9 +59,7 @@ function sanitizeTemplateCatalogEntry(t) {
     modelo,
     marca,
     channel: t.channel != null ? String(t.channel).trim() : '',
-    lorawanClass: normalizeDeviceClass(
-      t.lorawanClass || t.lorawan_class || defaultLorawanClassForModelo(modelo)
-    ),
+    lorawanClass: normalizeDeviceClass(coerceCatalogLorawanClass(modelo, t.lorawanClass || t.lorawan_class)),
     downlinks,
     decoderScript: t.decoderScript != null ? String(t.decoderScript) : '',
   };

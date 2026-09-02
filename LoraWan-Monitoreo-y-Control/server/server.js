@@ -12,7 +12,7 @@ const { shouldSkipTelemetryInsert, isJoinOnlyProperties } = require('./lib/telem
 const { resolveWt201DownlinkHex } = require('./lib/wt201-downlink-encode.cjs');
 const { remapWs501LegacyDownlinkHex } = require('./lib/ws501-downlink-legacy.cjs');
 const { sanitizeTemplatesCatalog } = require('./lib/template-catalog-normalize.cjs');
-const { resolveDownlinkDeviceClassForLns } = require('./lib/resolve-downlink-class.cjs');
+const { resolveDownlinkDeviceClassForLns, productModelForcedClass } = require('./lib/resolve-downlink-class.cjs');
 const {
   normalizeDownlinks,
   syncDeviceTemplateFromCatalog,
@@ -396,29 +396,32 @@ function lorawanClassFromLatestTelemetry(userId, deviceId) {
 
 /**
  * Clase usada para temporizar downlinks (RX1/RX2 vs inmediato).
- * Orden: cuerpo `lorawanClass`/`deviceClass` → **plantilla en catálogo** (`catalogTemplateId` / modelo) →
- * **`device_decode_config.lorawan_class`** → **`user_devices.lorawan_class`** → sesión LNS → telemetría (si no está
- * `SYSCOM_LNS_DOWNLINK_IGNORE_TELEMETRY_CLASS=1`).
+ * Orden: modelo forzado (UC300=C) → cuerpo `lorawanClass`/`deviceClass` (A no pisa C del modelo) →
+ * **plantilla en catálogo** → **`device_decode_config.lorawan_class`** → **`user_devices.lorawan_class`** →
+ * sesión LNS → telemetría (si no está `SYSCOM_LNS_DOWNLINK_IGNORE_TELEMETRY_CLASS=1`).
  * El tipo **0x09** Shengda puede exponer «Class B» en telemetría sin que el downlink deba temporizarse como B; use
  * `SYSCOM_LNS_DOWNLINK_IGNORE_TELEMETRY_CLASS=1` o fije clase en decode-config / cuerpo del POST.
  * La plantilla en solo-localStorage no aplica hasta `PUT …/decode-config` o «Propagar a vinculados».
  */
 function resolveDownlinkDeviceClass(reqBody, deviceId, ud, sessionFallbackClass, userId) {
   const ex = reqBody?.deviceClass ?? reqBody?.lorawanClass;
-  if (ex != null && String(ex).trim() !== '') {
-    return normalizeLnsDeviceClassLetter(ex);
-  }
   const deui = String(ud?.devEUI || ud?.devEui || '')
     .replace(/[^0-9a-fA-F]/g, '')
     .toLowerCase();
   if (deui.length === 16) {
     return normalizeLnsDeviceClassLetter(
       resolveDownlinkDeviceClassForLns(store, userId, deui, {
+        explicitClass: ex,
         sessionClass: sessionFallbackClass,
         deviceId: String(deviceId),
         productModel: ud?.productModel || ud?.model,
       })
     );
+  }
+  const forced = productModelForcedClass(ud?.productModel || ud?.model);
+  if (forced) return normalizeLnsDeviceClassLetter(forced);
+  if (ex != null && String(ex).trim() !== '') {
+    return normalizeLnsDeviceClassLetter(ex);
   }
   const fromDecRaw = decodeConfigLorawanClassRawForUserDevice(deviceId, ud);
   if (fromDecRaw != null && String(fromDecRaw).trim() !== '') {
@@ -3992,7 +3995,23 @@ app.get(
     const fromSess = sessProf?.deviceClass != null ? String(sessProf.deviceClass).trim() : '';
     let raw = 'A';
     let lorawanClassSource = 'default';
-    if (fromDecRaw) {
+    if (deuiProf.length === 16) {
+      raw = resolveDownlinkDeviceClassForLns(store, req.user.id, deuiProf, {
+        sessionClass: fromSess,
+        deviceId: idStr,
+        productModel: ud?.productModel || ud?.model || cfg?.productModel,
+      });
+      const forced = productModelForcedClass(ud?.productModel || ud?.model || cfg?.productModel);
+      if (forced) lorawanClassSource = 'product_model';
+      else if (fromDecRaw) lorawanClassSource = 'decode';
+      else if (fromUd) lorawanClassSource = 'user_device';
+      else if (fromSess) lorawanClassSource = 'session';
+      else if (fromTel != null) lorawanClassSource = 'telemetry';
+      else lorawanClassSource = 'catalog_or_default';
+    } else if (productModelForcedClass(ud?.productModel || ud?.model || cfg?.productModel)) {
+      raw = productModelForcedClass(ud?.productModel || ud?.model || cfg?.productModel);
+      lorawanClassSource = 'product_model';
+    } else if (fromDecRaw) {
       raw = fromDecRaw;
       lorawanClassSource = 'decode';
     } else if (fromUd) {

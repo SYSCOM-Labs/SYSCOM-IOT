@@ -2,8 +2,9 @@
 
 /**
  * Clase LoRaWAN efectiva para temporizar downlinks (RX1/RX2 vs clase C).
- * Prioridad: explícita en POST → plantilla (catálogo) → decode-config (plantilla aplicada) →
- * user_devices → modelo en catálogo → sesión LNS → A.
+ * Prioridad: explícita en POST (salvo clase A de un modelo forzado a C, p. ej. UC300) →
+ * modelo forzado (UC300=C) → plantilla (catálogo) → decode-config → user_devices →
+ * pista de modelo → sesión LNS → A.
  */
 
 function normalizeDeviceClass(raw) {
@@ -16,8 +17,20 @@ function normalizeDeviceClass(raw) {
   return 'A';
 }
 
+/**
+ * Clase forzada por modelo (gana a catálogo/sesión A obsoletos).
+ * UC300: controlador con DO; downlink inmediato (clase C).
+ */
+function productModelForcedClass(productModel) {
+  const s = String(productModel || '').toUpperCase();
+  if (s.includes('UC300')) return 'C';
+  return null;
+}
+
 /** Solo respaldo si no hay clase en plantilla ni decode-config (preferir catálogo / semilla). */
 function productModelClassHint(productModel) {
+  const forced = productModelForcedClass(productModel);
+  if (forced) return forced;
   const s = String(productModel || '').toUpperCase();
   if (s.includes('SHENGDA') || s.includes('TIMEWAVE') || s.includes('EASTRON')) return 'A';
   return null;
@@ -51,6 +64,8 @@ function lorawanClassFromCatalogTemplate(store, deviceId, ud, cfg) {
   if (tid) {
     const byId = templates.find((t) => String(t.id || '').trim() === tid);
     if (byId && byId.lorawanClass != null && String(byId.lorawanClass).trim() !== '') {
+      const forcedModelo = productModelForcedClass(byId.modelo);
+      if (forcedModelo) return forcedModelo;
       return normalizeDeviceClass(byId.lorawanClass);
     }
   }
@@ -59,6 +74,8 @@ function lorawanClassFromCatalogTemplate(store, deviceId, ud, cfg) {
   for (const t of templates) {
     const modelo = String(t.modelo || '').trim().toUpperCase();
     if (modelo && pm.includes(modelo) && t.lorawanClass != null && String(t.lorawanClass).trim() !== '') {
+      const forcedModelo = productModelForcedClass(modelo);
+      if (forcedModelo) return forcedModelo;
       return normalizeDeviceClass(t.lorawanClass);
     }
   }
@@ -73,9 +90,6 @@ function lorawanClassFromCatalogTemplate(store, deviceId, ud, cfg) {
  * @returns {'A'|'B'|'C'}
  */
 function resolveDownlinkDeviceClassForLns(store, userId, devEuiNorm16, opts = {}) {
-  if (opts.explicitClass != null && String(opts.explicitClass).trim() !== '') {
-    return normalizeDeviceClass(opts.explicitClass);
-  }
   const ud =
     typeof store.getUserDeviceByDevEuiNorm === 'function'
       ? store.getUserDeviceByDevEuiNorm(userId, devEuiNorm16)
@@ -92,7 +106,17 @@ function resolveDownlinkDeviceClassForLns(store, userId, devEuiNorm16, opts = {}
     }
   }
 
+  const pmForced = String(opts.productModel || ud?.productModel || cfg?.productModel || '').trim();
+  const forced = productModelForcedClass(pmForced);
   const fromTemplate = lorawanClassFromCatalogTemplate(store, deviceId, ud, cfg);
+
+  if (opts.explicitClass != null && String(opts.explicitClass).trim() !== '') {
+    const ex = normalizeDeviceClass(opts.explicitClass);
+    /** Cliente/plantilla antigua puede mandar A; no anular C del modelo (UC300) o de la plantilla. */
+    if (ex === 'A' && (forced || fromTemplate === 'C')) return forced || fromTemplate;
+    return ex;
+  }
+  if (forced) return forced;
   if (fromTemplate) return fromTemplate;
 
   const fromCfg = cfg && (cfg.lorawanClass ?? cfg.lorawan_class);
@@ -114,6 +138,7 @@ function resolveDownlinkDeviceClassForLns(store, userId, devEuiNorm16, opts = {}
 module.exports = {
   normalizeDeviceClass,
   productModelClassHint,
+  productModelForcedClass,
   lorawanClassFromCatalogTemplate,
   resolveDownlinkDeviceClassForLns,
 };

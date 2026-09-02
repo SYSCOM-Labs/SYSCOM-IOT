@@ -11,6 +11,7 @@ const {
 
 test('productModelClassHint solo medidores sin plantilla Milesight', () => {
   assert.equal(productModelClassHint('Milesight · WT201'), null);
+  assert.equal(productModelClassHint('Milesight · UC300'), 'C');
   assert.equal(productModelClassHint('Shengda · Medidor-ALP-v1.6'), 'A');
 });
 
@@ -58,4 +59,26 @@ test('lorawanClassFromCatalogTemplate prioriza plantilla sobre sesión LNS', () 
 test('normalizeDeviceClass acepta etiquetas Milesight', () => {
   assert.equal(normalizeDeviceClass('Class C'), 'C');
   assert.equal(normalizeDeviceClass('Class A'), 'A');
+});
+
+test('resolveDownlinkDeviceClassForLns: UC300 es clase C aunque catálogo/sesión/POST digan A', () => {
+  const store = {
+    getUserDeviceByDevEuiNorm: () => ({
+      deviceId: 'dev-uc300',
+      productModel: 'Milesight · UC300',
+      lorawanClass: 'A',
+    }),
+    getDeviceDecodeConfig: () => ({ lorawanClass: 'A', productModel: 'Milesight · UC300' }),
+    getDeviceTemplatesCatalog: () => ({
+      templates: [{ id: 'tpl_uc300', modelo: 'UC300', lorawanClass: 'A' }],
+    }),
+    getDeviceSharedPresetsParsed: () => ({ catalogTemplateId: 'tpl_uc300' }),
+  };
+  assert.equal(
+    resolveDownlinkDeviceClassForLns(store, 'u1', '24e1240000000001', {
+      sessionClass: 'A',
+      explicitClass: 'A',
+    }),
+    'C'
+  );
 });

@@ -13,7 +13,7 @@
  * HTTP si hay `payload_b64` o `payload_hex`; el JSON decodificado se fusiona con los metadatos LoRaWAN.
  */
 import { SEED_DEVICE_TEMPLATES } from '../constants/seedDeviceTemplates';
-import { downlinkDeferUntilUplink } from '../utils/lorawanClassBehavior';
+import { downlinkDeferUntilUplink, forcedLorawanClassForProductModel } from '../utils/lorawanClassBehavior';
 import { remapWs501DownlinkList } from '../utils/ws501DownlinkHex';
 
 const STORAGE_KEY = 'device_profile_templates_v1';
@@ -382,9 +382,13 @@ function seedDefaultLorawanClassForTemplate(t) {
  * @returns {'A'|'B'|'C'|null}
  */
 export function getDownlinkLorawanClassForDevice(deviceId, deviceModel) {
+  const forced = forcedLorawanClassForProductModel(deviceModel);
+  if (forced) return forced;
   if (typeof window === 'undefined' || !deviceId) return null;
   const tpl = findTemplateForDevice(deviceId, deviceModel);
   if (!tpl) return null;
+  const fromModelo = forcedLorawanClassForProductModel(tpl.modelo);
+  if (fromModelo) return fromModelo;
   const explicit = tpl.lorawanClass != null && String(tpl.lorawanClass).trim() !== '';
   const raw = explicit ? tpl.lorawanClass : seedDefaultLorawanClassForTemplate(tpl);
   if (raw == null) return null;
@@ -403,7 +407,8 @@ export function getDownlinkSendOptionsForDevice(deviceId, deviceRow) {
     deviceRow?.lorawanClass != null && String(deviceRow.lorawanClass).trim() !== ''
       ? normalizeTemplateLorawanClass(deviceRow.lorawanClass)
       : null;
-  const cls = fromTpl || fromRow;
+  const cls =
+    forcedLorawanClassForProductModel(deviceModel) || fromTpl || fromRow;
   return {
     confirmed: false,
     ...(cls ? { lorawanClass: cls } : {}),

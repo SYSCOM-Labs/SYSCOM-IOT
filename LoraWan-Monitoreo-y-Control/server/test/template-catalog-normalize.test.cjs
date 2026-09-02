@@ -31,3 +31,14 @@ test('sanitizeTemplateCatalogEntry: WS501 convierte ff2910/ff2911 a canónico', 
   assert.equal(out.downlinks[0].hex, '0811ff');
   assert.equal(out.downlinks[1].hex, '0810ff');
 });
+
+test('sanitizeTemplateCatalogEntry: UC300 corrige clase A heredada a C', () => {
+  const out = sanitizeTemplateCatalogEntry({
+    modelo: 'UC300',
+    marca: 'Milesight',
+    channel: '85',
+    lorawanClass: 'A',
+    downlinks: [{ name: 'DO 1 - Activar', hex: '070100ff' }],
+  });
+  assert.equal(out.lorawanClass, 'C');
+});

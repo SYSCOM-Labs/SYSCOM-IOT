@@ -159,10 +159,10 @@ export const SEED_DEVICE_TEMPLATES = [
     marca: 'Milesight',
     channel: '85',
     /**
-     * Clase **A** por defecto: la mayoría de UC300 operan como Class A (downlink en RX1/RX2 tras uplink).
-     * Use clase C en el alta o en la plantilla solo si el firmware escucha RX2 de forma continua.
+     * Controlador IoT con DO: clase C para downlink inmediato (RX continuo).
+     * Clase A encola el comando hasta el próximo uplink y no sirve para control de relé.
      */
-    lorawanClass: 'A',
+    lorawanClass: 'C',
     decoderScript: UC300_DECODER_SCRIPT,
     downlinks: [
       /** Milesight: canal 0x07 DO1 — mismo patrón que encoder oficial `[07,01,00,ff]` / `[07,00,00,ff]` (4 B; el 3.er byte es 0x00). */
