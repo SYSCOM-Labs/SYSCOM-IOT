@@ -2883,8 +2883,9 @@ export default function WidgetEditModal({
                 <div className="widget-edit-stream-block">
                   <label className="widget-edit-label">Series del gráfico (Grafico Lineal)</label>
                   <p className="widget-edit-hint">
-                    Varias telemetrías en un solo widget: campo, tipo de gráfico, color y eje. Usa «Cambio» para mostrar
-                    variación entre muestras.
+                    Varias telemetrías en un solo widget: campo, tipo de gráfico, color y eje. En Hora/Día/Semana/Mes,
+                    «Cambio» y campos como <code>total_in</code> / <code>total_out</code> muestran el incremento del
+                    periodo — el mismo criterio que el widget Texto — no el acumulado de por vida.
                   </p>
                   <input
                     type="search"

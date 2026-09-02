@@ -117,6 +117,8 @@ import {
   appearanceWithConditionalBackground,
   resolveTelemetryDisplaySource,
   isLikelyButtonOrStatusFieldKey,
+  streamSeriesUsesPeriodIncrement,
+  applyPeriodIncrementPoints,
   resolveTextWidgetRawScalar,
   ensureDownlinkButtonsDraft,
   normalizeStreamSeriesConfig,
@@ -411,12 +413,15 @@ function streamHexToRgba(hex, alpha) {
   return `rgba(${parseInt(m[1], 16)},${parseInt(m[2], 16)},${parseInt(m[3], 16)},${alpha})`;
 }
 
-function applyDeltaHistoryPoints(points) {
-  if (!points.length) return [];
-  return points.map((p, i) => ({
-    ts: p.ts,
-    val: i === 0 ? 0 : p.val - points[i - 1].val,
-  }));
+function lastStreamHistoryDisplayValue(seriesPrepared, presetId) {
+  const sp = seriesPrepared?.[0];
+  if (!sp?.points?.length) return null;
+  const pts =
+    presetId !== 'live' && streamSeriesUsesPeriodIncrement(sp.meta)
+      ? applyPeriodIncrementPoints(sp.points)
+      : sp.points;
+  const last = pts[pts.length - 1]?.val;
+  return Number.isFinite(last) ? last : null;
 }
 
 /** Evita TypeError en Chart.resize cuando el canvas ya no está en el DOM (rAF / ResizeObserver tardíos). */
@@ -465,7 +470,7 @@ function applyStreamingHistoryChartMulti(chart, seriesPrepared, presetId) {
     presetId !== 'live' &&
     presetId !== 'hour' &&
     n === 1 &&
-    sp0?.meta?.valueMode !== 'delta' &&
+    !streamSeriesUsesPeriodIncrement(sp0?.meta) &&
     isLikelyButtonOrStatusFieldKey(sp0?.meta?.fieldKey);
 
   let slotStarts;
@@ -516,13 +521,27 @@ function applyStreamingHistoryChartMulti(chart, seriesPrepared, presetId) {
 
   const y1Vals = [];
   const y2Vals = [];
+  const pinY1Zero = seriesPrepared.some(
+    (sp, i) => i < n && sp.meta?.yAxis !== 'y2' && streamSeriesUsesPeriodIncrement(sp.meta)
+  );
+  const pinY2Zero = seriesPrepared.some(
+    (sp, i) => i < n && sp.meta?.yAxis === 'y2' && streamSeriesUsesPeriodIncrement(sp.meta)
+  );
   for (let i = 0; i < n; i++) {
     const sp = seriesPrepared[i];
+    const useInc = streamSeriesUsesPeriodIncrement(sp.meta);
+    const srcPoints = useInc ? applyPeriodIncrementPoints(sp.points) : sp.points;
     const vals =
       perEventVals && i === 0
         ? perEventVals
         : anyPoints
-          ? aggregatePointsToStreamSlots(sp.points, slotStarts, bucketKind, sp.meta?.fieldKey)
+          ? aggregatePointsToStreamSlots(
+              srcPoints,
+              slotStarts,
+              bucketKind,
+              sp.meta?.fieldKey,
+              useInc ? 'last' : undefined
+            )
           : slotStarts.map(() => null);
     chart.data.datasets[i].data = vals;
     vals.forEach((v) => {
@@ -533,7 +552,7 @@ function applyStreamingHistoryChartMulti(chart, seriesPrepared, presetId) {
   }
   for (let i = n; i < chart.data.datasets.length; i++) chart.data.datasets[i].data = [];
 
-  const applyAxis = (vals, scaleKey) => {
+  const applyAxis = (vals, scaleKey, pinZero) => {
     if (!vals.length) {
       chart.options.scales[scaleKey].min = undefined;
       chart.options.scales[scaleKey].max = undefined;
@@ -543,12 +562,17 @@ function applyStreamingHistoryChartMulti(chart, seriesPrepared, presetId) {
     const hi = Math.max(...vals);
     const span = hi - lo;
     const pad = span > 0 ? span * 0.12 : Math.abs(hi || 1) * 0.08 || 1;
+    if (pinZero && lo >= 0) {
+      chart.options.scales[scaleKey].min = 0;
+      chart.options.scales[scaleKey].max = hi + pad;
+      return;
+    }
     chart.options.scales[scaleKey].min = lo - pad;
     chart.options.scales[scaleKey].max = hi + pad;
   };
-  applyAxis(y1Vals, 'y');
+  applyAxis(y1Vals, 'y', pinY1Zero);
   if (chart.options.scales.y2) {
-    if (y2Vals.length) applyAxis(y2Vals, 'y2');
+    if (y2Vals.length) applyAxis(y2Vals, 'y2', pinY2Zero);
     else {
       chart.options.scales.y2.min = undefined;
       chart.options.scales.y2.max = undefined;
@@ -1348,10 +1372,12 @@ function bucketSlotsForStreamPreset(presetId, endMs) {
   return { slotStarts: [], bucketKind: null };
 }
 
-function aggregatePointsToStreamSlots(points, slotStarts, bucketKind, fieldKey) {
+function aggregatePointsToStreamSlots(points, slotStarts, bucketKind, fieldKey, aggOp) {
   if (!slotStarts.length || !bucketKind) return [];
   /** `last` en buckets anchos deja solo el reposo (p. ej. 1) si el pulso (3) no es el último del bucket; `max` conserva el evento. */
-  const op = isLikelyButtonOrStatusFieldKey(fieldKey) ? 'max' : 'avg';
+  const op =
+    aggOp ||
+    (isLikelyButtonOrStatusFieldKey(fieldKey) ? 'max' : 'avg');
   if (bucketKind === 'minute') return valuesForMinuteSlots(slotStarts, pointsByUnixMinute(points), op);
   if (bucketKind === 'hour') return valuesForHourSlots(slotStarts, pointsByUnixHour(points), op);
   if (bucketKind === 'quarterHour')
@@ -1364,7 +1390,6 @@ function buildStreamSeriesPreparedFromRows(series, sharedRows, streamWidgetCfg =
   const preparsed = buildStreamRowsPreparsed(sharedRows);
   return series.map((meta) => {
     let points = telemetryValuePointsFromPreparsed(preparsed, meta.fieldKey, streamWidgetCfg);
-    if (meta.valueMode === 'delta') points = applyDeltaHistoryPoints(points);
     points = points.map((p) => {
       if (!p || !Number.isFinite(p.val)) return p;
       const nv = pointValueAfterWidgetFormula(streamWidgetCfg, meta.fieldKey, p.val);
@@ -1399,10 +1424,6 @@ function mergeLiveIntoStreamSeriesPrepared(seriesPrepared, streamTel, streamWidg
     if (val == null || !Number.isFinite(val)) return sp;
     if (formulaOnLiveAppend && streamWidgetCfg) {
       val = pointValueAfterWidgetFormula(streamWidgetCfg, fk, val);
-    }
-    if (sp.meta?.valueMode === 'delta') {
-      if (sp.points.length) return sp;
-      return { ...sp, points: [{ ts: tsMs, val: 0 }] };
     }
     const pts = sp.points;
     const last = pts.length ? pts[pts.length - 1] : null;
@@ -4534,9 +4555,9 @@ export default function BudgetSensorsDashboard({
       ) {
         applyStreamingHistoryChartMulti(chart, pending.seriesPrepared, pending.presetId);
         streamHistoryPendingRef.current = null;
-        const lp = pending.seriesPrepared.map((sp) => sp.points[sp.points.length - 1]).filter(Boolean);
-        if (lp.length) {
-          setStreamDisplay(lp[0].val);
+        const lastInc = lastStreamHistoryDisplayValue(pending.seriesPrepared, pending.presetId);
+        if (lastInc != null) {
+          setStreamDisplay(lastInc);
           setStreamHistoryFetchedAt(Date.now());
           setStreamHistoryError(null);
         }
@@ -4941,9 +4962,9 @@ export default function BudgetSensorsDashboard({
         const presetForChart = streamTimePreset;
         const finishHistoryUi = () => {
           if (cancelled || !isCurrentFetch()) return;
-          const lastPts = seriesPreparedMerged.map((sp) => sp.points[sp.points.length - 1]).filter(Boolean);
-          if (lastPts.length) {
-            setStreamDisplay(lastPts[0].val);
+          const lastInc = lastStreamHistoryDisplayValue(seriesPreparedMerged, presetForChart);
+          if (lastInc != null) {
+            setStreamDisplay(lastInc);
             setStreamHistoryFetchedAt(Date.now());
             setStreamHistoryError(null);
           } else {
@@ -5022,9 +5043,9 @@ export default function BudgetSensorsDashboard({
       streamCfg
     );
     applyStreamingHistoryChartMulti(chart, merged, streamTimePreset);
-    const lastPts = merged.map((sp) => sp.points[sp.points.length - 1]).filter(Boolean);
-    if (lastPts.length) {
-      setStreamDisplay(lastPts[0].val);
+    const lastInc = lastStreamHistoryDisplayValue(merged, streamTimePreset);
+    if (lastInc != null) {
+      setStreamDisplay(lastInc);
       setStreamHistoryError(null);
     }
     requestAnimationFrame(() => safeChartResize(streamingChartRef.current));

@@ -1072,6 +1072,12 @@ export function isLikelyButtonOrStatusFieldKey(fk) {
   );
 }
 
+export {
+  isLikelyCumulativeCounterFieldKey,
+  streamSeriesUsesPeriodIncrement,
+  applyPeriodIncrementPoints,
+} from './periodIncrementUtils';
+
 /**
  * Valor a mostrar / comparar: clave del usuario y alias típicos de gateway
  * (p. ej. `button_event` → `button_event_status`).
