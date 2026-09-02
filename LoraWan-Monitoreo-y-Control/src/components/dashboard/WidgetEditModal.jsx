@@ -1457,8 +1457,187 @@ function ModalLivePreviewBlock({
 }
 
 /** Pestaña Datos: campo de telemetría que alimenta el mapa (AT101: raíz con latitude/longitude/history). */
-function TrackingMapWidgetDashDataTab({ draft, setDraft, telemetryFieldOptions = [] }) {
-  const [rangeOpen, setRangeOpen] = useState(true);
+function ValueWidgetEditDateRange({ draft, setDraft, open, onToggleOpen }) {
+  const dateFilterPreset = normalizeValueDateFilterPreset(draft.timeframe?.filterPreset);
+  return (
+    <div className="widget-edit-date-filter">
+      <button
+        type="button"
+        className={`widget-edit-date-range-toggle${open ? ' is-open' : ''}`}
+        aria-expanded={open}
+        onClick={onToggleOpen}
+      >
+        <Calendar size={16} strokeWidth={2} aria-hidden />
+        <span className="widget-edit-date-range-toggle__label">Rango de fechas</span>
+        <span className="widget-edit-date-range-toggle__meta">
+          {dateFilterPreset !== 'live' ? formatValueDateFilterLabel(draft) : 'En vivo'}
+        </span>
+        <ChevronDown size={16} className="widget-edit-date-range-toggle__chev" aria-hidden />
+      </button>
+      {open ? (
+        <>
+          <p className="widget-edit-hint">
+            El periodo se guarda con este widget (no cambia al recargar). <strong>Día</strong> = desde las 00:00 de
+            hoy; <strong>Semana</strong> = desde el lunes; <strong>Mes</strong> = desde el día 1.{' '}
+            <strong>Personalizado</strong> permite elegir día y hora de inicio y fin.
+          </p>
+          <ValueWidgetDateFilterButtons
+            activePreset={dateFilterPreset}
+            onSelect={(id) => {
+              setDraft((d) => {
+                const next = deepClone(d);
+                applyValueDateFilterPreset(next, id);
+                return next;
+              });
+            }}
+          />
+          {dateFilterPreset !== 'live' ? (
+            <>
+              <ValueWidgetDateFilterOperationSelect
+                value={draft.timeframe?.operation}
+                onChange={(v) => {
+                  setDraft((d) => {
+                    const next = deepClone(d);
+                    next.timeframe = { ...(next.timeframe || {}), operation: v };
+                    return next;
+                  });
+                }}
+              />
+              <p className="widget-edit-hint">
+                <strong>Suma</strong> para pulsos o eventos (entradas, litros por envío). <strong>Incremento</strong>{' '}
+                para medidores acumulativos (último valor − primero del periodo).
+              </p>
+            </>
+          ) : null}
+          {dateFilterPreset === 'custom' ? (
+            <ValueWidgetDateFilterCustomFields
+              customFrom={draft.timeframe?.customFrom || ''}
+              customTo={draft.timeframe?.customTo || ''}
+              onChangeFrom={(v) => {
+                setDraft((d) => {
+                  const next = deepClone(d);
+                  next.timeframe = { ...(next.timeframe || {}), customFrom: v };
+                  applyValueDateFilterPreset(next, 'custom');
+                  return next;
+                });
+              }}
+              onChangeTo={(v) => {
+                setDraft((d) => {
+                  const next = deepClone(d);
+                  next.timeframe = { ...(next.timeframe || {}), customTo: v };
+                  applyValueDateFilterPreset(next, 'custom');
+                  return next;
+                });
+              }}
+            />
+          ) : null}
+          {dateFilterPreset !== 'live' ? (
+            <p className="widget-edit-hint">{formatValueDateFilterLabel(draft)}</p>
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function BarChartEditDateRange({ draft, setDraft, open, onToggleOpen }) {
+  const raw = normalizeBarChartGranularity(draft.timeframe?.granularity);
+  const active = BAR_CHART_WIDGET_GRANULARITY_OPTIONS.some((x) => x.value === raw) ? raw : 'hour';
+  const opt = BAR_CHART_WIDGET_GRANULARITY_OPTIONS.find((x) => x.value === active);
+  return (
+    <div className="widget-edit-date-filter">
+      <button
+        type="button"
+        className={`widget-edit-date-range-toggle${open ? ' is-open' : ''}`}
+        aria-expanded={open}
+        onClick={onToggleOpen}
+      >
+        <Calendar size={16} strokeWidth={2} aria-hidden />
+        <span className="widget-edit-date-range-toggle__label">Rango de fechas</span>
+        <span className="widget-edit-date-range-toggle__meta">{opt?.label || 'Hora'}</span>
+        <ChevronDown size={16} className="widget-edit-date-range-toggle__chev" aria-hidden />
+      </button>
+      {open ? (
+        <>
+          <p className="widget-edit-hint">
+            Este agrupado se guarda con el widget. Hora = últimos 60 minutos; Día = desde las 00:00 de hoy; Semana =
+            desde el lunes; Mes = desde el día 1.
+          </p>
+          <div className="widget-edit-label">Agrupar por</div>
+          <div className="widget-edit-granularity-row">
+            {BAR_CHART_WIDGET_GRANULARITY_OPTIONS.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                className={`widget-edit-granularity-btn ${active === o.value ? 'is-active' : ''}`}
+                onClick={() => {
+                  setDraft((d) => {
+                    const next = deepClone(d);
+                    applyHistoryGranularityPreset(next, o.value);
+                    return next;
+                  });
+                }}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function TrackingMapDateRangeBlock({ draft, setDraft, open, onToggleOpen }) {
+  const trackingRange = ['day', 'week', 'month'].includes(String(draft.data?.trackingTimeRange))
+    ? draft.data.trackingTimeRange
+    : 'day';
+  const trackingRangeLabel = trackingRange === 'week' ? 'Semana' : trackingRange === 'month' ? 'Mes' : 'Día';
+  return (
+    <div className="widget-edit-date-filter">
+      <button
+        type="button"
+        className={`widget-edit-date-range-toggle${open ? ' is-open' : ''}`}
+        aria-expanded={open}
+        onClick={onToggleOpen}
+      >
+        <Calendar size={16} strokeWidth={2} aria-hidden />
+        <span className="widget-edit-date-range-toggle__label">Rango de fechas</span>
+        <span className="widget-edit-date-range-toggle__meta">{trackingRangeLabel}</span>
+        <ChevronDown size={16} className="widget-edit-date-range-toggle__chev" aria-hidden />
+      </button>
+      {open ? (
+        <>
+          <p className="widget-edit-hint">Periodo del historial GPS. Se guarda con este widget.</p>
+          <div className="widget-edit-granularity-row" role="group" aria-label="Periodo del historial GPS">
+            {[
+              { id: 'day', lab: 'Día' },
+              { id: 'week', lab: 'Semana' },
+              { id: 'month', lab: 'Mes' },
+            ].map(({ id, lab }) => (
+              <button
+                key={id}
+                type="button"
+                className={`widget-edit-granularity-btn${trackingRange === id ? ' is-active' : ''}`}
+                onClick={() => {
+                  setDraft((d) => {
+                    const next = deepClone(d);
+                    next.data = { ...next.data, trackingTimeRange: id };
+                    return next;
+                  });
+                }}
+              >
+                {lab}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function TrackingMapWidgetDashDataTab({ draft, setDraft, telemetryFieldOptions = [], dateRangeOpen, onToggleDateRange }) {
   const setKey = (field, val) => {
     setDraft((d) => {
       const next = deepClone(d);
@@ -1467,10 +1646,6 @@ function TrackingMapWidgetDashDataTab({ draft, setDraft, telemetryFieldOptions =
     });
   };
   const tf = String(draft.data?.trackingTelemetryField ?? '').trim();
-  const trackingRange = ['day', 'week', 'month'].includes(String(draft.data?.trackingTimeRange))
-    ? draft.data.trackingTimeRange
-    : 'day';
-  const trackingRangeLabel = trackingRange === 'week' ? 'Semana' : trackingRange === 'month' ? 'Mes' : 'Día';
   return (
     <div className="widget-edit-image-dash-data">
       <label className="widget-edit-label">Origen de datos en el mapa</label>
@@ -1494,40 +1669,7 @@ function TrackingMapWidgetDashDataTab({ draft, setDraft, telemetryFieldOptions =
           ))}
         </select>
       </label>
-      <div className="widget-edit-date-filter">
-        <button
-          type="button"
-          className={`widget-edit-date-range-toggle${rangeOpen ? ' is-open' : ''}`}
-          aria-expanded={rangeOpen}
-          onClick={() => setRangeOpen((o) => !o)}
-        >
-          <Calendar size={16} strokeWidth={2} aria-hidden />
-          <span className="widget-edit-date-range-toggle__label">Rango de fechas</span>
-          <span className="widget-edit-date-range-toggle__meta">{trackingRangeLabel}</span>
-          <ChevronDown size={16} className="widget-edit-date-range-toggle__chev" aria-hidden />
-        </button>
-        {rangeOpen ? (
-          <>
-            <p className="widget-edit-hint">Periodo del historial GPS en el tablero.</p>
-            <div className="widget-edit-granularity-row" role="group" aria-label="Periodo del historial GPS">
-              {[
-                { id: 'day', lab: 'Día' },
-                { id: 'week', lab: 'Semana' },
-                { id: 'month', lab: 'Mes' },
-              ].map(({ id, lab }) => (
-                <button
-                  key={id}
-                  type="button"
-                  className={`widget-edit-granularity-btn${trackingRange === id ? ' is-active' : ''}`}
-                  onClick={() => setKey('trackingTimeRange', id)}
-                >
-                  {lab}
-                </button>
-              ))}
-            </div>
-          </>
-        ) : null}
-      </div>
+      <TrackingMapDateRangeBlock draft={draft} setDraft={setDraft} open={dateRangeOpen} onToggleOpen={onToggleDateRange} />
     </div>
   );
 }
@@ -1565,11 +1707,7 @@ export default function WidgetEditModal({
   const [showLorawanMetaInPicker, setShowLorawanMetaInPicker] = useState(false);
   /** Mensaje bajo «Prueba» en la pestaña Fórmulas. */
   const [formulaProbeLine, setFormulaProbeLine] = useState('');
-  const [dateRangeOpen, setDateRangeOpen] = useState(() => {
-    const p = normalizeValueDateFilterPreset(initialConfig?.timeframe?.filterPreset);
-    const gran = String(initialConfig?.timeframe?.granularity || '').trim();
-    return p !== 'live' || Boolean(gran);
-  });
+  const [dateRangeOpen, setDateRangeOpen] = useState(true);
   const [draft, setDraft] = useState(() => {
     if (!sensor) {
       return mergeWidgetConfig(
@@ -1937,8 +2075,6 @@ export default function WidgetEditModal({
     !showTrackingMapDataSection &&
     !showVeletaWidgetSection;
 
-  const dateFilterPreset = normalizeValueDateFilterPreset(draft.timeframe?.filterPreset);
-
   const hideGaugeForWidget =
     showDownlinkDataSection ||
     showStreamDataSection ||
@@ -2258,6 +2394,10 @@ export default function WidgetEditModal({
       cfg.data = cfg.data || {};
       cfg.data.staticImageUrl = String(cfg.data.staticImageUrl ?? '').trim();
     }
+    if (showDateFilterSection) {
+      cfg.timeframe = cfg.timeframe && typeof cfg.timeframe === 'object' ? { ...cfg.timeframe } : {};
+      applyValueDateFilterPreset(cfg, normalizeValueDateFilterPreset(cfg.timeframe.filterPreset));
+    }
     onSave(cfg);
     onClose();
   };
@@ -2413,6 +2553,30 @@ export default function WidgetEditModal({
                   onChange={(e) => update('basics.title', e.target.value)}
                 />
               </label>
+              {showDateFilterSection ? (
+                <ValueWidgetEditDateRange
+                  draft={draft}
+                  setDraft={setDraft}
+                  open={dateRangeOpen}
+                  onToggleOpen={() => setDateRangeOpen((o) => !o)}
+                />
+              ) : null}
+              {previewBaseDashId === DASH_WIDGET.BAR_CHART ? (
+                <BarChartEditDateRange
+                  draft={draft}
+                  setDraft={setDraft}
+                  open={dateRangeOpen}
+                  onToggleOpen={() => setDateRangeOpen((o) => !o)}
+                />
+              ) : null}
+              {previewBaseDashId === DASH_WIDGET.TRACKING_MAP ? (
+                <TrackingMapDateRangeBlock
+                  draft={draft}
+                  setDraft={setDraft}
+                  open={dateRangeOpen}
+                  onToggleOpen={() => setDateRangeOpen((o) => !o)}
+                />
+              ) : null}
               {previewBaseDashId === DASH_WIDGET.IMAGE && (
                 <ImageWidgetBasicsImageSource draft={draft} setDraft={setDraft} />
               )}
@@ -2511,9 +2675,27 @@ export default function WidgetEditModal({
                   draft={draft}
                   setDraft={setDraft}
                   telemetryFieldOptions={trackingMapTelemetryOptions}
+                  dateRangeOpen={dateRangeOpen}
+                  onToggleDateRange={() => setDateRangeOpen((o) => !o)}
                 />
               ) : (
                 <>
+              {showDateFilterSection ? (
+                <ValueWidgetEditDateRange
+                  draft={draft}
+                  setDraft={setDraft}
+                  open={dateRangeOpen}
+                  onToggleOpen={() => setDateRangeOpen((o) => !o)}
+                />
+              ) : null}
+              {previewBaseDashId === DASH_WIDGET.BAR_CHART ? (
+                <BarChartEditDateRange
+                  draft={draft}
+                  setDraft={setDraft}
+                  open={dateRangeOpen}
+                  onToggleOpen={() => setDateRangeOpen((o) => !o)}
+                />
+              ) : null}
               {showDownlinkDataSection && (
                 <div className="widget-edit-downlink-block">
                   <label className="widget-edit-label">Downlinks del dispositivo</label>
@@ -3066,138 +3248,8 @@ export default function WidgetEditModal({
                       </label>
                     </>
                   )}
-                  {showDateFilterSection ? (
-                    <div className="widget-edit-date-filter">
-                      <button
-                        type="button"
-                        className={`widget-edit-date-range-toggle${dateRangeOpen ? ' is-open' : ''}`}
-                        aria-expanded={dateRangeOpen}
-                        onClick={() => setDateRangeOpen((o) => !o)}
-                      >
-                        <Calendar size={16} strokeWidth={2} aria-hidden />
-                        <span className="widget-edit-date-range-toggle__label">Rango de fechas</span>
-                        {dateFilterPreset !== 'live' ? (
-                          <span className="widget-edit-date-range-toggle__meta">
-                            {formatValueDateFilterLabel(draft)}
-                          </span>
-                        ) : (
-                          <span className="widget-edit-date-range-toggle__meta">En vivo</span>
-                        )}
-                        <ChevronDown size={16} className="widget-edit-date-range-toggle__chev" aria-hidden />
-                      </button>
-                      {dateRangeOpen ? (
-                        <>
-                          <p className="widget-edit-hint">
-                            Calcula el valor con la telemetría del periodo: útil para conteo de personas, consumo de agua o
-                            electricidad. <strong>Día</strong> = desde las 00:00 de hoy; <strong>Semana</strong> = desde el
-                            lunes; <strong>Mes</strong> = desde el día 1. <strong>Personalizado</strong> permite elegir día y
-                            hora de inicio y fin.
-                          </p>
-                          <ValueWidgetDateFilterButtons
-                            activePreset={dateFilterPreset}
-                            onSelect={(id) => {
-                              setDraft((d) => {
-                                const next = deepClone(d);
-                                applyValueDateFilterPreset(next, id);
-                                return next;
-                              });
-                            }}
-                          />
-                          {dateFilterPreset !== 'live' ? (
-                            <>
-                              <ValueWidgetDateFilterOperationSelect
-                                value={draft.timeframe?.operation}
-                                onChange={(v) => update('timeframe.operation', v)}
-                              />
-                              <p className="widget-edit-hint">
-                                <strong>Suma</strong> para pulsos o eventos (entradas, litros por envío).{' '}
-                                <strong>Incremento</strong> para medidores acumulativos (último valor − primero del periodo).
-                              </p>
-                            </>
-                          ) : null}
-                          {dateFilterPreset === 'custom' ? (
-                            <ValueWidgetDateFilterCustomFields
-                              customFrom={draft.timeframe?.customFrom || ''}
-                              customTo={draft.timeframe?.customTo || ''}
-                              onChangeFrom={(v) => {
-                                setDraft((d) => {
-                                  const next = deepClone(d);
-                                  next.timeframe = { ...(next.timeframe || {}), customFrom: v };
-                                  applyValueDateFilterPreset(next, 'custom');
-                                  return next;
-                                });
-                              }}
-                              onChangeTo={(v) => {
-                                setDraft((d) => {
-                                  const next = deepClone(d);
-                                  next.timeframe = { ...(next.timeframe || {}), customTo: v };
-                                  applyValueDateFilterPreset(next, 'custom');
-                                  return next;
-                                });
-                              }}
-                            />
-                          ) : null}
-                          {dateFilterPreset !== 'live' ? (
-                            <p className="widget-edit-hint">{formatValueDateFilterLabel(draft)}</p>
-                          ) : null}
-                        </>
-                      ) : null}
-                    </div>
-                  ) : null}
                   {previewBaseDashId === DASH_WIDGET.BAR_CHART && (
                     <>
-                      <div className="widget-edit-date-filter">
-                        <button
-                          type="button"
-                          className={`widget-edit-date-range-toggle${dateRangeOpen ? ' is-open' : ''}`}
-                          aria-expanded={dateRangeOpen}
-                          onClick={() => setDateRangeOpen((o) => !o)}
-                        >
-                          <Calendar size={16} strokeWidth={2} aria-hidden />
-                          <span className="widget-edit-date-range-toggle__label">Rango de fechas</span>
-                          <span className="widget-edit-date-range-toggle__meta">
-                            {(() => {
-                              const raw = normalizeBarChartGranularity(draft.timeframe?.granularity);
-                              const opt = BAR_CHART_WIDGET_GRANULARITY_OPTIONS.find((x) => x.value === raw);
-                              return opt?.label || 'Hora';
-                            })()}
-                          </span>
-                          <ChevronDown size={16} className="widget-edit-date-range-toggle__chev" aria-hidden />
-                        </button>
-                        {dateRangeOpen ? (
-                          <>
-                            <p className="widget-edit-hint">
-                              Hora = últimos 60 minutos; Día = desde las 00:00 de hoy (cuartos de hora); Semana = desde el
-                              lunes; Mes = desde el día 1.
-                            </p>
-                            <div className="widget-edit-label">Agrupar por</div>
-                            <div className="widget-edit-granularity-row">
-                              {(() => {
-                                const raw = normalizeBarChartGranularity(draft.timeframe?.granularity);
-                                const active = BAR_CHART_WIDGET_GRANULARITY_OPTIONS.some((x) => x.value === raw)
-                                  ? raw
-                                  : 'hour';
-                                return BAR_CHART_WIDGET_GRANULARITY_OPTIONS.map((o) => (
-                                  <button
-                                    key={o.value}
-                                    type="button"
-                                    className={`widget-edit-granularity-btn ${active === o.value ? 'is-active' : ''}`}
-                                    onClick={() => {
-                                      setDraft((d) => {
-                                        const next = deepClone(d);
-                                        applyHistoryGranularityPreset(next, o.value);
-                                        return next;
-                                      });
-                                    }}
-                                  >
-                                    {o.label}
-                                  </button>
-                                ));
-                              })()}
-                            </div>
-                          </>
-                        ) : null}
-                      </div>
                       <label className="widget-edit-label">
                         Desde (texto relativo o fecha ISO)
                         <input

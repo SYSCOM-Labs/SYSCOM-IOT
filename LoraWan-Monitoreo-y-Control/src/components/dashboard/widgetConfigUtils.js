@@ -1816,6 +1816,7 @@ export function defaultWidgetConfig(sensor) {
           from: 'now',
           to: 'now',
           granularity: '',
+          filterPreset: 'live',
           timezone: typeof Intl !== 'undefined' ? Intl.DateTimeFormat().resolvedOptions().timeZone : 'UTC',
         },
   };

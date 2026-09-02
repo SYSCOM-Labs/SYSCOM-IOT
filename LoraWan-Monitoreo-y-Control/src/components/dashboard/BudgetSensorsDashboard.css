@@ -1980,6 +1980,18 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   flex-wrap: wrap;
 }
 
+/**
+ * Tablero: no mostrar En vivo / Día / Semana / Mes / Personalizado en la tarjeta.
+ * Esos rangos viven en Editar widget → Rango de fechas. El gráfico lineal usa
+ * `.bsd-stream-presets` (no se oculta). Cubre también un bundle o HMR antiguo.
+ */
+.bsd-root .widget:not(.bsd-stream-widget-wrap) .bsd-value-date-filter,
+.bsd-root .widget:not(.bsd-stream-widget-wrap) .bsd-value-date-filter-custom,
+.bsd-root .widget:not(.bsd-stream-widget-wrap) .bsd-bar-chart-presets,
+.bsd-root .widget:not(.bsd-stream-widget-wrap) .bsd-tracking-map-presets {
+  display: none !important;
+}
+
 .bsd-root .bsd-value-date-filter {
   max-width: 100%;
 }

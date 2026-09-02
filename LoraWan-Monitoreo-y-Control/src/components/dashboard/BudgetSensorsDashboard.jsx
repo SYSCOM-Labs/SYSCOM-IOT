@@ -7109,7 +7109,7 @@ export default function BudgetSensorsDashboard({
                       sourceDeviceId: 'dashboard',
                     }));
                   })}
-                  <div className="widget-header bsd-text-widget__header">
+                  <div className="widget-header bsd-text-widget__header" data-bsd-date-range="edit-modal">
                     <div className="widget-title bsd-text-widget__title" style={wTitleStyle(slotId)}>
                       <BsdTextWidgetSignalIcon className="bsd-text-widget__title-icon" />
                       {wTitle(slotId, 'Texto')}

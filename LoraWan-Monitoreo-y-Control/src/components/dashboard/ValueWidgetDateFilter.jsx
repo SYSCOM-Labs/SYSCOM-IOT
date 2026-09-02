@@ -8,25 +8,22 @@ import {
 
 /**
  * Botones Día / Semana / Mes / Personalizado (y En vivo).
- * `variant`: `modal` (edición) o `widget` (tablero, reutiliza estilo de gráficos).
+ * Solo se muestran en Editar widget. `variant="widget"` se ignora a propósito:
+ * esos filtros no van en la tarjeta del tablero (salvo el gráfico lineal, que usa otro control).
  */
 export function ValueWidgetDateFilterButtons({ activePreset, onSelect, variant = 'modal', hideLive = false }) {
+  if (variant === 'widget') return null;
   const active = normalizeValueDateFilterPreset(activePreset);
   const presets = hideLive ? VALUE_DATE_FILTER_PRESETS.filter((p) => p.id !== 'live') : VALUE_DATE_FILTER_PRESETS;
-  const rowClass = variant === 'widget' ? 'bsd-bar-chart-presets bsd-value-date-filter' : 'widget-edit-granularity-row';
   return (
-    <div className={rowClass} role="group" aria-label="Filtro por fechas">
+    <div className="widget-edit-granularity-row" role="group" aria-label="Filtro por fechas">
       {presets.map((p) => {
         const isActive = active === p.id;
-        const btnClass =
-          variant === 'widget'
-            ? `bsd-bar-chart-preset${isActive ? ' active' : ''}`
-            : `widget-edit-granularity-btn${isActive ? ' is-active' : ''}`;
         return (
           <button
             key={p.id}
             type="button"
-            className={btnClass}
+            className={`widget-edit-granularity-btn${isActive ? ' is-active' : ''}`}
             onClick={(e) => {
               e.stopPropagation();
               onSelect(p.id);
@@ -49,22 +46,23 @@ export function ValueWidgetDateFilterCustomFields({
   showApply = false,
   compact = false,
 }) {
+  if (compact) return null;
   return (
-    <div className={compact ? 'bsd-value-date-filter-custom' : 'widget-edit-date-filter-custom'}>
-      <label className={compact ? 'bsd-value-date-filter-custom__lab' : 'widget-edit-label'}>
+    <div className="widget-edit-date-filter-custom">
+      <label className="widget-edit-label">
         Desde (día y hora)
         <input
           type="datetime-local"
-          className={compact ? 'bsd-value-date-filter-custom__input' : 'widget-edit-input'}
+          className="widget-edit-input"
           value={customFrom || ''}
           onChange={(e) => onChangeFrom(e.target.value)}
         />
       </label>
-      <label className={compact ? 'bsd-value-date-filter-custom__lab' : 'widget-edit-label'}>
+      <label className="widget-edit-label">
         Hasta (día y hora)
         <input
           type="datetime-local"
-          className={compact ? 'bsd-value-date-filter-custom__input' : 'widget-edit-input'}
+          className="widget-edit-input"
           value={customTo || ''}
           onChange={(e) => onChangeTo(e.target.value)}
         />
