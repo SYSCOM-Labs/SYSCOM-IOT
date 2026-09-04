@@ -473,6 +473,45 @@ function safeChartResize(chart) {
   }
 }
 
+function setStreamChartSpanGaps(chart, spanGaps) {
+  if (!chart?.data?.datasets) return;
+  for (const ds of chart.data.datasets) {
+    if (ds.type === 'bar') continue;
+    ds.spanGaps = Boolean(spanGaps);
+  }
+}
+
+function uniqueStreamHistoryFieldKeys(series) {
+  const keys = [];
+  const seen = new Set();
+  for (const s of series || []) {
+    const k = s?.fieldKey != null ? String(s.fieldKey).trim() : '';
+    if (!k || seen.has(k)) continue;
+    seen.add(k);
+    keys.push(k);
+  }
+  return keys;
+}
+
+function mergeNormalizedTelemetryLists(lists) {
+  const byKey = new Map();
+  for (const list of lists) {
+    for (const row of normalizeTelemetryList(list)) {
+      const id = row?.id != null ? String(row.id).trim() : '';
+      const ts = row?.timestamp ?? row?.ts ?? row?.time;
+      const key = id ? `id:${id}` : `ts:${ts}`;
+      if (!byKey.has(key)) byKey.set(key, row);
+    }
+  }
+  return [...byKey.values()].sort((a, b) => {
+    const ta = toHistoryEpochMs(a.timestamp ?? a.ts ?? a.time);
+    const tb = toHistoryEpochMs(b.timestamp ?? b.ts ?? b.time);
+    const na = Number.isFinite(ta) ? ta : 0;
+    const nb = Number.isFinite(tb) ? tb : 0;
+    return na - nb;
+  });
+}
+
 function buildStreamChartDatasets(seriesList) {
   return seriesList.map((s) => {
     const bar = s.chartType === 'bar';
@@ -500,6 +539,7 @@ function buildStreamChartDatasets(seriesList) {
 
 function applyStreamingHistoryChartMulti(chart, seriesPrepared, presetId) {
   if (!chart || !seriesPrepared.length) return;
+  setStreamChartSpanGaps(chart, false);
   const n = Math.min(seriesPrepared.length, chart.data.datasets.length);
   const endNow = Date.now();
   const sp0 = seriesPrepared[0];
@@ -1474,6 +1514,15 @@ function mergeLiveIntoStreamSeriesPrepared(seriesPrepared, streamTel, streamWidg
       return { ...sp, points: [...pts.slice(0, -1), { ts: Math.max(last.ts, insertTs), val }] };
     }
     if (!last || insertTs > last.ts || val !== last.val) {
+      /**
+       * No interpolar horas sin filas: el widget en vivo fusiona el último `temperature` con
+       * `lastUpdateTime` de un uplink parcial (WT201 estado/join). Unir ese punto al historial
+       * dibujaba una diagonal falsa hasta «ahora».
+       */
+      const maxStaleGapMs = 20 * 60 * 1000;
+      if (!btnLike && last && insertTs - last.ts > maxStaleGapMs) {
+        return sp;
+      }
       return { ...sp, points: [...pts, { ts: insertTs, val }] };
     }
     return sp;
@@ -4968,6 +5017,7 @@ export default function BudgetSensorsDashboard({
     const st2 = streamingMultiRef.current;
     const maxLen = Math.max(...st2.buffers.map((b) => b.length), 0);
     if (maxLen) {
+      setStreamChartSpanGaps(chart, true);
       applyLiveStreamChartLabels(chart, st2, 'live');
       const allVals = [];
       for (let i = 0; i < Math.min(n, chart.data.datasets.length); i++) {
@@ -5047,21 +5097,43 @@ export default function BudgetSensorsDashboard({
       }
 
       try {
-        /** Una sola consulta sin filtro por clave: cada fila trae el JSON completo de propiedades (SQLite `telemetry`). */
+        /**
+         * Filtrar por fieldKey al muestrear: un cubo de 15 min toma 1 fila (la más reciente).
+         * En WT201 esa fila suele ser estado/join sin `temperature`; el gráfico quedaba plano
+         * hasta pegar el valor en vivo (diagonal falsa).
+         */
         const pageCap = streamHistoryPageSize(streamTimePreset);
+        const historyFieldKeys = uniqueStreamHistoryFieldKeys(series);
+        const bucketMs = historyChartBucketMs(streamTimePreset);
         let sharedRows = [];
         if (isDemoPanel) {
-          const bucket = historyChartBucketMs(streamTimePreset) || 15 * 60 * 1000;
+          const bucket = bucketMs || 15 * 60 * 1000;
           sharedRows = buildDemoShowcaseHistoryRows(startMs, endMs, bucket);
         } else {
         try {
-          const local = await withTimeout(
-            queryTelemetry(streamHistoryDeviceId, null, startMs, endMs, pageCap, {
-              bucketMs: historyChartBucketMs(streamTimePreset),
-            }),
-            STREAM_HISTORY_FETCH_TIMEOUT_MS,
-            'stream_telemetry_timeout'
-          );
+          const local =
+            historyFieldKeys.length > 1
+              ? await withTimeout(
+                  Promise.all(
+                    historyFieldKeys.map((fk) =>
+                      queryTelemetry(streamHistoryDeviceId, fk, startMs, endMs, pageCap, { bucketMs })
+                    )
+                  ).then((chunks) => mergeNormalizedTelemetryLists(chunks)),
+                  STREAM_HISTORY_FETCH_TIMEOUT_MS,
+                  'stream_telemetry_timeout'
+                )
+              : await withTimeout(
+                  queryTelemetry(
+                    streamHistoryDeviceId,
+                    historyFieldKeys[0] || null,
+                    startMs,
+                    endMs,
+                    pageCap,
+                    { bucketMs }
+                  ),
+                  STREAM_HISTORY_FETCH_TIMEOUT_MS,
+                  'stream_telemetry_timeout'
+                );
           sharedRows = normalizeTelemetryList(local);
         } catch (e) {
           console.warn('[BSD stream] queryTelemetry', e);

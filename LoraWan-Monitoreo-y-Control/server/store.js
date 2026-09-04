@@ -2167,7 +2167,15 @@ class Store {
     let list;
     if (bucket > 0) {
       const needle = pk ? `"${pk.replace(/"/g, '')}"` : '';
-      const rows = this._telemetryHistorySampledStmt(bucket).all(needle, needle, uid, did, s, e, fetchLimit);
+      const rows = this._telemetryHistorySampledStmt(bucket).all(
+        needle,
+        needle,
+        uid,
+        did,
+        s,
+        e,
+        fetchLimit
+      );
       list = rows.map(rowToTelemetryRow);
     } else {
       const rows = this.st.telemetryHistory.all(uid, did, s, e, fetchLimit);
@@ -2198,7 +2206,9 @@ class Store {
           SELECT id, user_id, device_id, device_name, properties_json, ts,
             ROW_NUMBER() OVER (
               PARTITION BY (ts / ${b})
-              ORDER BY CASE WHEN ? = '' THEN 0 WHEN instr(properties_json, ?) > 0 THEN 0 ELSE 1 END ASC, ts DESC, id DESC
+              ORDER BY CASE WHEN ? = '' THEN 0 WHEN instr(properties_json, ?) > 0 THEN 0 ELSE 1 END ASC,
+                CASE WHEN instr(properties_json, '"lorawan_event"') > 0 THEN 1 ELSE 0 END ASC,
+                ts DESC, id DESC
             ) AS rn
           FROM telemetry
           WHERE user_id = ? AND device_id = ? AND ts >= ? AND ts <= ?

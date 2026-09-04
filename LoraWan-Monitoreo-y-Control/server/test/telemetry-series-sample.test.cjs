@@ -71,3 +71,39 @@ test('getTelemetrySeries con bucketMs cubre el inicio del rango (no solo las úl
     unlinkDb(file);
   }
 });
+
+test('getTelemetrySeries con propKey prefiere la fila del cubo que trae esa propiedad', () => {
+  const file = tmpDb();
+  const store = new Store(file);
+  try {
+    store.insertUser({
+      id: 'owner',
+      email: 'owner@test.local',
+      password: 'x',
+      role: 'admin',
+      ingestToken: 'tok-owner',
+      createdAt: new Date().toISOString(),
+    });
+    const bucket = 15 * 60 * 1000;
+    const t0 = Math.floor(Date.now() / bucket) * bucket;
+    store.appendTelemetry('owner', 'wt201', 'Termostato', { temperature: 24 }, t0 + 60 * 1000);
+    store.appendTelemetry(
+      'owner',
+      'wt201',
+      'Termostato',
+      { temperature_control_status: 'heat', fPort: 85 },
+      t0 + 10 * 60 * 1000
+    );
+
+    const withoutKey = store.getTelemetrySeries('owner', 'wt201', t0, t0 + bucket - 1, null, 50, bucket);
+    assert.equal(withoutKey.length, 1);
+    assert.equal(withoutKey[0].properties.temperature, undefined);
+
+    const withKey = store.getTelemetrySeries('owner', 'wt201', t0, t0 + bucket - 1, 'temperature', 50, bucket);
+    assert.equal(withKey.length, 1);
+    assert.equal(withKey[0].properties.temperature, 24);
+  } finally {
+    store.close();
+    unlinkDb(file);
+  }
+});
