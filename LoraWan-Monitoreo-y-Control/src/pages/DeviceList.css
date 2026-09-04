@@ -10,7 +10,8 @@
   text-align: center;
   vertical-align: middle;
   white-space: normal;
-  min-width: min(22rem, 36vw);
+  min-width: 0;
+  width: 18%;
 }
 
 .device-actions-head {
@@ -831,7 +832,16 @@ body.theme-dark .device-assign-unassign-btn {
 
 .device-table {
   width: 100%;
+  max-width: 100%;
+  table-layout: fixed;
   border-collapse: collapse;
+}
+
+.device-table th,
+.device-table td {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
 }
 
 .device-table th {
@@ -855,14 +865,12 @@ body.theme-dark .device-assign-unassign-btn {
 .device-table tbody tr:hover,
 .device-table tbody tr.row-active {
   background: var(--primary-light);
-  transform: translateX(2px);
   box-shadow: inset 3px 0 0 var(--primary-color);
   z-index: 10;
 }
 
 .device-table tbody tr.row-active {
   z-index: 50;
-  transform: translateX(4px);
 }
 
 body.theme-dark .device-table tbody tr:hover,
@@ -874,6 +882,18 @@ body.theme-dark .device-table tbody tr.row-active {
 .device-name-cell .name {
   font-weight: 600;
   display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.device-name-cell .sn {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 .device-name-cell.clickable {
@@ -891,6 +911,11 @@ body.theme-dark .device-table tbody tr.row-active {
 }
 
 .model-badge {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   background: var(--bg-accent);
   padding: 0.2rem 0.6rem;
   border-radius: 4px;
@@ -900,7 +925,7 @@ body.theme-dark .device-table tbody tr.row-active {
 
 .device-list-tag {
   display: inline-block;
-  max-width: 12rem;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -950,7 +975,7 @@ body.theme-dark .device-table tbody tr.row-active {
 
 .device-license-cell {
   font-size: 0.85rem;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .device-license-cell--soon {
@@ -1126,6 +1151,25 @@ body.theme-dark .device-license-grace-badge {
   min-width: 12rem;
 }
 
+@media (max-width: 1280px) {
+  .device-table th:nth-child(6),
+  .device-table td:nth-child(6) {
+    display: none;
+  }
+
+  .device-actions-license-label {
+    display: none;
+  }
+
+  .device-actions-license-inline {
+    width: 2.5rem;
+    min-width: 2.5rem;
+    min-height: 2.5rem;
+    padding: 0 !important;
+    border-radius: 999px !important;
+  }
+}
+
 @media (max-width: 1024px) {
   .device-table th:nth-child(2),
   .device-table td:nth-child(2),
@@ -1229,6 +1273,8 @@ body.theme-dark .device-license-grace-badge {
   position: relative;
   padding-bottom: 2rem;
   min-height: min(70vh, 100%);
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 .device-list-page--premium::before {
@@ -1311,15 +1357,17 @@ body.theme-dark .device-license-grace-badge {
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35), 0 0 32px rgba(99, 102, 241, 0.06);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: hidden;
   position: relative;
+  max-width: 100%;
 }
 
 .device-table-scroll {
-  overflow-x: auto;
+  overflow-x: hidden;
+  overflow-y: visible;
   width: 100%;
   max-width: 100%;
-  -webkit-overflow-scrolling: touch;
 }
 
 /* Paginación listado dispositivos */
@@ -1539,7 +1587,6 @@ body:not(.theme-dark) .device-list-page--premium .device-table-pagination__page:
 .device-list-page--premium .device-table tbody tr:hover,
 .device-list-page--premium .device-table tbody tr.row-active {
   background: rgba(99, 102, 241, 0.1) !important;
-  transform: translateX(4px);
   box-shadow: -4px 0 0 rgba(99, 102, 241, 0.85), 0 0 28px rgba(99, 102, 241, 0.18),
     inset 0 1px 0 rgba(255, 255, 255, 0.05) !important;
 }
