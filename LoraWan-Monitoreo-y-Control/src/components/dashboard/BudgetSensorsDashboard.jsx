@@ -7385,7 +7385,7 @@ export default function BudgetSensorsDashboard({
             ))}
 
         {isVis(DASH_WIDGET.SENSOR_GRID) && rglLayoutIdSet.has(DASH_WIDGET.SENSOR_GRID) && (
-        <div key={DASH_WIDGET.SENSOR_GRID} {...mergeShell(DASH_WIDGET.SENSOR_GRID, 'widget bsd-sensor-grid-shell bsd-widget-editable')}>
+        <div key={DASH_WIDGET.SENSOR_GRID} {...mergeShell(DASH_WIDGET.SENSOR_GRID, ['widget', 'bsd-sensor-grid-shell', 'bsd-widget-editable', isDemoPanel ? 'bsd-sensor-grid-shell--demo' : ''].filter(Boolean).join(' '))}>
           {dashWidgetChrome(DASH_WIDGET.SENSOR_GRID, (e) => {
             e.stopPropagation();
             openDashWidgetEdit(DASH_WIDGET.SENSOR_GRID, () => ({
@@ -7439,7 +7439,8 @@ export default function BudgetSensorsDashboard({
             const decimals =
               decRaw != null && decRaw !== '' && Number.isFinite(Number(decRaw)) ? Number(decRaw) : 1;
             const indType = normalizeIndicatorType(cfg?.gauge?.indicatorType || 'numeric');
-            const useClassicNumeric = indType === 'numeric';
+            /** Demo: KPI numérico siempre visible (el gauge circular se colapsaba a pastillas vacías). */
+            const useClassicNumeric = isDemoPanel || indType === 'numeric';
             const cardTitle = cfg?.basics?.title || sensor.name;
             const titleColor = cfg?.appearance?.titleColor || '#f97316';
             const gran = cfg?.timeframe?.granularity;
@@ -7490,7 +7491,7 @@ export default function BudgetSensorsDashboard({
                 key={sensor.id}
                 role={canEditDashboard ? 'button' : undefined}
                 tabIndex={canEditDashboard ? 0 : undefined}
-                className={['sensor-card', cardClear ? 'bsd-widget-surface--clear' : ''].filter(Boolean).join(' ')}
+                className={['sensor-card', isDemoPanel ? 'sensor-card--demo-kpi' : '', cardClear ? 'bsd-widget-surface--clear' : ''].filter(Boolean).join(' ')}
                 onClick={() => canEditDashboard && editSensorValue(sensor.id)}
                 onKeyDown={(e) => {
                   if (!canEditDashboard) return;
@@ -7577,14 +7578,15 @@ export default function BudgetSensorsDashboard({
                   </>
                 ) : (
                   <>
-                    <div className="sensor-icon">{sensor.icon}</div>
+                    <div className="sensor-icon" aria-hidden>
+                      {sensor.icon}
+                    </div>
                     <div className="sensor-name">{cardTitle}</div>
                     <div className="sensor-value">
-                      {valueLabel ||
-                        (typeof displayVal === 'number' && !Number.isInteger(displayVal)
-                          ? displayVal.toFixed(decimals)
-                          : displayVal)}
-                      {valueLabel ? null : <span className="sensor-unit">{unit}</span>}
+                      {typeof displayVal === 'number' && Number.isFinite(displayVal)
+                        ? displayVal.toFixed(Math.max(0, decimals))
+                        : valueLabel || displayVal || '—'}
+                      {unit ? <span className="sensor-unit">{unit}</span> : null}
                     </div>
                     <div className={`sensor-status status-${status}`}>{statusLabel}</div>
                   </>

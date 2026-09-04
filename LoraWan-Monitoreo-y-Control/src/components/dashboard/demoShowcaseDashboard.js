@@ -18,7 +18,7 @@ import {
   saveWidgetConfig,
 } from './widgetConfigUtils';
 
-export const DEMO_SHOWCASE_VERSION = 'v3';
+export const DEMO_SHOWCASE_VERSION = 'v4';
 export const DEMO_SHOWCASE_DEVICE_ID = 'demo-showcase';
 
 export const DEMO_SHOWCASE_PANELS = [
@@ -174,7 +174,7 @@ function sensorCardCfg(fieldDef) {
         widgetBackgroundColor: fieldDef.widgetBackgroundColor,
       },
       gauge: {
-        indicatorType: 'circular',
+        indicatorType: 'numeric',
         scaleMin: fieldDef.scaleMin,
         scaleMax: fieldDef.scaleMax,
         ranges: fieldDef.ranges,
