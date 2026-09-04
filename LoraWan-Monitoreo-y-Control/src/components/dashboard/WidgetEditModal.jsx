@@ -68,6 +68,10 @@ import {
   MC_ARC_SWEEP,
   MC_ARC_PATH_D,
   MC_ARC_GEOM_LEN,
+  MC_VIEWBOX,
+  MC_TICK_INSET,
+  MC_TICK_OUTSET,
+  MC_TICK_LABEL_R,
   mcPoint,
   buildMetricCircularTicksFromUi,
   computeMetricCircularUi,
@@ -848,7 +852,7 @@ function ModalMetricCircularPreview({
         <div className="bsd-metric-circular__chart">
           <svg
             className="bsd-metric-circular__svg"
-            viewBox="0 0 240 152"
+            viewBox={MC_VIEWBOX}
             preserveAspectRatio="xMidYMid meet"
             width="100%"
             aria-hidden
@@ -898,9 +902,9 @@ function ModalMetricCircularPreview({
               style={mcArcFilterStyle}
             />
             {mcTicks.map((tk) => {
-              const inner = mcPoint(MC_CX, MC_CY, MC_R + 10, tk.theta);
-              const outer = mcPoint(MC_CX, MC_CY, MC_R + 20, tk.theta);
-              const lab = mcPoint(MC_CX, MC_CY, MC_R + 34, tk.theta);
+              const inner = mcPoint(MC_CX, MC_CY, MC_R + MC_TICK_INSET, tk.theta);
+              const outer = mcPoint(MC_CX, MC_CY, MC_R + MC_TICK_OUTSET, tk.theta);
+              const lab = mcPoint(MC_CX, MC_CY, MC_TICK_LABEL_R, tk.theta);
               return (
                 <g key={tk.f}>
                   <line className="bsd-metric-circular__tick" x1={inner.x} y1={inner.y} x2={outer.x} y2={outer.y} />
@@ -1345,11 +1349,11 @@ function ModalLivePreviewBlock({
           </div>
         </div>
         <div className="bsd-veleta-widget__body">
-          <BsdWindVaneWidget degrees={vu?.degrees ?? null} />
-          <div className="bsd-veleta-widget__readout">
-            <span className="bsd-veleta-widget__deg">{vu?.displayDeg ?? '—'}</span>
-            <span className="bsd-veleta-widget__cardinal">{vu?.cardinal ?? ''}</span>
-          </div>
+          <BsdWindVaneWidget
+            degrees={vu?.degrees ?? null}
+            displayDeg={vu?.displayDeg}
+            cardinal={vu?.cardinal}
+          />
         </div>
         {vu?.lastAtLine ? (
           <div className="bsd-veleta-widget__footer" style={{ color: titleColor }}>

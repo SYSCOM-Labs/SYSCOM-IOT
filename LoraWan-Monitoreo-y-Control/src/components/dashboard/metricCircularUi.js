@@ -15,12 +15,17 @@ export const BSD_CIRCULAR_GAUGE_R = 76;
 export const BSD_CIRCULAR_GAUGE_STROKE = 24;
 export const BSD_CIRCULAR_GAUGE_LEN = 2 * Math.PI * BSD_CIRCULAR_GAUGE_R;
 
-/** Métrica circular: arco ~240° (mismo convenio que en `BudgetSensorsDashboard.jsx`). */
+/** Métrica circular: arco ~240° (viewBox más alto para no recortar ticks). */
 export const MC_CX = 120;
 export const MC_CY = 108;
 export const MC_R = 72;
 export const MC_ARC_START = (150 * Math.PI) / 180;
 export const MC_ARC_SWEEP = (240 * Math.PI) / 180;
+export const MC_VIEWBOX = '0 0 240 172';
+export const MC_ASPECT = '240 / 172';
+export const MC_TICK_INSET = 10;
+export const MC_TICK_OUTSET = 18;
+export const MC_TICK_LABEL_R = MC_R + 28;
 
 export function mcPoint(cx, cy, r, theta) {
   return { x: cx + r * Math.cos(theta), y: cy + r * Math.sin(theta) };

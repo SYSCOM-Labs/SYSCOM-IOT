@@ -14,9 +14,11 @@ import {
   mergeWidgetConfig,
   loadPanelWorkspace,
   savePanelWorkspace,
+  widgetStorageKey,
+  saveWidgetConfig,
 } from './widgetConfigUtils';
 
-export const DEMO_SHOWCASE_VERSION = 'v2';
+export const DEMO_SHOWCASE_VERSION = 'v3';
 export const DEMO_SHOWCASE_DEVICE_ID = 'demo-showcase';
 
 export const DEMO_SHOWCASE_PANELS = [
@@ -56,6 +58,131 @@ function widgetCfg(dashWidgetId, patch) {
   return mergeWidgetConfig(dashboardWidgetSensorStub(dashWidgetId), patch || {});
 }
 
+/** Tarjetas del multi-sensor: lecturas de proceso, no metadatos LoRaWAN. */
+export const DEMO_SHOWCASE_GRID_FIELDS = [
+  {
+    propertyKey: 'pressure',
+    name: 'Presión',
+    unit: 'hPa',
+    icon: '📊',
+    threshold: 1030,
+    decimals: 0,
+    titleColor: '#0369a1',
+    widgetBackgroundColor: '#f0f9ff',
+    scaleMin: 980,
+    scaleMax: 1040,
+    ranges: [
+      { id: 'r1', name: 'Baja', value: 1000, color: '#38bdf8' },
+      { id: 'r2', name: 'Normal', value: 1025, color: '#22c55e' },
+      { id: 'r3', name: 'Alta', value: 1040, color: '#f97316' },
+    ],
+  },
+  {
+    propertyKey: 'aqi',
+    name: 'Calidad del aire',
+    unit: 'AQI',
+    icon: '🌫️',
+    threshold: 80,
+    decimals: 0,
+    titleColor: '#6d28d9',
+    widgetBackgroundColor: '#f5f3ff',
+    scaleMin: 0,
+    scaleMax: 150,
+    ranges: [
+      { id: 'r1', name: 'Buena', value: 50, color: '#22c55e' },
+      { id: 'r2', name: 'Moderada', value: 100, color: '#eab308' },
+      { id: 'r3', name: 'Alta', value: 150, color: '#ef4444' },
+    ],
+  },
+  {
+    propertyKey: 'battery',
+    name: 'Batería',
+    unit: '%',
+    icon: '🔋',
+    threshold: 101,
+    decimals: 0,
+    titleColor: '#c2410c',
+    widgetBackgroundColor: '#fff7ed',
+    scaleMin: 0,
+    scaleMax: 100,
+    ranges: [
+      { id: 'r1', name: 'Crítica', value: 20, color: '#ef4444' },
+      { id: 'r2', name: 'Media', value: 60, color: '#f59e0b' },
+      { id: 'r3', name: 'Buena', value: 100, color: '#22c55e' },
+    ],
+  },
+  {
+    propertyKey: 'occupancy',
+    name: 'Ocupación',
+    unit: '%',
+    icon: '👥',
+    threshold: 90,
+    decimals: 0,
+    titleColor: '#be185d',
+    widgetBackgroundColor: '#fdf2f8',
+    scaleMin: 0,
+    scaleMax: 100,
+    ranges: [
+      { id: 'r1', name: 'Baja', value: 40, color: '#a855f7' },
+      { id: 'r2', name: 'Media', value: 75, color: '#ec4899' },
+      { id: 'r3', name: 'Alta', value: 100, color: '#f43f5e' },
+    ],
+  },
+];
+
+/**
+ * Tarjetas del widget Multi-sensor para la cuenta demo (valores vivos).
+ * @param {Record<string, unknown> | null | undefined} tel
+ */
+export function buildDemoShowcaseSensors(tel = {}) {
+  return DEMO_SHOWCASE_GRID_FIELDS.map((f, i) => {
+    const raw = tel?.[f.propertyKey];
+    const n = typeof raw === 'number' && Number.isFinite(raw) ? raw : Number(raw);
+    return {
+      id: i + 1,
+      name: f.name,
+      value: Number.isFinite(n) ? n : 0,
+      unit: f.unit,
+      icon: f.icon,
+      threshold: f.threshold,
+      propertyKey: f.propertyKey,
+      sourceDeviceId: DEMO_SHOWCASE_DEVICE_ID,
+    };
+  });
+}
+
+function sensorCardStorageKey(field) {
+  return widgetStorageKey('panel', DEMO_SHOWCASE_DEVICE_ID, field);
+}
+
+function sensorCardCfg(fieldDef) {
+  return mergeWidgetConfig(
+    {
+      name: fieldDef.name,
+      value: 0,
+      unit: fieldDef.unit,
+      icon: fieldDef.icon,
+      threshold: fieldDef.threshold,
+      propertyKey: fieldDef.propertyKey,
+      sourceDeviceId: DEMO_SHOWCASE_DEVICE_ID,
+    },
+    {
+      basics: { title: fieldDef.name },
+      data: { fieldKey: fieldDef.propertyKey, unit: fieldDef.unit, decimals: fieldDef.decimals },
+      appearance: {
+        titleColor: fieldDef.titleColor,
+        widgetBackgroundColor: fieldDef.widgetBackgroundColor,
+      },
+      gauge: {
+        indicatorType: 'circular',
+        scaleMin: fieldDef.scaleMin,
+        scaleMax: fieldDef.scaleMax,
+        ranges: fieldDef.ranges,
+      },
+    }
+  );
+}
+
 function storageKey(seg, panelId, widgetId) {
   return dashboardWidgetStorageKey('panel', null, widgetId, panelId, seg);
 }
@@ -81,7 +208,12 @@ function buildPanelBundles(seg) {
   const lecturasWidgets = {
     [storageKey(seg, 'main', DASH_WIDGET.TEXT)]: widgetCfg(DASH_WIDGET.TEXT, {
       basics: { title: 'Temperatura' },
-      data: { fieldKey: 'temperature', unit: '°C', decimals: 1 },
+      data: {
+        fieldKey: 'temperature',
+        unit: '°C',
+        decimals: 1,
+        metricSubtitle: 'Ambiente interior',
+      },
       appearance: { titleColor: '#0e7490', widgetBackgroundColor: '#ecfeff' },
     }),
     [storageKey(seg, 'main', DASH_WIDGET.METRIC_CIRCULAR)]: widgetCfg(DASH_WIDGET.METRIC_CIRCULAR, {
@@ -106,14 +238,15 @@ function buildPanelBundles(seg) {
       },
     }),
     [storageKey(seg, 'main', DASH_WIDGET.VEleta)]: widgetCfg(DASH_WIDGET.VEleta, {
-      basics: { title: 'Veleta' },
+      basics: { title: 'Dirección del viento' },
       data: { fieldKey: 'wind_direction', unit: '°', decimals: 0 },
       appearance: { titleColor: '#1d4ed8', widgetBackgroundColor: '#eff6ff' },
     }),
     [storageKey(seg, 'main', DASH_WIDGET.SENSOR_GRID)]: widgetCfg(DASH_WIDGET.SENSOR_GRID, {
-      basics: { title: 'Multi-sensor' },
+      basics: { title: 'Otras lecturas' },
       appearance: { titleColor: '#7c3aed', widgetBackgroundColor: '#faf5ff' },
     }),
+    ...Object.fromEntries(DEMO_SHOWCASE_GRID_FIELDS.map((f) => [sensorCardStorageKey(f.propertyKey), sensorCardCfg(f)])),
   };
 
   const nivelesWidgets = {
@@ -260,10 +393,10 @@ function buildPanelBundles(seg) {
         DASH_WIDGET.SENSOR_GRID,
       ]),
       gridLayout: [
-        gridItem(DASH_WIDGET.TEXT, 0, 0, { w: 4 }),
-        gridItem(DASH_WIDGET.METRIC_CIRCULAR, 4, 0, { w: 4 }),
-        gridItem(DASH_WIDGET.VEleta, 8, 0, { w: 4 }),
-        gridItem(DASH_WIDGET.SENSOR_GRID, 0, 9),
+        gridItem(DASH_WIDGET.TEXT, 0, 0, { w: 4, h: 11 }),
+        gridItem(DASH_WIDGET.METRIC_CIRCULAR, 4, 0, { w: 4, h: 11 }),
+        gridItem(DASH_WIDGET.VEleta, 8, 0, { w: 4, h: 11 }),
+        gridItem(DASH_WIDGET.SENSOR_GRID, 0, 11, { w: 12, h: 12 }),
       ],
     },
     demo_niveles: {
@@ -452,6 +585,13 @@ export function applyDemoShowcaseIfNeeded(ownerSegment) {
   applyPanelBsdBundle(seg, 'main', bundles.main);
   applyPanelBsdBundle(seg, 'demo_niveles', bundles.demo_niveles);
   applyPanelBsdBundle(seg, 'demo_control', bundles.demo_control);
+  for (const f of DEMO_SHOWCASE_GRID_FIELDS) {
+    try {
+      saveWidgetConfig(sensorCardStorageKey(f.propertyKey), sensorCardCfg(f));
+    } catch {
+      /* quota */
+    }
+  }
 
   try {
     localStorage.setItem(flag, '1');

@@ -591,7 +591,7 @@ body.theme-dark .bsd-panel-widgets-canvas {
   flex: 1 1 0;
   min-height: 0;
   min-width: 0;
-  width: min(100%, min(96cqw, calc(96cqh * 240 / 152)));
+  width: min(100%, min(96cqw, calc(96cqh * 240 / 172)));
   max-width: 100%;
   max-height: min(100%, 96cqh);
   margin: auto;
@@ -609,7 +609,7 @@ body.theme-dark .bsd-panel-widgets-canvas {
   height: 100%;
   max-width: 100%;
   max-height: 100%;
-  aspect-ratio: 240 / 152;
+  aspect-ratio: 240 / 172;
   flex: 0 0 auto;
   min-height: 0;
 }
@@ -632,8 +632,21 @@ body.theme-dark .bsd-panel-widgets-canvas {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: clamp(4px, 1cqh, 10px);
-  padding: clamp(2px, 0.8cqh, 8px) clamp(4px, 1.5cqw, 10px);
+  gap: 0;
+  padding: clamp(2px, 0.6cqh, 6px);
+}
+
+.bsd-root .bsd-wind-vane {
+  flex: 1 1 0;
+  min-height: 0;
+  width: min(100%, min(100cqw, 100cqh));
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: 1;
+  margin: 0 auto;
+  align-self: center;
+  container-type: size;
+  container-name: bsd-veleta;
 }
 
 .bsd-dash-grid-layout .react-grid-item > .widget.bsd-bar-chart-widget,
@@ -709,7 +722,10 @@ body.theme-dark .bsd-panel-widgets-canvas {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  align-content: start;
+  align-content: stretch;
+  gap: clamp(10px, 1.6vmin, 16px);
+  margin-bottom: 0;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .bsd-dash-grid-layout .bsd-sensor-grid-shell .sensor-card,
@@ -719,6 +735,9 @@ body.theme-dark .bsd-panel-widgets-canvas {
   align-items: stretch;
   justify-content: flex-start;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  padding: clamp(10px, 1.4vmin, 16px);
   container-type: size;
   container-name: sensor-card;
 }
@@ -1596,7 +1615,7 @@ body.theme-dark .bsd-root .bsd-battery-level__foot-at {
   flex: 1 1 0;
   min-height: 0;
   min-width: 0;
-  width: min(100%, min(96cqw, calc(96cqh * 240 / 152)));
+  width: min(100%, min(96cqw, calc(96cqh * 240 / 172)));
   max-width: 100%;
   max-height: min(100%, 96cqh);
   margin: auto;
@@ -1614,7 +1633,7 @@ body.theme-dark .bsd-root .bsd-battery-level__foot-at {
   height: 100%;
   max-width: 100%;
   max-height: 100%;
-  aspect-ratio: 240 / 152;
+  aspect-ratio: 240 / 172;
   flex: 0 0 auto;
   min-height: 0;
   display: block;
@@ -1622,7 +1641,7 @@ body.theme-dark .bsd-root .bsd-battery-level__foot-at {
 }
 
 .bsd-root .bsd-metric-circular__track {
-  stroke: rgba(255, 255, 255, 0.35);
+  stroke: rgba(15, 23, 42, 0.14);
 }
 
 .bsd-root .bsd-metric-circular__arc {
@@ -1630,12 +1649,12 @@ body.theme-dark .bsd-root .bsd-battery-level__foot-at {
 }
 
 .bsd-root .bsd-metric-circular__tick {
-  stroke: rgba(255, 255, 255, 0.55);
+  stroke: #94a3b8;
   stroke-width: 1.25;
 }
 
 .bsd-root .bsd-metric-circular__tick-label {
-  fill: rgba(255, 255, 255, 0.82);
+  fill: #64748b;
   font-size: clamp(7px, 2.8cqw, 12px);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -1646,7 +1665,7 @@ body.theme-dark .bsd-root .bsd-battery-level__foot-at {
 }
 
 .bsd-root .bsd-metric-circular__center-val {
-  fill: #ffffff;
+  fill: #0f172a;
   font-size: clamp(10px, 18cqw, 26px);
   font-weight: 800;
   font-variant-numeric: tabular-nums;
@@ -1654,9 +1673,15 @@ body.theme-dark .bsd-root .bsd-battery-level__foot-at {
 }
 
 .bsd-root .bsd-metric-circular__center-sub {
-  fill: rgba(255, 255, 255, 0.82);
+  fill: #475569;
   font-size: clamp(8px, 4cqw, 14px);
-  font-weight: 500;
+  font-weight: 600;
+}
+
+@container bsd-mc-chart (max-height: 128px) {
+  .bsd-metric-circular__tick-label {
+    display: none;
+  }
 }
 
 body.theme-dark .bsd-root .bsd-metric-circular__svg {
@@ -1707,7 +1732,31 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   overflow: hidden;
 }
 
+.bsd-root .bsd-text-widget__value-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  max-width: 100%;
+  padding: clamp(10px, 3cqh, 22px) clamp(12px, 4cqw, 28px);
+}
+
+.bsd-root .bsd-text-widget__value-wrap::before {
+  content: '';
+  position: absolute;
+  inset: 8% 12%;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 50% 42%, rgba(14, 165, 233, 0.22), transparent 62%),
+    radial-gradient(circle at 50% 80%, rgba(45, 212, 191, 0.12), transparent 70%);
+  pointer-events: none;
+  z-index: 0;
+}
+
 .bsd-root .bsd-text-widget__value {
+  position: relative;
+  z-index: 1;
   font-size: clamp(0.7rem, min(11cqw, 16cqh), 3.05rem);
   font-weight: 800;
   color: var(--text-primary);
@@ -1759,9 +1808,10 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
 .bsd-root .bsd-wind-vane {
   flex: 1 1 0;
   min-height: 0;
-  width: min(100%, min(96cqw, 96cqh));
-  max-width: min(100%, min(96cqw, 96cqh));
-  max-height: min(100%, min(88cqh, 96cqw));
+  width: min(100%, min(100cqw, 100cqh));
+  max-width: 100%;
+  max-height: 100%;
+  aspect-ratio: 1;
   margin: 0 auto;
   align-self: center;
   container-type: size;
@@ -1784,7 +1834,7 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
 
 .bsd-root .bsd-wind-vane__label {
   fill: #f8fafc;
-  font-size: clamp(9px, 5.5cqw, 15px);
+  font-size: clamp(8px, 5cqw, 13px);
   font-weight: 800;
   letter-spacing: 0.04em;
 }
@@ -1802,6 +1852,21 @@ body.theme-dark .bsd-root .bsd-metric-circular__center-sub {
   fill: #94a3b8;
   stroke: #1e293b;
   stroke-width: 1;
+}
+
+.bsd-root .bsd-wind-vane__center-deg {
+  fill: #f8fafc;
+  font-size: clamp(11px, 8cqw, 18px);
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+}
+
+.bsd-root .bsd-wind-vane__center-card {
+  fill: #fda4af;
+  font-size: clamp(9px, 5.5cqw, 13px);
+  font-weight: 700;
+  letter-spacing: 0.14em;
 }
 
 .bsd-root .bsd-veleta-widget__readout {
@@ -2166,6 +2231,12 @@ body:not(.theme-dark) .bsd-root .widget .sensor-card {
 
 .bsd-root .bsd-sensor-grid-shell {
   margin-bottom: 8px;
+}
+
+.bsd-root .bsd-sensor-grid-shell > .widget-header {
+  flex: 0 0 auto;
+  margin-bottom: clamp(6px, 1vmin, 10px);
+  padding-right: 8px;
 }
 
 .bsd-root .widget--metric-circular .bsd-widget-actions {
@@ -2790,6 +2861,34 @@ body:not(.theme-dark) .bsd-root .widget .sensor-card {
 .bsd-root .sensor-card:hover {
   border-color: var(--bsd-card-border-hover);
   box-shadow: var(--bsd-card-shadow-hover), var(--bsd-card-inset);
+}
+
+.bsd-root .bsd-sensor-grid-shell .sensor-icon {
+  font-size: clamp(22px, 10cqh, 34px);
+  margin-bottom: 6px;
+}
+
+.bsd-root .bsd-sensor-grid-shell .sensor-name {
+  font-weight: 650;
+  font-size: clamp(12px, 3.4cqw, 14px);
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.bsd-root .bsd-sensor-grid-shell .sensor-value {
+  font-size: clamp(1.05rem, 9cqh, 1.7rem);
+  margin: 4px 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bsd-root .bsd-sensor-grid-shell .sensor-status {
+  margin-top: auto;
+  max-width: 100%;
 }
 
 .bsd-root .sensor-icon {
@@ -4620,6 +4719,19 @@ body:not(.theme-dark) .bsd-root .bsd-lucide-glow {
 
 body:not(.theme-dark) .bsd-root .bsd-lucide-glow {
   color: #0284c7;
+}
+
+body.theme-dark .bsd-root .bsd-text-widget__value-wrap::before {
+  background:
+    radial-gradient(circle at 50% 42%, rgba(56, 189, 248, 0.28), transparent 62%),
+    radial-gradient(circle at 50% 80%, rgba(45, 212, 191, 0.16), transparent 70%);
+}
+
+@media (max-width: 1100px) {
+  .bsd-dash-grid-layout .react-grid-item > .bsd-sensor-grid-shell > .grid-4cols,
+  .bsd-dash-static-cell > .bsd-sensor-grid-shell > .grid-4cols {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 body:not(.theme-dark) .bsd-root .bsd-text-widget__value {

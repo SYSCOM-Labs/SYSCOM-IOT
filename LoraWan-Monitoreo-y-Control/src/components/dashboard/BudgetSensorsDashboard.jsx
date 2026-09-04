@@ -29,8 +29,11 @@ import {
   Type,
   Route,
   Compass,
+  Thermometer,
+  Droplets,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { useTheme } from '../../context/ThemeContext';
 import { useLanguage } from '../../context/LanguageContext';
 import {
   fetchDevices,
@@ -50,6 +53,7 @@ import {
   hasMeaningfulAppTelemetry,
   mergeDeviceTelemetryForWidgets,
   PROPERTY_INFER_IGNORE_SET,
+  LORAWAN_NETWORK_UI_SUPPRESS_SET,
 } from '../../utils/gatewayPayload';
 import {
   formatTelemetryChartTooltipValue,
@@ -72,6 +76,7 @@ import {
   applyDemoShowcaseIfNeeded,
   buildDemoShowcaseHistoryRows,
   buildDemoShowcaseLiveTelemetry,
+  buildDemoShowcaseSensors,
   buildDemoShowcaseTrackingRows,
   normalizeDemoShowcasePanelId,
   readDemoShowcasePanel,
@@ -161,6 +166,10 @@ import {
   MC_ARC_SWEEP,
   MC_ARC_PATH_D,
   MC_ARC_GEOM_LEN,
+  MC_VIEWBOX,
+  MC_TICK_INSET,
+  MC_TICK_OUTSET,
+  MC_TICK_LABEL_R,
   mcPoint,
   buildMetricCircularTicksFromUi,
   computeMetricCircularUiForSlot,
@@ -249,6 +258,25 @@ function widgetGalleryLucideIcon(widgetId) {
 }
 
 const IGNORE = new Set([...PROPERTY_INFER_IGNORE_SET]);
+
+function isLorawanNetworkTelemetryKey(key) {
+  const k = String(key || '').trim();
+  if (!k) return true;
+  const lc = k.toLowerCase().replace(/[\s-]/g, '_');
+  if (LORAWAN_NETWORK_UI_SUPPRESS_SET.has(lc) || LORAWAN_NETWORK_UI_SUPPRESS_SET.has(k)) return true;
+  if (/^(fcnt|fport|fopts|datarate|devaddr)/i.test(lc)) return true;
+  if (lc.includes('payload')) return true;
+  if (lc.includes('gateway_id') || lc.includes('gatewayid') || lc === 'gateway') return true;
+  return false;
+}
+
+/** Evita mostrar `temperature` / `wind_direction` como subtítulo en widgets Texto. */
+function isTechnicalFieldKeyHint(s) {
+  const t = String(s || '').trim();
+  if (!t) return true;
+  if (t.startsWith('__bsd_')) return true;
+  return /^[a-z][a-z0-9_.]*$/i.test(t) && !/\s/.test(t);
+}
 
 function isTelemetryFieldPickerKey(k) {
   const s = String(k ?? '').trim();
@@ -794,16 +822,18 @@ function computeTextWidgetUiForSlot(
   const lastAtLine = formatLastTelemetryUpdateLine(telemetryLiveProps?.lastUpdateTime);
   const formulaActive =
     Boolean(cfg?.data?.formulaEnabled) && String(cfg?.data?.formulaExpression ?? '').trim() !== '';
+  const caption = cfg?.data?.metricSubtitle != null ? String(cfg.data.metricSubtitle).trim() : '';
+  const fieldHint = caption || (isTechnicalFieldKeyHint(fkStr) ? '' : fkStr);
 
   if (raw === undefined || raw === null) {
     const hint = !fkStr || fkStr.startsWith('__bsd_') ? 'Configura el campo en edición' : 'Sin dato en vivo';
-    return { display: '—', hint, lastAtLine };
+    return { display: '—', hint, lastAtLine, fieldKey: fkStr };
   }
   if (formulaActive) {
     const n = parseNumeric(raw);
     if (n !== null && Number.isFinite(n)) {
       const nd = transformWidgetNumeric(cfg, n);
-      return { display: `${nd.toFixed(dec)}${unit ? ` ${unit}` : ''}`.trim(), hint: fkStr, lastAtLine };
+      return { display: `${nd.toFixed(dec)}${unit ? ` ${unit}` : ''}`.trim(), hint: fieldHint, lastAtLine, fieldKey: fkStr };
     }
   } else {
     const formatted = formatWidgetTelemetryDisplay({
@@ -816,19 +846,19 @@ function computeTextWidgetUiForSlot(
       formulaActive: false,
     });
     if (formatted.usedProcessedLabel && formatted.display !== '—') {
-      return { display: formatted.display, hint: fkStr, lastAtLine };
+      return { display: formatted.display, hint: fieldHint, lastAtLine, fieldKey: fkStr };
     }
     if (!formatted.usedProcessedLabel && formatted.display !== '—') {
       const n = parseNumeric(raw);
       if (n !== null && Number.isFinite(n)) {
         const nd = transformWidgetNumeric(cfg, n);
-        return { display: `${nd.toFixed(dec)}${unit ? ` ${unit}` : ''}`.trim(), hint: fkStr, lastAtLine };
+        return { display: `${nd.toFixed(dec)}${unit ? ` ${unit}` : ''}`.trim(), hint: fieldHint, lastAtLine, fieldKey: fkStr };
       }
-      return { display: formatted.display, hint: fkStr, lastAtLine };
+      return { display: formatted.display, hint: fieldHint, lastAtLine, fieldKey: fkStr };
     }
   }
   const s = String(raw).trim();
-  return { display: s.length ? s : '—', hint: fkStr, lastAtLine };
+  return { display: s.length ? s : '—', hint: fieldHint, lastAtLine, fieldKey: fkStr };
 }
 
 /** Epoch en ms; si el backend envía segundos (~1e9), lo pasa a ms para alinear con ventanas del dashboard. */
@@ -846,7 +876,7 @@ function propertiesToSensors(obj, startId = 1, namePrefix = '', sourceDeviceId =
   const out = [];
   let id = startId;
   for (const [key, raw] of Object.entries(flat)) {
-    if (IGNORE.has(key)) continue;
+    if (IGNORE.has(key) || isLorawanNetworkTelemetryKey(key)) continue;
     if (String(key).endsWith('_alarm')) continue;
     const v = parseNumeric(raw);
     if (v === null) continue;
@@ -2267,6 +2297,14 @@ function BsdTextWidgetSignalIcon({ className }) {
   );
 }
 
+/** Icono de cabecera del widget Texto según el campo (temperatura, humedad, etc.). */
+function BsdTextWidgetTitleIcon({ fieldKey, className }) {
+  const k = String(fieldKey || '').toLowerCase();
+  if (k.includes('temp')) return <Thermometer size={18} className={className} strokeWidth={2.2} aria-hidden />;
+  if (k.includes('humid')) return <Droplets size={18} className={className} strokeWidth={2.2} aria-hidden />;
+  return <BsdTextWidgetSignalIcon className={className} />;
+}
+
 /**
  * Única implementación del tablero BSD: Panel Control (`variant="panel"`, página Dashboard)
  * y dashboard por dispositivo (`variant="device"`, modal desde Dispositivos). Rejilla,
@@ -2286,6 +2324,7 @@ export default function BudgetSensorsDashboard({
   readOnlyView = false,
 }) {
   const { credentials, token, hasNavPage, canEditDashboard: canEditFromAuth, user, userProfile, isDemo } = useAuth();
+  const { isDarkMode } = useTheme() || {};
   const canEditDashboard = canEditFromAuth && !readOnlyView;
   const canSendLnsCommands = Boolean(
     token && !isDemo && (hasNavPage('Devices') || variant === 'device' || variant === 'panel')
@@ -2713,17 +2752,19 @@ export default function BudgetSensorsDashboard({
    */
   useEffect(() => {
     if (variant !== 'panel') return;
+    if (isDemo) return;
     const seg = resolvePanelOwnerSegment(userProfile ?? user);
     if (!seg) return;
     migrateLegacyPanelDataToOwner(seg);
     setWidgetConfigs(loadAllWidgetConfigs());
-  }, [variant, userProfile, user]);
+  }, [variant, userProfile, user, isDemo]);
 
   /** Misma disciplina que al cambiar de equipo en dispositivo: al cambiar segmento o pestaña, releer el mapa completo desde disco (claves `dk()` distintas). */
   useEffect(() => {
     if (variant !== 'panel') return;
+    if (isDemo) return;
     setWidgetConfigs(loadAllWidgetConfigs());
-  }, [variant, panelInstanceId, panelOwnerSegment]);
+  }, [variant, panelInstanceId, panelOwnerSegment, isDemo]);
 
   const [editModalCtx, setEditModalCtx] = useState(null);
   /** Panel: dispositivo en vista previa en el modal (selección aún no guardada) para fusionar telemetría. */
@@ -2780,7 +2821,7 @@ export default function BudgetSensorsDashboard({
         else base = panelTelemetryExpandedByDeviceId[id] || {};
       }
       if (isDemoPanel && demoLiveTelemetry) {
-        return { ...(base && typeof base === 'object' && !Array.isArray(base) ? base : {}), ...demoLiveTelemetry };
+        return { ...demoLiveTelemetry };
       }
       return base;
     },
@@ -3668,7 +3709,16 @@ export default function BudgetSensorsDashboard({
   }, [sensors, widgetConfigs, configKeyForSensor, variant, panelLoading, dateFilterEpoch]);
 
   useEffect(() => {
+    if (!isDemoPanel) return;
+    setSensors(buildDemoShowcaseSensors(demoLiveTelemetry || {}));
+    setPanelDevices([]);
+    setControlDeviceId(DEMO_SHOWCASE_DEVICE_ID);
+    setPanelLoading(false);
+  }, [isDemoPanel, demoLiveTelemetry]);
+
+  useEffect(() => {
     if (variant !== 'panel') return;
+    if (isDemo) return;
     let cancelled = false;
     (async () => {
       setPanelLoading(true);
@@ -3727,7 +3777,7 @@ export default function BudgetSensorsDashboard({
     return () => {
       cancelled = true;
     };
-  }, [variant, credentials, token, panelOwnerSegment]);
+  }, [variant, credentials, token, panelOwnerSegment, isDemo]);
 
   useEffect(() => {
     if (variant !== 'device' || !device) return;
@@ -3791,7 +3841,7 @@ export default function BudgetSensorsDashboard({
   }, [variant, device, credentials, token]);
 
   useEffect(() => {
-    if (variant !== 'panel' || panelLoading) return;
+    if (variant !== 'panel' || panelLoading || isDemo) return;
     let cancelled = false;
     const tick = async () => {
       const list = panelDevicesRef.current || [];
@@ -3896,11 +3946,12 @@ export default function BudgetSensorsDashboard({
     widgetConfigs,
     panelModalPreviewDeviceId,
     panelOwnerSegment,
+    isDemo,
   ]);
 
   /** Lista del panel + sensores agregados: misma cadencia que los widgets en vivo. */
   useEffect(() => {
-    if (variant !== 'panel' || panelLoading) return;
+    if (variant !== 'panel' || panelLoading || isDemo) return;
     let cancelled = false;
     const tick = async () => {
       try {
@@ -3927,7 +3978,7 @@ export default function BudgetSensorsDashboard({
       cancelled = true;
       clearInterval(id);
     };
-  }, [variant, panelLoading, credentials, token]);
+  }, [variant, panelLoading, credentials, token, isDemo]);
 
   useEffect(() => {
     const onTel = (e) => {
@@ -7086,7 +7137,7 @@ export default function BudgetSensorsDashboard({
                     <div className="bsd-metric-circular__chart">
                     <svg
                       className="bsd-metric-circular__svg"
-                      viewBox="0 0 240 152"
+                      viewBox={MC_VIEWBOX}
                       preserveAspectRatio="xMidYMid meet"
                       width="100%"
                       height="100%"
@@ -7143,9 +7194,9 @@ export default function BudgetSensorsDashboard({
                         style={mcArcFilterStyle}
                       />
                       {mcTicks.map((tk) => {
-                        const inner = mcPoint(MC_CX, MC_CY, MC_R + 10, tk.theta);
-                        const outer = mcPoint(MC_CX, MC_CY, MC_R + 20, tk.theta);
-                        const lab = mcPoint(MC_CX, MC_CY, MC_R + 34, tk.theta);
+                        const inner = mcPoint(MC_CX, MC_CY, MC_R + MC_TICK_INSET, tk.theta);
+                        const outer = mcPoint(MC_CX, MC_CY, MC_R + MC_TICK_OUTSET, tk.theta);
+                        const lab = mcPoint(MC_CX, MC_CY, MC_TICK_LABEL_R, tk.theta);
                         return (
                           <g key={tk.f}>
                             <line
@@ -7238,12 +7289,14 @@ export default function BudgetSensorsDashboard({
                   })}
                   <div className="widget-header bsd-text-widget__header" data-bsd-date-range="edit-modal">
                     <div className="widget-title bsd-text-widget__title" style={wTitleStyle(slotId)}>
-                      <BsdTextWidgetSignalIcon className="bsd-text-widget__title-icon" />
+                      <BsdTextWidgetTitleIcon fieldKey={tw?.fieldKey} className="bsd-text-widget__title-icon" />
                       {wTitle(slotId, 'Texto')}
                     </div>
                   </div>
                   <div className="bsd-text-widget__body">
-                    <div className="bsd-text-widget__value">{tw?.display}</div>
+                    <div className="bsd-text-widget__value-wrap">
+                      <div className="bsd-text-widget__value">{tw?.display}</div>
+                    </div>
                     {tw?.hint && tw.display !== tw.hint ? (
                       <div className="bsd-text-widget__hint">{tw.hint}</div>
                     ) : null}
@@ -7282,11 +7335,11 @@ export default function BudgetSensorsDashboard({
                     </div>
                   </div>
                   <div className="bsd-veleta-widget__body">
-                    <BsdWindVaneWidget degrees={vu?.degrees ?? null} />
-                    <div className="bsd-veleta-widget__readout">
-                      <span className="bsd-veleta-widget__deg">{vu?.displayDeg ?? '—'}</span>
-                      <span className="bsd-veleta-widget__cardinal">{vu?.cardinal ?? ''}</span>
-                    </div>
+                    <BsdWindVaneWidget
+                      degrees={vu?.degrees ?? null}
+                      displayDeg={vu?.displayDeg}
+                      cardinal={vu?.cardinal}
+                    />
                   </div>
                   {vu?.lastAtLine ? (
                     <div className="bsd-veleta-widget__footer" style={wTitleStyle(slotId)}>
@@ -7340,6 +7393,12 @@ export default function BudgetSensorsDashboard({
               icon: '📊',
             }));
           })}
+          <div className="widget-header">
+            <div className="widget-title" style={wTitleStyle(DASH_WIDGET.SENSOR_GRID)}>
+              <Grid3X3 size={18} className="bsd-lucide-glow" strokeWidth={2} aria-hidden />
+              {wTitle(DASH_WIDGET.SENSOR_GRID, 'Otras lecturas')}
+            </div>
+          </div>
           <div className="grid-4cols">
           {visibleSensorsForGrid.length === 0 ? (
             <p className="bsd-sensor-grid-empty">
@@ -7390,14 +7449,15 @@ export default function BudgetSensorsDashboard({
                 ? gran
                   ? `Historial (${gran})`
                   : 'Intervalo'
-                : 'En vivo';
+                : '';
             const rowLastLine = formatLastTelemetryUpdateLine(telForRow?.lastUpdateTime);
-            const subtitle =
-              String(sensor.sourceDeviceId) === String(effDeviceId) && lastTelemetryAtLabel
-                ? `${subtitleBase} · ${lastTelemetryAtLabel}`
+            const subtitle = isDemoPanel
+              ? cfg?.data?.metricSubtitle || ''
+              : String(sensor.sourceDeviceId) === String(effDeviceId) && lastTelemetryAtLabel
+                ? [subtitleBase || 'En vivo', lastTelemetryAtLabel].filter(Boolean).join(' · ')
                 : rowLastLine
-                  ? `${subtitleBase} · ${rowLastLine}`
-                  : subtitleBase;
+                  ? [subtitleBase || 'En vivo', rowLastLine].filter(Boolean).join(' · ')
+                  : subtitleBase || 'En vivo';
             const statusLabel =
               status === 'normal' ? '✓ NORMAL' : status === 'warning' ? '⚠ ALERTA' : '🔴 CRÍTICO';
             const rangeAccent = colorForValueInRanges(
@@ -7505,7 +7565,7 @@ export default function BudgetSensorsDashboard({
                       titleColor={titleColor}
                       subtitle={subtitle}
                       compact
-                      theme="dark"
+                      theme={isDarkMode ? 'dark' : 'light'}
                       valueLabel={valueLabel || undefined}
                       historySeries={
                         indType === 'linear' && historySeries && historySeries.length > 1
@@ -7513,7 +7573,7 @@ export default function BudgetSensorsDashboard({
                           : undefined
                       }
                     />
-                    <div className={`sensor-status status-${status}`}>{statusLabel}</div>
+                    {isDemoPanel ? null : <div className={`sensor-status status-${status}`}>{statusLabel}</div>}
                   </>
                 ) : (
                   <>
