@@ -7,17 +7,52 @@
 }
 
 .device-actions-col {
-  text-align: center;
+  text-align: right;
   vertical-align: middle;
-  white-space: normal;
+  white-space: nowrap;
   min-width: 0;
-  width: 18%;
+  width: 40%;
+}
+
+.device-table th:nth-child(1),
+.device-table td:nth-child(1) {
+  width: 13%;
+}
+
+.device-table th:nth-child(2),
+.device-table td:nth-child(2) {
+  width: 8%;
+}
+
+.device-table th:nth-child(3),
+.device-table td:nth-child(3) {
+  width: 8%;
+}
+
+.device-table th:nth-child(4),
+.device-table td:nth-child(4) {
+  width: 7%;
+}
+
+.device-table th:nth-child(5),
+.device-table td:nth-child(5) {
+  width: 7%;
+}
+
+.device-table th:nth-child(6),
+.device-table td:nth-child(6) {
+  width: 9%;
+}
+
+.device-table th:nth-child(7),
+.device-table td:nth-child(7) {
+  width: 8%;
 }
 
 .device-actions-head {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
   width: 100%;
   gap: 0.5rem;
 }
@@ -857,6 +892,12 @@ body.theme-dark .device-assign-unassign-btn {
   border-bottom: 1px solid var(--glass-border);
 }
 
+.device-table th.device-actions-col,
+.device-table td.device-actions-col {
+  padding-left: 0.5rem;
+  padding-right: 0.75rem;
+}
+
 .device-table tr {
   transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
@@ -966,11 +1007,11 @@ body.theme-dark .device-table tbody tr.row-active {
 .actions {
   display: flex;
   flex-direction: row;
-  flex-wrap: wrap;
-  justify-content: center;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
   align-items: center;
   width: 100%;
-  padding: 0.35rem 0.15rem;
+  padding: 0.2rem 0;
 }
 
 .device-license-cell {
@@ -1063,12 +1104,12 @@ body.theme-dark .device-license-grace-badge {
 .device-row-actions-icons {
   display: flex;
   flex-direction: row;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  justify-content: center;
-  gap: 0.5rem;
+  justify-content: flex-end;
+  gap: 0.4rem;
   width: 100%;
-  max-width: min(42rem, 100%);
+  max-width: none;
 }
 
 .device-action-pill {
@@ -1195,12 +1236,17 @@ body.theme-dark .device-license-grace-badge {
 
   .device-actions-col {
     min-width: 0;
+    width: auto;
+    white-space: normal;
+    text-align: left;
   }
 
+  .actions,
   .device-row-actions-icons {
+    flex-wrap: wrap;
     max-width: none;
     gap: 0.4rem;
-    justify-content: flex-end;
+    justify-content: flex-start;
   }
 
   .device-action-pill {
@@ -1534,6 +1580,7 @@ body:not(.theme-dark) .device-list-page--premium .device-table-pagination__page:
   position: relative;
   z-index: 4;
   min-width: 0;
+  width: 40%;
 }
 
 .device-list-page--premium .table-container::before {
@@ -1823,6 +1870,7 @@ body:not(.theme-dark) .device-list-page--premium .battery-cell {
   }
 
   .device-row-actions-icons {
+    flex-wrap: wrap;
     justify-content: flex-start;
     max-width: none;
   }
