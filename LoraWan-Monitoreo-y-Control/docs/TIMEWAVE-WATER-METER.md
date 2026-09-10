@@ -69,10 +69,12 @@ El bloque en aire `3534A337` corresponde al identificador sin cifrar **`04 70 01
 
 3. **Downlinks**  
    - La API `POST /api/devices/:deviceId/downlink` envía el **payload de aplicación** = **trama completa** en hex (incluye `FEFEFEFE` … `16`).  
-   - Los HEX de ejemplo en la plantilla son para el medidor **`022025001955`**. Para otro número, genera tramas en Node:
+   - **Válvula en aire:** cut on = `DDDD`, cut off = `EEEE` (AAAA/BBBB lógicos con +0x33).  
+   - Al encolar, el servidor **sustituye el número de medidor** (12 hex) con `timewave_meterNo` / `meterNumber` del último uplink, o `device_serial_hex` si es 12 hex. El **DevEUI no es el nº de medidor**.  
+   - Los HEX de la plantilla usan el ejemplo del PDF (`022025001955`); no hace falta editarlos a mano si el uplink ya trae `meterNumber`.
 
 ```bash
-node -e "const t=require('./server/timewave-water-meter.js'); console.log(t.buildValveCommand('TU_MEDIDOR_12HEX',true).toString('hex'));"
+node -e "const t=require('./server/timewave-water-meter.js'); const m='022026003618'; console.log('open', t.buildValveCommand(m,true).toString('hex')); console.log('close', t.buildValveCommand(m,false).toString('hex')); console.log('60', t.buildIntervalCommand(m,60).toString('hex'));"
 ```
 
 4. **Checksum**  

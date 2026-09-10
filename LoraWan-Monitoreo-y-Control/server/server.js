@@ -11,6 +11,7 @@ const { tryApplyStoredDecoder, enrichStoredTelemetryProperties, prepareDecoderSc
 const { shouldSkipTelemetryInsert, isJoinOnlyProperties } = require('./lib/telemetry-persist');
 const { resolveWt201DownlinkHex } = require('./lib/wt201-downlink-encode.cjs');
 const { remapWs501LegacyDownlinkHex } = require('./lib/ws501-downlink-legacy.cjs');
+const timewaveWaterMeter = require('./timewave-water-meter');
 const { sanitizeTemplatesCatalog } = require('./lib/template-catalog-normalize.cjs');
 const { resolveDownlinkDeviceClassForLns, productModelForcedClass } = require('./lib/resolve-downlink-class.cjs');
 const {
@@ -304,6 +305,28 @@ const RETENTION_MS =
   parseInt(process.env.SYSCOM_TELEMETRY_RETENTION_MS, 10) || 365 * 24 * 60 * 60 * 1000;
 /** Misma ventana que gateways: sin nueva ingesta en BD → OFFLINE (ver `comms-stale-policy.js`). */
 const COMMS_STALE_OFFLINE_MS = resolveCommsStaleOfflineMs();
+
+/**
+ * Número de medidor TimeWave (12 hex) para reescribir la trama DLT/645 al encolar.
+ * El DevEUI LoRaWAN no es el nº de medidor.
+ */
+function resolveTimewaveMeterNoForLnsDevice(userId, deviceId, ud, reqBody) {
+  let telProps = {};
+  try {
+    const row = store.getLatestForDevice(userId, String(deviceId));
+    if (row?.properties && typeof row.properties === 'object') telProps = row.properties;
+  } catch {
+    telProps = {};
+  }
+  return timewaveWaterMeter.resolveTimewaveMeterNoFromHints({
+    timewave_meterNo: telProps.timewave_meterNo,
+    meterNumber: telProps.meterNumber,
+    meterNo: telProps.meterNo,
+    payloadHex: telProps.payload_hex || telProps.payloadHex,
+    deviceSerialHex: ud?.deviceSerialHex,
+    timewaveMeterNo: reqBody?.timewaveMeterNo ?? reqBody?.meterNo,
+  });
+}
 
 /**
  * FPort LoRaWAN para downlinks de aplicación.
@@ -1752,6 +1775,9 @@ function tryLnsAppDownlinkEnqueue(userId, idStr, ud, body, lnsEnqueueExtras = {}
   let hex = remapWs501LegacyDownlinkHex(pay.hex, productModel);
   const wtResolved = resolveWt201DownlinkHex(hex);
   if (wtResolved) hex = wtResolved;
+  const timewaveMeter = resolveTimewaveMeterNoForLnsDevice(userId, idStr, ud, body);
+  const timewaveRewritten = timewaveWaterMeter.rewriteDownlinkHex(hex, timewaveMeter);
+  if (timewaveRewritten) hex = timewaveRewritten;
   let payloadBuf = hex !== pay.hex ? Buffer.from(hex, 'hex') : pay.buf;
   const confirmedDl = Boolean(body?.confirmed);
 
@@ -3443,8 +3469,22 @@ app.post('/api/admin/storage-prune', authMiddleware, realSuperAdminMiddleware, (
 app.get('/api/device-templates', authMiddleware, (req, res) => {
   try {
     const cat = store.getDeviceTemplatesCatalog();
+    const raw = Array.isArray(cat.templates) ? cat.templates : [];
+    const templates = sanitizeTemplatesCatalog(raw);
+    if (raw.length && JSON.stringify(raw) !== JSON.stringify(templates)) {
+      store.setDeviceTemplatesCatalog({
+        templates,
+        defaultTemplateId: cat.defaultTemplateId,
+      });
+      const saved = store.getDeviceTemplatesCatalog();
+      return res.json({
+        templates: saved.templates,
+        defaultTemplateId: saved.defaultTemplateId,
+        updatedAt: saved.updatedAt,
+      });
+    }
     res.json({
-      templates: cat.templates,
+      templates,
       defaultTemplateId: cat.defaultTemplateId,
       updatedAt: cat.updatedAt,
     });

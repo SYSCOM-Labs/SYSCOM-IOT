@@ -15,6 +15,7 @@
 import { SEED_DEVICE_TEMPLATES } from '../constants/seedDeviceTemplates';
 import { downlinkDeferUntilUplink, forcedLorawanClassForProductModel } from '../utils/lorawanClassBehavior';
 import { remapWs501DownlinkList } from '../utils/ws501DownlinkHex';
+import { pickTimewaveMeterNoFromDevice } from '../utils/timewaveDownlinkHex';
 
 const STORAGE_KEY = 'device_profile_templates_v1';
 /** id de plantilla aplicada automáticamente al crear dispositivos (decoder + downlinks). */
@@ -97,7 +98,7 @@ function resolveDefaultTemplateIdFromDoc(doc) {
 /** Actualiza catálogo en memoria y localStorage (sin semillas integradas). */
 function commitDeviceTemplatesCatalog(list, defaultTemplateId = undefined, preferId = undefined) {
   let templates = Array.isArray(list) ? list.map((t) => (t && typeof t === 'object' ? { ...t } : {})) : [];
-  templates = dedupeCustomCatalogByModelo(templates, preferId);
+  templates = pruneStaleTimewaveWaterMeterTemplates(dedupeCustomCatalogByModelo(templates, preferId));
   const def =
     defaultTemplateId === undefined
       ? getDefaultTemplateId()
@@ -117,7 +118,9 @@ function commitDeviceTemplatesCatalog(list, defaultTemplateId = undefined, prefe
  * @param {object} doc respuesta GET /api/device-templates
  */
 export function applyServerDeviceTemplatesCatalog(doc) {
-  const templates = dedupeCustomCatalogByModelo(Array.isArray(doc?.templates) ? doc.templates : []);
+  const templates = pruneStaleTimewaveWaterMeterTemplates(
+    dedupeCustomCatalogByModelo(Array.isArray(doc?.templates) ? doc.templates : [])
+  );
   serverTemplatesState = {
     status: 'loaded',
     templates: templates.map((t) => (t && typeof t === 'object' ? { ...t } : {})),
@@ -143,7 +146,8 @@ export async function hydrateDeviceTemplatesCatalogFromServer(opts = {}) {
   ).length;
   const merged = mergeCatalogTemplatesById(serverTemplates, localTemplates);
   const filtered = filterCatalogByExcludedBuiltinSeeds(merged);
-  const deduped = dedupeCustomCatalogByModelo(filtered);
+  const pruned = pruneStaleTimewaveWaterMeterTemplates(filtered);
+  const deduped = pruneStaleTimewaveWaterMeterTemplates(dedupeCustomCatalogByModelo(pruned));
   applyServerDeviceTemplatesCatalog({
     ...doc,
     templates: deduped,
@@ -152,10 +156,11 @@ export async function hydrateDeviceTemplatesCatalogFromServer(opts = {}) {
   persistList(deduped);
 
   const hadServerEntriesRemovedByExclusion = filtered.length < merged.length;
-  const hadDuplicatesRemoved = deduped.length < filtered.length;
+  const hadStaleTimewaveRemoved = pruned.length < filtered.length;
+  const hadDuplicatesRemoved = deduped.length < pruned.length;
   if (
     opts.syncLocalExtrasToServer &&
-    (localOnlyCount > 0 || hadServerEntriesRemovedByExclusion || hadDuplicatesRemoved)
+    (localOnlyCount > 0 || hadServerEntriesRemovedByExclusion || hadStaleTimewaveRemoved || hadDuplicatesRemoved)
   ) {
     await flushDeviceTemplatesCatalogToServer();
   }
@@ -190,7 +195,7 @@ export async function flushDeviceTemplatesCatalogToServer() {
     serverTemplatesState.status === 'loaded'
       ? [...serverTemplatesState.templates]
       : [...loadRaw()];
-  templates = dedupeCustomCatalogByModelo(templates);
+  templates = pruneStaleTimewaveWaterMeterTemplates(dedupeCustomCatalogByModelo(templates));
   commitDeviceTemplatesCatalog(templates);
   const defaultTemplateId = getDefaultTemplateId();
   const { putDeviceTemplatesCatalog } = await import('./api.js');
@@ -409,11 +414,13 @@ export function getDownlinkSendOptionsForDevice(deviceId, deviceRow) {
       : null;
   const cls =
     forcedLorawanClassForProductModel(deviceModel) || fromTpl || fromRow;
+  const timewaveMeterNo = pickTimewaveMeterNoFromDevice(deviceRow);
   return {
     confirmed: false,
     ...(cls ? { lorawanClass: cls } : {}),
     deferUntilUplink: cls ? downlinkDeferUntilUplink(cls) : true,
     priority: 200,
+    ...(timewaveMeterNo ? { timewaveMeterNo } : {}),
   };
 }
 
@@ -656,14 +663,16 @@ function loadRaw() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
+    const arr = Array.isArray(parsed) ? parsed : [];
+    return pruneStaleTimewaveWaterMeterTemplates(arr);
   } catch {
     return [];
   }
 }
 
 function persistList(list) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(list));
+  const pruned = pruneStaleTimewaveWaterMeterTemplates(Array.isArray(list) ? list : []);
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(pruned));
 }
 
 function ensureBuiltinSeedsMerged() {
@@ -708,15 +717,31 @@ function filterCatalogByExcludedBuiltinSeeds(list) {
   });
 }
 
+/** Quita Timewave «Water-Meter» (duplicado antiguo de 4 HEX / decodeUplink). Queda Water-Meter-LoRa. */
+function pruneStaleTimewaveWaterMeterTemplates(list) {
+  const arr = Array.isArray(list) ? list.filter(Boolean) : [];
+  return arr.filter((t) => {
+    const marca = String(t.marca || '')
+      .trim()
+      .toLowerCase();
+    const modelo = String(t.modelo || '')
+      .trim()
+      .toLowerCase();
+    return !(marca === 'timewave' && modelo === 'water-meter');
+  });
+}
+
 export function getDeviceTemplates() {
   if (serverTemplatesState.status === 'loaded') {
     const custom = dedupeCustomCatalogByModelo(
-      filterCatalogByExcludedBuiltinSeeds(serverTemplatesState.templates)
+      pruneStaleTimewaveWaterMeterTemplates(filterCatalogByExcludedBuiltinSeeds(serverTemplatesState.templates))
     );
-    return dedupeCustomCatalogByModelo(mergeSeedsIntoTemplateList(custom));
+    return pruneStaleTimewaveWaterMeterTemplates(dedupeCustomCatalogByModelo(mergeSeedsIntoTemplateList(custom)));
   }
   ensureBuiltinSeedsMerged();
-  return dedupeCustomCatalogByModelo(filterCatalogByExcludedBuiltinSeeds(loadRaw()));
+  return pruneStaleTimewaveWaterMeterTemplates(
+    dedupeCustomCatalogByModelo(filterCatalogByExcludedBuiltinSeeds(loadRaw()))
+  );
 }
 
 export function saveDeviceTemplate(payload) {

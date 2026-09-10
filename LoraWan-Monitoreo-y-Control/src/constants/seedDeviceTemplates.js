@@ -51,28 +51,23 @@ export const SEED_DEVICE_TEMPLATES = [
     decoderScript: TIMEWAVE_DECODER_SCRIPT,
     downlinks: [
       {
-        name:
-          'abrir_valvula (Cut on) — Abre la válvula · medidor ej. 022025001955 · HEX sustituir si otro nº · B64:/v7+/mhVGQAlIAJoFA413ZM3NTMzM2NjY2OqqjEW',
-        hex: 'fefefefe6855190025200268140e35dd93373533333363636363aaaa3116',
+        name: 'abrir_valvula (Cut on) — Abre la válvula',
+        hex: 'fefefefe6855190025200268140e35dd93373533333363636363dddd9716',
       },
       {
-        name:
-          'cerrar_valvula (Cut off) — Cierra la válvula · medidor ej. 022025001955 · B64:/v7+/mhVGQAlIAJoFA413ZM3NTMzM2NjY2O7u1MW',
-        hex: 'fefefefe6855190025200268140e35dd93373533333363636363bbbb5316',
+        name: 'cerrar_valvula (Cut off) — Cierra la válvula',
+        hex: 'fefefefe6855190025200268140e35dd93373533333363636363eeeeb916',
       },
       {
-        name:
-          'cambiar_intervalo — 1440 min (24 h, defecto 1 día) · B64:/v7+/mhVGQAlIAJoFA41NKM3NTMzM2NjY2NzR/4W',
+        name: 'cambiar_intervalo — 1440 min (24 h, defecto 1 día)',
         hex: 'fefefefe6855190025200268140e3534a33735333333636363637347fe16',
       },
       {
-        name:
-          'cambiar_intervalo — 720 min (12 h) · B64:/v7+/mhVGQAlIAJoFA41NKM3NTMzM2NjY2NTOtEW',
+        name: 'cambiar_intervalo — 720 min (12 h)',
         hex: 'fefefefe6855190025200268140e3534a3373533333363636363533ad116',
       },
       {
-        name:
-          'cambiar_intervalo — 60 min (1 h) · B64:/v7+/mhVGQAlIAJoFA41NKM3NTMzM2NjY2OTMwoW',
+        name: 'cambiar_intervalo — 60 min (1 h)',
         hex: 'fefefefe6855190025200268140e3534a337353333336363636393330a16',
       },
     ],

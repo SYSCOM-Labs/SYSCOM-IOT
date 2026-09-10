@@ -364,7 +364,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
     let cancelled = false;
     (async () => {
       try {
-        await hydrateDeviceTemplatesCatalogFromServer();
+        await hydrateDeviceTemplatesCatalogFromServer({ syncLocalExtrasToServer: isSuperAdmin });
         if (!cancelled && isSuperAdmin) {
           await publishLocalCustomTemplatesIfServerEmpty(true);
         }

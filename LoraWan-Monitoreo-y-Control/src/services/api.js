@@ -2,6 +2,7 @@ import axios from 'axios';
 import { getApiBase } from '../config/apiBase';
 import { refreshSession, getAuthToken } from './localAuth';
 import { normalizeTemplateLorawanClass } from './deviceTemplates';
+import { rewriteTimewaveDownlinkHex } from '../utils/timewaveDownlinkHex';
 
 const SERVER_API = () => getApiBase();
 
@@ -466,12 +467,15 @@ export const sendDownlink = async (deviceId, hex, _credentials, _token, opts = {
   const raw = (hex || '').toString().trim();
   if (!raw) throw new Error('Downlink vacío');
 
-  const cleanHex = raw.replace(/\s/g, '').toLowerCase().replace(/^0x/, '');
+  const cleanHexRaw = raw.replace(/\s/g, '').toLowerCase().replace(/^0x/, '');
   const asServiceId = raw.replace(/\s/g, '');
-  const isHexPayload = /^[0-9a-f]+$/i.test(cleanHex);
+  const isHexPayload = /^[0-9a-f]+$/i.test(cleanHexRaw);
 
   if (isHexPayload) {
     try {
+      const twMeter = opts?.timewaveMeterNo != null ? String(opts.timewaveMeterNo) : '';
+      const rewritten = rewriteTimewaveDownlinkHex(cleanHexRaw, twMeter);
+      const cleanHex = rewritten || cleanHexRaw;
       const body = {
         payloadHex: cleanHex,
         /**
@@ -483,6 +487,9 @@ export const sendDownlink = async (deviceId, hex, _credentials, _token, opts = {
         /** Medidores clase A: permite respuesta 202 y cola SQLite si la ventana RX ya cerró (anula SYSCOM_LNS_DEFER_APP_DOWNLINK=0). */
         deferUntilUplink: opts?.deferUntilUplink !== false,
       };
+      if (opts?.timewaveMeterNo != null && String(opts.timewaveMeterNo).trim() !== '') {
+        body.timewaveMeterNo = String(opts.timewaveMeterNo).trim();
+      }
       if (opts?.priority != null && Number.isFinite(Number(opts.priority))) {
         body.priority = Math.max(0, Math.min(255, Math.floor(Number(opts.priority))));
       }

@@ -42,3 +42,46 @@ test('sanitizeTemplateCatalogEntry: UC300 corrige clase A heredada a C', () => {
   });
   assert.equal(out.lorawanClass, 'C');
 });
+
+test('sanitizeTemplatesCatalog: elimina Timewave Water-Meter y corrige HEX Water-Meter-LoRa', () => {
+  const { sanitizeTemplatesCatalog } = require('../lib/template-catalog-normalize.cjs');
+  const out = sanitizeTemplatesCatalog([
+    {
+      id: 'old',
+      marca: 'Timewave',
+      modelo: 'Water-Meter',
+      channel: '2',
+      lorawanClass: 'A',
+      downlinks: [{ name: 'Válvula abrir', hex: 'fefefefe6855190025200268140e35dd93373533333363636363aaaa3116' }],
+    },
+    {
+      id: 'keep',
+      marca: 'Timewave',
+      modelo: 'Water-Meter-LoRa',
+      channel: '2',
+      lorawanClass: 'A',
+      downlinks: [{ name: 'abrir_valvula (Cut on) — Abre la válvula', hex: 'fefefefe6855190025200268140e35dd93373533333363636363aaaa3116' }],
+    },
+  ]);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].modelo, 'Water-Meter-LoRa');
+  assert.equal(out[0].downlinks.length, 5);
+  assert.equal(out[0].downlinks[0].name, 'abrir_valvula (Cut on) — Abre la válvula');
+  assert.equal(out[0].downlinks[0].hex, 'fefefefe6855190025200268140e35dd93373533333363636363dddd9716');
+  assert.equal(out[0].downlinks[1].hex, 'fefefefe6855190025200268140e35dd93373533333363636363eeeeb916');
+  assert.equal(out[0].downlinks[4].name, 'cambiar_intervalo — 60 min (1 h)');
+});
+
+test('sanitizeTemplatesCatalog: elimina Timewave Water-Meter aunque no exista LoRa', () => {
+  const { sanitizeTemplatesCatalog } = require('../lib/template-catalog-normalize.cjs');
+  const out = sanitizeTemplatesCatalog([
+    {
+      id: 'old',
+      marca: 'Timewave',
+      modelo: 'Water-Meter',
+      channel: '2',
+      downlinks: [{ name: 'x', hex: 'aabb' }],
+    },
+  ]);
+  assert.equal(out.length, 0);
+});

@@ -289,14 +289,101 @@ function buildFrame(meterNoHex12, control, dataPlainConcat) {
   return Buffer.concat([PREAMBLE, bodyWoPreamble, Buffer.from([cs, END])]);
 }
 
-/** Válvula: on = AAAA, off = BBBB (protocolo). */
+/**
+ * Válvula: valor lógico AAAA (abrir / cut on) o BBBB (cerrar / cut off).
+ * En aire debe ir scrambleado (+0x33): DDDD / EEEE. Las plantillas antiguas mandaban AAAA/BBBB crudos.
+ */
 function buildValveCommand(meterNoHex12, openValve) {
   const di = dataScramble(DI_VALVE);
   const pwd = dataScramble(PASSWORD_PLAIN);
   const op = dataScramble(OPERATOR_PLAIN);
-  const action = openValve ? Buffer.from([0xaa, 0xaa]) : Buffer.from([0xbb, 0xbb]);
+  const actionPlain = openValve ? Buffer.from([0xaa, 0xaa]) : Buffer.from([0xbb, 0xbb]);
+  const action = dataScramble(actionPlain);
   const dataPlain = Buffer.concat([di, pwd, op, action]);
   return buildFrame(meterNoHex12, 0x14, dataPlain);
+}
+
+/** 12 hex (6 BCD) o null. No usar DevEUI (16 hex). */
+function normalizeTimewaveMeterNo12(raw) {
+  const h = String(raw || '')
+    .replace(/[^0-9a-fA-F]/g, '')
+    .toLowerCase();
+  return h.length === 12 ? h : null;
+}
+
+/**
+ * Número de medidor para armar/reescribir downlinks.
+ * Prioriza la trama real del último uplink; el serial impreso es respaldo.
+ */
+function resolveTimewaveMeterNoFromHints(hints) {
+  const h = hints && typeof hints === 'object' ? hints : {};
+  const fromUplink = normalizeTimewaveMeterNo12(h.timewave_meterNo || h.meterNumber || h.meterNo);
+  if (fromUplink) return fromUplink;
+  const payloadHex = String(h.payloadHex || h.payload_hex || '')
+    .replace(/\s/g, '')
+    .replace(/^0x/i, '');
+  if (payloadHex.length >= 40 && /^[0-9a-fA-F]+$/.test(payloadHex)) {
+    try {
+      const decoded = decodeFrame(Buffer.from(payloadHex, 'hex'));
+      const fromFrame = normalizeTimewaveMeterNo12(decoded && decoded.timewave_meterNo);
+      if (fromFrame) return fromFrame;
+    } catch {
+      /* ignore */
+    }
+  }
+  return normalizeTimewaveMeterNo12(h.deviceSerialHex || h.serialHex || h.timewaveMeterNo);
+}
+
+function looksLikeTimewaveFrame(buf) {
+  if (!buf || buf.length < 20) return false;
+  if (buf[0] !== 0xfe || buf[1] !== 0xfe || buf[2] !== 0xfe || buf[3] !== 0xfe) return false;
+  if (buf[4] !== START || buf[11] !== START) return false;
+  const dataLen = buf[13];
+  const endIdx = 14 + dataLen;
+  return buf.length >= endIdx + 2 && buf[endIdx + 1] === END;
+}
+
+/**
+ * Reescribe una trama TimeWave de downlink: número de medidor y acción de válvula AAAA/BBBB → DDDD/EEEE.
+ * @returns {string|null} hex minúsculas o null si no es trama TimeWave
+ */
+function rewriteDownlinkHex(hex, meterNoHex12) {
+  const h = String(hex || '')
+    .replace(/\s/g, '')
+    .replace(/^0x/i, '')
+    .toLowerCase();
+  if (!h || h.length % 2 !== 0 || !/^[0-9a-f]+$/.test(h)) return null;
+  let buf;
+  try {
+    buf = Buffer.from(h, 'hex');
+  } catch {
+    return null;
+  }
+  if (!looksLikeTimewaveFrame(buf)) return null;
+  const dataLen = buf[13];
+  const endIdx = 14 + dataLen;
+  const out = Buffer.from(buf);
+  const meter = normalizeTimewaveMeterNo12(meterNoHex12);
+  if (meter) {
+    meterNoToFrameBytes(meter).copy(out, 5);
+  }
+  const control = out[12];
+  if (control === 0x14 && dataLen >= 14) {
+    const diPlain = dataUnscramble(out.subarray(14, 18));
+    if (diPlain.equals(DI_VALVE)) {
+      const a0 = out[26];
+      const a1 = out[27];
+      if (a0 === 0xaa && a1 === 0xaa) {
+        out[26] = 0xdd;
+        out[27] = 0xdd;
+      } else if (a0 === 0xbb && a1 === 0xbb) {
+        out[26] = 0xee;
+        out[27] = 0xee;
+      }
+    }
+  }
+  out[endIdx] = checksumFromBody(out.subarray(4, endIdx));
+  return out.toString('hex');
 }
 
 /**
@@ -326,6 +413,10 @@ module.exports = {
   parseMeterNoFromFrame,
   dataUnscramble,
   dataScramble,
+  normalizeTimewaveMeterNo12,
+  resolveTimewaveMeterNoFromHints,
+  rewriteDownlinkHex,
+  looksLikeTimewaveFrame,
   DI_READING,
   DI_VALVE,
   DI_INTERVAL,
