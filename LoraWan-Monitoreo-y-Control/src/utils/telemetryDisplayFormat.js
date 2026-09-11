@@ -1,5 +1,5 @@
 import { parseTelemetryScalar, parseTelemetryBoolish } from './gatewayPayload';
-import { applyTelemetryStatusEsMx, translateTelemetryStatusLabel } from './telemetryStatusEsMx.js';
+import { applyTelemetryStatusEsMx, translateTelemetryStatusLabel, translateTelemetryTreeEsMx } from './telemetryStatusEsMx.js';
 
 const GPIO_IO_RE = /^gpio_(input|output)_\d+$/i;
 const DIGITAL_IO_RE = /^digital_(input|output)_\d+$/i;
@@ -39,8 +39,17 @@ const GLOBAL_VALUE_LABELS_BY_FIELD = {
     on: 'Encendido',
     off: 'Apagado',
     stage: 'Etapa',
+    'stage-1 cool': 'Etapa 1 frío',
+    'stage-1 heat': 'Etapa 1 calor',
+    'stage-2 cool': 'Etapa 2 frío',
+    'stage-2 heat': 'Etapa 2 calor',
+    'stage-3 heat': 'Etapa 3 calor',
+    'stage-4 heat': 'Etapa 4 calor',
     'stage-2': 'Etapa 2',
     'stage 2': 'Etapa 2',
+    on_cool: 'Enfriando',
+    on_heat: 'Calentando',
+    em_heat: 'Calor de emergencia',
   },
   fan_mode: {
     auto: 'Automático',
@@ -305,7 +314,8 @@ export function formatWidgetTelemetryDisplay(opts = {}) {
   }
   if (typeof raw === 'object') {
     try {
-      return { display: JSON.stringify(raw), usedProcessedLabel: false };
+      const walked = translateTelemetryTreeEsMx(raw, fkStr);
+      return { display: JSON.stringify(walked), usedProcessedLabel: true };
     } catch {
       return { display: String(raw), usedProcessedLabel: false };
     }
@@ -397,5 +407,8 @@ export function formatTelemetryForSummaryRow(model, fieldKey, raw, formatScalar,
   if (mapped != null) return mapped;
   const fromRaw = translateTelemetryStatusLabel(raw, fieldKey);
   if (fromRaw) return fromRaw;
+  if (raw && typeof raw === 'object') {
+    return formatScalar(translateTelemetryTreeEsMx(raw, fieldKey));
+  }
   return formatScalar(raw);
 }

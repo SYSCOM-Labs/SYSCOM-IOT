@@ -20,6 +20,7 @@ import {
   mergeDeviceTelemetryForWidgets,
 } from '../../utils/gatewayPayload';
 import { formatTelemetryForSummaryRow } from '../../utils/telemetryDisplayFormat';
+import { applyTelemetryStatusEsMx, translateTelemetryTreeEsMx } from '../../utils/telemetryStatusEsMx.js';
 import { getTelemetryLabelHintsForDevice } from '../../services/deviceTemplates';
 import {
   formatDownlinkHistoryLabel,
@@ -65,15 +66,18 @@ const CONNECTIVITY_KEYS = new Set([
 
 function formatScalar(v) {
   if (v === null || v === undefined) return '—';
+  if (typeof v === 'boolean') return v ? 'Sí' : 'No';
+  if (typeof v === 'number' && Number.isFinite(v)) return String(v);
   if (typeof v === 'object') {
     try {
-      const s = JSON.stringify(v);
+      const s = JSON.stringify(translateTelemetryTreeEsMx(v));
       return s.length > 120 ? `${s.slice(0, 117)}…` : s;
     } catch {
       return String(v);
     }
   }
-  return String(v);
+  const translated = applyTelemetryStatusEsMx(v);
+  return translated || '—';
 }
 
 function buildViewTelemetry(device, snapshot, mergedLive) {

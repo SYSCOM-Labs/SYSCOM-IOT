@@ -1,5 +1,6 @@
 import { jsPDF } from 'jspdf';
 import { autoTable } from 'jspdf-autotable';
+import { applyTelemetryStatusEsMx, translateTelemetryTreeEsMx } from './telemetryStatusEsMx.js';
 
 /** dd/mm/aaaa HH:mm:ss */
 export function formatReportDate(ms) {
@@ -17,16 +18,16 @@ export function formatReportDate(ms) {
 
 export function formatReportValue(v) {
   if (v === null || v === undefined) return '';
-  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (typeof v === 'boolean') return v ? 'Sí' : 'No';
   if (typeof v === 'number' && Number.isFinite(v)) return String(v);
   if (typeof v === 'object') {
     try {
-      return JSON.stringify(v);
+      return JSON.stringify(translateTelemetryTreeEsMx(v));
     } catch {
       return String(v);
     }
   }
-  return String(v);
+  return applyTelemetryStatusEsMx(v);
 }
 
 /** Orden alfabético con números naturales (Sec 2 antes de Sec 10). */

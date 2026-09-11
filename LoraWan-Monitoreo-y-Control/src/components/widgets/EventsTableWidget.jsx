@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { motion as Motion } from 'framer-motion';
 import { queryTelemetry } from '../../services/localAuth';
+import { applyTelemetryStatusEsMx } from '../../utils/telemetryStatusEsMx.js';
 import './Widgets.css';
 
 const WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
@@ -16,7 +17,7 @@ function summarizeProps(props, highlightKey) {
     : keys;
   const parts = ordered.slice(0, 4).map((k) => {
     const v = props[k];
-    const s = typeof v === 'object' ? JSON.stringify(v) : String(v);
+    const s = typeof v === 'object' ? JSON.stringify(v) : applyTelemetryStatusEsMx(v, k);
     return `${k}: ${s.length > 18 ? `${s.slice(0, 16)}…` : s}`;
   });
   return parts.length ? parts.join(' · ') : '—';

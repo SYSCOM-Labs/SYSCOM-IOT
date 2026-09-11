@@ -37,6 +37,7 @@ import {
   MAX_WIDGET_IMAGE_DATA_URL_CHARS,
 } from './widgetConfigUtils';
 import { formatWidgetTelemetryDisplay, tryTelemetryDisplayLabel } from '../../utils/telemetryDisplayFormat';
+import { applyTelemetryStatusEsMx } from '../../utils/telemetryStatusEsMx.js';
 import { resolveMapCoords, openStreetMapEmbedUrl, toFloatCoord } from './mapWidgetCoords';
 import {
   PROPERTY_INFER_IGNORE_SET,
@@ -239,7 +240,8 @@ function computeModalTextWidgetUi(liveProps, draft, liveDeviceModel, telemetryHi
     }
   }
   const s = String(raw).trim();
-  return { display: s.length ? s : '—', hint: fkStr, lastAtLine };
+  if (!s) return { display: '—', hint: fkStr, lastAtLine };
+  return { display: applyTelemetryStatusEsMx(s, fkStr) || s, hint: fkStr, lastAtLine };
 }
 
 function shellClassName(clear) {

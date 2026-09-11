@@ -154,6 +154,25 @@ export function computeMetricCircularUi(cfg, telemetryLiveProps, liveDeviceModel
 
   const centerMain = '—';
   let svgSubtitleLine = userSub;
+  if (!formulaActive && useLive && rawLiveScalar !== undefined && rawLiveScalar !== null) {
+    const friendly = tryTelemetryDisplayLabel(liveDeviceModel, fkStr, rawLiveScalar, telemetryHintMap);
+    if (friendly != null && String(friendly).trim()) {
+      return {
+        hasValue: true,
+        rawValue: null,
+        centerMain: String(friendly).trim(),
+        svgSubtitleLine: userSub,
+        lastAtLine,
+        needleT: null,
+        scaleLo: lo,
+        scaleHi: hi,
+        gradientMode: gradMode,
+        tickDec,
+        unitDisplay: unit,
+        ranges,
+      };
+    }
+  }
   if (!svgSubtitleLine) {
     if (!fkStr || fkStr.startsWith('__bsd_')) svgSubtitleLine = 'Configura el campo en edición';
     else svgSubtitleLine = 'Sin lectura en vivo';

@@ -60,6 +60,7 @@ import {
   formatWidgetTelemetryDisplay,
   tryTelemetryDisplayLabel,
 } from '../../utils/telemetryDisplayFormat';
+import { applyTelemetryStatusEsMx } from '../../utils/telemetryStatusEsMx.js';
 import { transformWidgetNumeric } from '../../utils/widgetFormula';
 import {
   enrichTelemetryWithDbFallback,
@@ -898,7 +899,8 @@ function computeTextWidgetUiForSlot(
     }
   }
   const s = String(raw).trim();
-  return { display: s.length ? s : '—', hint: fieldHint, lastAtLine, fieldKey: fkStr };
+  if (!s) return { display: '—', hint: fieldHint, lastAtLine, fieldKey: fkStr };
+  return { display: applyTelemetryStatusEsMx(s, fkStr) || s, hint: fieldHint, lastAtLine, fieldKey: fkStr };
 }
 
 /** Epoch en ms; si el backend envía segundos (~1e9), lo pasa a ms para alinear con ventanas del dashboard. */
@@ -7657,7 +7659,10 @@ export default function BudgetSensorsDashboard({
                     <div className="sensor-value">
                       {typeof displayVal === 'number' && Number.isFinite(displayVal)
                         ? displayVal.toFixed(Math.max(0, decimals))
-                        : valueLabel || displayVal || '—'}
+                        : valueLabel ||
+                          (displayVal != null && displayVal !== ''
+                            ? applyTelemetryStatusEsMx(displayVal, fieldForDisplay)
+                            : '—')}
                       {unit ? <span className="sensor-unit">{unit}</span> : null}
                     </div>
                     <div className={`sensor-status status-${status}`}>{statusLabel}</div>
