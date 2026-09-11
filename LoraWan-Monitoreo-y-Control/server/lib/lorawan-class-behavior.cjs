@@ -56,9 +56,45 @@ function classARxStillOpen(elapsedMs, rxDelaySec, opts = {}) {
   return elapsed + slack < targetMs;
 }
 
+/**
+ * Tras un uplink, `processDataUp` reserva silencio clase C (`postUplinkQuietMs`).
+ * Un segundo `scheduleClassCNotBeforeMs(now)` avanza `prev + classCTxGapMs`.
+ * Ese floor no debe aplicarse a PULL_RESP clase A: RX1 (1–5 s) ya habría cerrado
+ * y el gateway rechaza el `tmst` con TOO_LATE.
+ *
+ * @param {number} postUplinkQuietMs
+ * @param {number} classCTxGapMs
+ * @param {number|null|undefined} rxDelaySec
+ * @param {number} [slackMs]
+ * @returns {boolean}
+ */
+function classCGwFloorMissesClassARx1(postUplinkQuietMs, classCTxGapMs, rxDelaySec, slackMs) {
+  const quiet = Number(postUplinkQuietMs);
+  const gap = Number(classCTxGapMs);
+  if (!Number.isFinite(quiet) || !Number.isFinite(gap) || quiet < 0 || gap < 0) return false;
+  const floorDelayMs = quiet + gap;
+  const delaySec = Math.max(1, Math.min(15, Number(rxDelaySec) > 0 ? Number(rxDelaySec) : 1));
+  const slack =
+    slackMs != null && Number.isFinite(Number(slackMs)) ? Math.max(0, Number(slackMs)) : 300;
+  return floorDelayMs + slack >= delaySec * 1000;
+}
+
+/**
+ * Solo clase C usa el hueco `imme` por gateway al encolar PULL_RESP.
+ * Clase A/B deben salir de inmediato con `tmst` de RX1/ping; el uplink ya reservó el silencio clase C.
+ *
+ * @param {'A'|'B'|'C'|string} cls
+ * @returns {boolean}
+ */
+function downlinkPullRespUsesClassCGwFloor(cls) {
+  return normalizeLorawanClassLetter(cls) === 'C';
+}
+
 module.exports = {
   normalizeLorawanClassLetter,
   downlinkDeferUntilUplink,
   downlinkUsesClassCImme,
   classARxStillOpen,
+  classCGwFloorMissesClassARx1,
+  downlinkPullRespUsesClassCGwFloor,
 };

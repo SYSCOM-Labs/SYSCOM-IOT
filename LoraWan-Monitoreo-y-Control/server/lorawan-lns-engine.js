@@ -5,7 +5,7 @@ const lora_packet = require('lora-packet');
 const { deriveSessionKeys10x, parseKeyHex32 } = require('./lorawan-lns-crypto');
 const { lorawanUs915Only } = require('./lorawan-us915-region');
 const { resolveDownlinkDeviceClassForLns } = require('./lib/resolve-downlink-class.cjs');
-const { classARxStillOpen } = require('./lib/lorawan-class-behavior.cjs');
+const { classARxStillOpen, downlinkPullRespUsesClassCGwFloor } = require('./lib/lorawan-class-behavior.cjs');
 const { syncDeviceTemplateFromCatalog } = require('./lib/auto-fleet-sync.cjs');
 const timewaveWaterMeter = require('./timewave-water-meter');
 
@@ -1797,9 +1797,16 @@ function createLorawanLnsEngine(ctx) {
       opt.priority != null && Number.isFinite(Number(opt.priority))
         ? Math.max(0, Math.min(255, Math.floor(Number(opt.priority))))
         : appDownlinkDefaultPriority();
-    /** Mismo espaciado por GW que clase C: LinkCheckAns / clase A no compiten con `imme` del apagador. */
-    const gwFloorMs = scheduleClassCNotBeforeMs(userId, gatewayQueueEui, Date.now());
-    notBeforeMs = Math.max(notBeforeMs || 0, gwFloorMs);
+    /**
+     * El hueco por gateway es solo para clase C `imme` (apagador / TOO_EARLY en UG65).
+     * `processDataUp` ya reservó ese silencio. Si clase A vuelve a llamar
+     * `scheduleClassCNotBeforeMs`, el floor queda en quiet+GAP (~7 s) y RX1 (5 s)
+     * ya cerró → PULL_RESP tarde → TOO_LATE y el medidor no aplica el comando.
+     */
+    if (downlinkPullRespUsesClassCGwFloor(cls)) {
+      const gwFloorMs = scheduleClassCNotBeforeMs(userId, gatewayQueueEui, Date.now());
+      notBeforeMs = Math.max(notBeforeMs || 0, gwFloorMs);
+    }
 
     const ackMeta = {
       devEui: devEuiNorm16,
