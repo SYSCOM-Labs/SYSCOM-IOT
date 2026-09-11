@@ -307,24 +307,55 @@ const RETENTION_MS =
 const COMMS_STALE_OFFLINE_MS = resolveCommsStaleOfflineMs();
 
 /**
- * Número de medidor TimeWave (12 hex) para reescribir la trama DLT/645 al encolar.
- * El DevEUI LoRaWAN no es el nº de medidor.
+ * Número de medidor TimeWave (12 hex) y FPort de aplicación para reescribir la trama DLT/645 al encolar.
+ * El DevEUI LoRaWAN no es el nº de medidor. Recorre historial porque un uplink MAC puede tapar `payload_hex`.
  */
-function resolveTimewaveMeterNoForLnsDevice(userId, deviceId, ud, reqBody) {
-  let telProps = {};
+function resolveTimewaveContextForLnsDevice(userId, deviceId, ud, reqBody) {
+  let latestProps = {};
+  const historyPropsList = [];
   try {
     const row = store.getLatestForDevice(userId, String(deviceId));
-    if (row?.properties && typeof row.properties === 'object') telProps = row.properties;
+    if (row?.properties && typeof row.properties === 'object') latestProps = row.properties;
   } catch {
-    telProps = {};
+    latestProps = {};
   }
-  return timewaveWaterMeter.resolveTimewaveMeterNoFromHints({
-    timewave_meterNo: telProps.timewave_meterNo,
-    meterNumber: telProps.meterNumber,
-    meterNo: telProps.meterNo,
-    payloadHex: telProps.payload_hex || telProps.payloadHex,
+  try {
+    const hist = store.getTelemetryHistory(userId, String(deviceId), { limit: 40 });
+    for (const row of hist || []) {
+      if (row?.properties && typeof row.properties === 'object') historyPropsList.push(row.properties);
+    }
+  } catch {
+    /* ignore */
+  }
+  return timewaveWaterMeter.resolveTimewaveContextFromSources({
+    reqBody,
+    latestProps,
+    historyPropsList,
     deviceSerialHex: ud?.deviceSerialHex,
-    timewaveMeterNo: reqBody?.timewaveMeterNo ?? reqBody?.meterNo,
+  });
+}
+
+/** Guarda el n.º de medidor 12 hex en `user_devices.device_serial_hex` cuando llega una trama Timewave. */
+function persistTimewaveMeterNoFromProperties(userId, deviceId, properties) {
+  const meter = timewaveWaterMeter.resolveTimewaveMeterNoFromHints({
+    timewave_meterNo: properties?.timewave_meterNo,
+    meterNumber: properties?.meterNumber,
+    meterNo: properties?.meterNo,
+    payloadHex: properties?.payload_hex || properties?.payloadHex,
+  });
+  if (!meter) return;
+  const ud =
+    store.getUserDevice(userId, deviceId) ||
+    (typeof store.getAnyUserDeviceForDeviceId === 'function'
+      ? store.getAnyUserDeviceForDeviceId(deviceId)
+      : null);
+  if (!ud) return;
+  const existing = timewaveWaterMeter.normalizeTimewaveMeterNo12(ud.deviceSerialHex);
+  if (existing === meter) return;
+  store.upsertUserDevice({
+    ...ud,
+    deviceSerialHex: meter,
+    updatedAt: new Date().toISOString(),
   });
 }
 
@@ -1431,6 +1462,11 @@ function saveIngestEntry(userId, data) {
   }
 
   tryApplyStoredDecoder(store, canonicalDeviceId, rawDeviceId, properties);
+  try {
+    persistTimewaveMeterNoFromProperties(userId, canonicalDeviceId, properties);
+  } catch (e) {
+    console.warn('[Ingest] persist Timewave meterNo:', e && e.message ? e.message : e);
+  }
 
   const persistCheck = shouldSkipTelemetryInsert(store, userId, canonicalDeviceId, properties);
   if (persistCheck.skip) {
@@ -1749,7 +1785,7 @@ function tryLnsAppDownlinkEnqueue(userId, idStr, ud, body, lnsEnqueueExtras = {}
   const sessionUserId = store.lnsResolveSessionUserIdForDevice(String(idStr), userId, deui, {
     allowGlobalSessionFallback: Boolean(lnsEnqueueExtras && lnsEnqueueExtras.allowGlobalSessionFallback),
   });
-  const fPort = resolveLnsDownlinkFPort(body, idStr);
+  let fPort = resolveLnsDownlinkFPort(body, idStr);
   if (fPort == null || !Number.isInteger(fPort) || fPort < 1 || fPort > 223) {
     return {
       ok: false,
@@ -1775,9 +1811,34 @@ function tryLnsAppDownlinkEnqueue(userId, idStr, ud, body, lnsEnqueueExtras = {}
   let hex = remapWs501LegacyDownlinkHex(pay.hex, productModel);
   const wtResolved = resolveWt201DownlinkHex(hex);
   if (wtResolved) hex = wtResolved;
-  const timewaveMeter = resolveTimewaveMeterNoForLnsDevice(userId, idStr, ud, body);
-  const timewaveRewritten = timewaveWaterMeter.rewriteDownlinkHex(hex, timewaveMeter);
-  if (timewaveRewritten) hex = timewaveRewritten;
+  const twCtx = resolveTimewaveContextForLnsDevice(userId, idStr, ud, body);
+  const timewaveRewritten = timewaveWaterMeter.rewriteDownlinkHex(hex, twCtx.meter);
+  if (timewaveRewritten) {
+    if (!twCtx.meter) {
+      return {
+        ok: false,
+        status: 400,
+        json: {
+          error:
+            'No se pudo determinar el número de medidor Timewave (12 hex) del último uplink. El DevEUI LoRaWAN no es el n.º de medidor; la plantilla usa un ejemplo del PDF. Espere una lectura DLT/645 o capture el n.º en el alta (serial).',
+          code: 'TIMEWAVE_METER_NO_MISSING',
+        },
+      };
+    }
+    hex = timewaveRewritten;
+    const bodyHasFport =
+      (body?.fPort != null && String(body.fPort).trim() !== '') ||
+      (body?.fport != null && String(body.fport).trim() !== '');
+    const prevFPort = fPort;
+    fPort = timewaveWaterMeter.resolveTimewaveDownlinkFPort({
+      explicitFPort: bodyHasFport ? fPort : undefined,
+      lastUplinkFPort: twCtx.lastAppFPort,
+      configChannel: store.getDeviceDecodeConfig(String(idStr))?.channel,
+    });
+    if (fPort !== prevFPort) {
+      console.log('[LNS] Timewave FPort', prevFPort, '→', fPort, 'meter', twCtx.meter, 'dev', deui);
+    }
+  }
   let payloadBuf = hex !== pay.hex ? Buffer.from(hex, 'hex') : pay.buf;
   const confirmedDl = Boolean(body?.confirmed);
 

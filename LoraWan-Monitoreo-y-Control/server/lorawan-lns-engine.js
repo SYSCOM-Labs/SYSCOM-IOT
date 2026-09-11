@@ -6,6 +6,7 @@ const { deriveSessionKeys10x, parseKeyHex32 } = require('./lorawan-lns-crypto');
 const { lorawanUs915Only } = require('./lorawan-us915-region');
 const { resolveDownlinkDeviceClassForLns } = require('./lib/resolve-downlink-class.cjs');
 const { syncDeviceTemplateFromCatalog } = require('./lib/auto-fleet-sync.cjs');
+const timewaveWaterMeter = require('./timewave-water-meter');
 
 const LORAWAN_US915_ONLY = lorawanUs915Only();
 
@@ -1354,9 +1355,13 @@ function createLorawanLnsEngine(ctx) {
     });
 
     let linkCheckQueuedOk = false;
+    const hasDeferredAppDl =
+      typeof store.lnsPeekOldestDeferredAppDownlink === 'function' &&
+      Boolean(store.lnsPeekOldestDeferredAppDownlink(ownerUserId, devEui));
     const deferLinkCheck =
-      typeof store.lnsHasPendingPullRespForDev === 'function' &&
-      store.lnsHasPendingPullRespForDev(ownerUserId, devEui);
+      hasDeferredAppDl ||
+      (typeof store.lnsHasPendingPullRespForDev === 'function' &&
+        store.lnsHasPendingPullRespForDev(ownerUserId, devEui));
     if (linkCheckAnsToDeviceEnabled() && !deferLinkCheck && otaaUplinkHasLinkCheckReq(p, fPort, plain)) {
       try {
         const margin = Math.max(0, Math.min(254, envInt('SYSCOM_LNS_LINK_CHECK_ANS_MARGIN', 10)));
@@ -1373,14 +1378,16 @@ function createLorawanLnsEngine(ctx) {
       }
     }
 
-    tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, linkCheckQueuedOk);
+    /** Clase A: una sola ventana RX. Priorizar comando de aplicación diferido (válvula/intervalo) sobre LinkCheckAns. */
+    tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, linkCheckQueuedOk && !hasDeferredAppDl);
 
     return true;
   }
 
   /**
    * Tras un uplink, intenta un downlink de aplicación que quedó en cola diferida (clase A / sin tmst, etc.).
-   * No compite con LinkCheckAns en el mismo ciclo (solo una ventana RX típica).
+   * Si hay comando de aplicación pendiente, no se debe haber encolado LinkCheckAns en el mismo ciclo
+   * (el medidor Timewave clase A solo abre una ventana RX cada ~24 h).
    */
   function tryFlushOneDeferredAppDownlinkAfterUplink(userId, devEui, skipBecauseLinkCheckQueued) {
     if (skipBecauseLinkCheckQueued) return;
@@ -1399,24 +1406,73 @@ function createLorawanLnsEngine(ctx) {
       store.lnsDeleteDeferredAppDownlinkById(row.id);
       return;
     }
+    let flushBuf = buf;
+    let flushFPort = row.fPort;
+    let flushHex = row.payloadHex;
+    if (timewaveWaterMeter.looksLikeTimewaveFrame(buf)) {
+      try {
+        const ud =
+          (typeof store.getUserDeviceByDevEuiNorm === 'function'
+            ? store.getUserDeviceByDevEuiNorm(userId, devEui)
+            : null) ||
+          store.getUserDevice(userId, devEui);
+        const deviceId = ud && ud.deviceId ? ud.deviceId : devEui;
+        let latestProps = {};
+        const historyPropsList = [];
+        const latest = store.getLatestForDevice(userId, deviceId);
+        if (latest?.properties && typeof latest.properties === 'object') latestProps = latest.properties;
+        const hist =
+          typeof store.getTelemetryHistory === 'function'
+            ? store.getTelemetryHistory(userId, deviceId, { limit: 40 })
+            : [];
+        for (const histRow of hist || []) {
+          if (histRow?.properties && typeof histRow.properties === 'object') {
+            historyPropsList.push(histRow.properties);
+          }
+        }
+        const twCtx = timewaveWaterMeter.resolveTimewaveContextFromSources({
+          latestProps,
+          historyPropsList,
+          deviceSerialHex: ud?.deviceSerialHex,
+        });
+        if (twCtx.meter) {
+          const rewritten = timewaveWaterMeter.rewriteDownlinkHex(row.payloadHex, twCtx.meter);
+          if (rewritten) {
+            flushHex = rewritten;
+            flushBuf = Buffer.from(rewritten, 'hex');
+          }
+        }
+        const cfg =
+          typeof store.getDeviceDecodeConfig === 'function' ? store.getDeviceDecodeConfig(String(deviceId)) : null;
+        flushFPort = timewaveWaterMeter.resolveTimewaveDownlinkFPort({
+          explicitFPort:
+            row.fPort === timewaveWaterMeter.MILESIGHT_DEFAULT_FPORT ? undefined : row.fPort,
+          lastUplinkFPort: twCtx.lastAppFPort,
+          configChannel: cfg && cfg.channel,
+        });
+      } catch (eTw) {
+        console.warn('[LNS] Timewave repair en flush diferido:', eTw && eTw.message ? eTw.message : eTw);
+      }
+    }
     try {
-      enqueueAppDownlink(userId, devEui, row.fPort, buf, {
+      enqueueAppDownlink(userId, devEui, flushFPort, flushBuf, {
         confirmed: row.confirmed,
         delayMs: row.delayMs,
         priority: row.priority,
+        deviceClass: row.deviceClass || 'A',
         gatewayEui: row.gatewayEui && row.gatewayEui.length === 16 ? row.gatewayEui : undefined,
         skipTxAckTrack: false,
       });
       store.lnsDeleteDeferredAppDownlinkById(row.id);
-      console.log('[LNS] Downlink diferido enviado tras uplink →', devEui, 'fPort', row.fPort, 'cola id', row.id);
+      console.log('[LNS] Downlink diferido enviado tras uplink →', devEui, 'fPort', flushFPort, 'cola id', row.id);
       try {
         insertUiEvent(
           userId,
           devEui,
           'downlink_deferred_flushed',
           JSON.stringify({
-            fPort: row.fPort,
-            payloadHex: row.payloadHex,
+            fPort: flushFPort,
+            payloadHex: flushHex,
             deferredQueueId: row.id,
           })
         );

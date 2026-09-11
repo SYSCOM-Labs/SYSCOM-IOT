@@ -59,3 +59,43 @@ test('resolveTimewaveMeterNoFromHints prioriza uplink sobre serial', () => {
   assert.equal(tw.normalizeTimewaveMeterNo12('004a7701240c107c'), null);
   assert.equal(tw.normalizeTimewaveMeterNo12(REAL), REAL);
 });
+
+test('resolveTimewaveMeterNoFromHints: DevEUI en serial no tapa el medidor del body', () => {
+  assert.equal(
+    tw.resolveTimewaveMeterNoFromHints({
+      deviceSerialHex: '004a7701240c107c',
+      timewaveMeterNo: REAL,
+    }),
+    REAL
+  );
+});
+
+test('resolveTimewaveMeterNoFromHints lee el medidor desde payload_hex DLT/645', () => {
+  const payloadHex = tw.buildValveCommand(REAL, true).toString('hex');
+  assert.equal(tw.resolveTimewaveMeterNoFromHints({ payloadHex }), REAL);
+  assert.equal(
+    tw.resolveTimewaveMeterNoFromHints({
+      deviceSerialHex: '004a7701240c107c',
+      payload_hex: payloadHex,
+    }),
+    REAL
+  );
+});
+
+test('resolveTimewaveContextFromSources usa historial si el último uplink no es Timewave', () => {
+  const readingHex = tw.buildIntervalCommand(REAL, 60).toString('hex');
+  const ctx = tw.resolveTimewaveContextFromSources({
+    latestProps: { fPort: 0, payload_hex: '03010a' },
+    historyPropsList: [{ fPort: 2, payload_hex: readingHex, timewave_meterNo: REAL }],
+    deviceSerialHex: '004a7701240c107c',
+  });
+  assert.equal(ctx.meter, REAL);
+  assert.equal(ctx.lastAppFPort, 2);
+});
+
+test('resolveTimewaveDownlinkFPort no hereda el 85 de Milesight', () => {
+  assert.equal(tw.resolveTimewaveDownlinkFPort({ explicitFPort: 85, configChannel: 85 }), 2);
+  assert.equal(tw.resolveTimewaveDownlinkFPort({ lastUplinkFPort: 2, configChannel: 85 }), 2);
+  assert.equal(tw.resolveTimewaveDownlinkFPort({ explicitFPort: 1 }), 1);
+  assert.equal(tw.resolveTimewaveDownlinkFPort({ configChannel: '2' }), 2);
+});

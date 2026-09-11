@@ -303,6 +303,13 @@ function buildValveCommand(meterNoHex12, openValve) {
   return buildFrame(meterNoHex12, 0x14, dataPlain);
 }
 
+/** FPort de aplicación TimeWave (US915 / ficha). No usar el 85 de Milesight. */
+const TIMEWAVE_DEFAULT_FPORT = 2;
+/** N.º de medidor del PDF de ejemplo; las plantillas lo llevan en el HEX, no es el contador real. */
+const TIMEWAVE_EXAMPLE_METER_NO = '022025001955';
+/** Puerto por defecto del LNS para codecs Milesight; si llega aquí un downlink Timewave, hay que sustituirlo. */
+const MILESIGHT_DEFAULT_FPORT = 85;
+
 /** 12 hex (6 BCD) o null. No usar DevEUI (16 hex). */
 function normalizeTimewaveMeterNo12(raw) {
   const h = String(raw || '')
@@ -311,14 +318,40 @@ function normalizeTimewaveMeterNo12(raw) {
   return h.length === 12 ? h : null;
 }
 
+function looksLikeTimewaveHex(hex) {
+  const h = String(hex || '')
+    .replace(/\s/g, '')
+    .replace(/^0x/i, '');
+  if (!h || h.length % 2 !== 0 || h.length < 40 || !/^[0-9a-fA-F]+$/.test(h)) return false;
+  try {
+    return looksLikeTimewaveFrame(Buffer.from(h, 'hex'));
+  } catch {
+    return false;
+  }
+}
+
+function firstNormalizedMeterNo12(values) {
+  const list = Array.isArray(values) ? values : [values];
+  for (const v of list) {
+    const n = normalizeTimewaveMeterNo12(v);
+    if (n) return n;
+  }
+  return null;
+}
+
 /**
  * Número de medidor para armar/reescribir downlinks.
- * Prioriza la trama real del último uplink; el serial impreso es respaldo.
+ * Cada candidato se prueba por separado: un DevEUI (16 hex) en serial no debe tapar el n.º real.
  */
 function resolveTimewaveMeterNoFromHints(hints) {
   const h = hints && typeof hints === 'object' ? hints : {};
-  const fromUplink = normalizeTimewaveMeterNo12(h.timewave_meterNo || h.meterNumber || h.meterNo);
-  if (fromUplink) return fromUplink;
+  const fromFields = firstNormalizedMeterNo12([
+    h.timewaveMeterNo,
+    h.timewave_meterNo,
+    h.meterNumber,
+    h.meterNo,
+  ]);
+  if (fromFields) return fromFields;
   const payloadHex = String(h.payloadHex || h.payload_hex || '')
     .replace(/\s/g, '')
     .replace(/^0x/i, '');
@@ -331,7 +364,86 @@ function resolveTimewaveMeterNoFromHints(hints) {
       /* ignore */
     }
   }
-  return normalizeTimewaveMeterNo12(h.deviceSerialHex || h.serialHex || h.timewaveMeterNo);
+  return firstNormalizedMeterNo12([h.deviceSerialHex, h.serialHex]);
+}
+
+function hintsFromTelemetryProperties(p) {
+  if (!p || typeof p !== 'object') return null;
+  return {
+    timewave_meterNo: p.timewave_meterNo,
+    meterNumber: p.meterNumber,
+    meterNo: p.meterNo,
+    payloadHex: p.payload_hex || p.payloadHex,
+    deviceSerialHex: p.deviceSerialHex,
+    fPort: p.fPort ?? p.fport,
+  };
+}
+
+function parseAppFPort(raw) {
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 223) return null;
+  return n;
+}
+
+function hintsLookLikeTimewave(h) {
+  if (!h || typeof h !== 'object') return false;
+  if (firstNormalizedMeterNo12([h.timewave_meterNo, h.meterNumber, h.meterNo, h.timewaveMeterNo])) return true;
+  return looksLikeTimewaveHex(h.payloadHex || h.payload_hex);
+}
+
+/**
+ * Medidor + FPort de aplicación a partir de body, última telemetría, historial y serial.
+ * Recorre historial porque un uplink MAC/join posterior puede tapar `payload_hex` en el merge.
+ */
+function resolveTimewaveContextFromSources(src) {
+  const s = src && typeof src === 'object' ? src : {};
+  const blocks = [];
+  if (s.reqBody && typeof s.reqBody === 'object') {
+    blocks.push({
+      timewaveMeterNo: s.reqBody.timewaveMeterNo ?? s.reqBody.meterNo,
+    });
+  }
+  const latestH = hintsFromTelemetryProperties(s.latestProps);
+  if (latestH) blocks.push(latestH);
+  const hist = Array.isArray(s.historyPropsList) ? s.historyPropsList : [];
+  for (const p of hist) {
+    const h = hintsFromTelemetryProperties(p);
+    if (h) blocks.push(h);
+  }
+  if (s.deviceSerialHex) blocks.push({ deviceSerialHex: s.deviceSerialHex });
+
+  let meter = null;
+  let lastAppFPort = null;
+  for (const h of blocks) {
+    if (!meter) meter = resolveTimewaveMeterNoFromHints(h);
+    if (lastAppFPort == null && hintsLookLikeTimewave(h)) {
+      lastAppFPort = parseAppFPort(h.fPort);
+    }
+  }
+  if (lastAppFPort == null) {
+    for (const h of blocks) {
+      const fp = parseAppFPort(h.fPort);
+      if (fp != null && fp !== MILESIGHT_DEFAULT_FPORT) {
+        lastAppFPort = fp;
+        break;
+      }
+    }
+  }
+  return { meter, lastAppFPort };
+}
+
+/**
+ * FPort de downlink Timewave: no heredar 85 (Milesight) si el payload es DLT/645.
+ */
+function resolveTimewaveDownlinkFPort(opts) {
+  const o = opts && typeof opts === 'object' ? opts : {};
+  const explicit = parseAppFPort(o.explicitFPort);
+  if (explicit != null && explicit !== MILESIGHT_DEFAULT_FPORT) return explicit;
+  const last = parseAppFPort(o.lastUplinkFPort);
+  if (last != null) return last;
+  const ch = parseAppFPort(o.configChannel);
+  if (ch != null && ch !== MILESIGHT_DEFAULT_FPORT) return ch;
+  return TIMEWAVE_DEFAULT_FPORT;
 }
 
 function looksLikeTimewaveFrame(buf) {
@@ -415,8 +527,15 @@ module.exports = {
   dataScramble,
   normalizeTimewaveMeterNo12,
   resolveTimewaveMeterNoFromHints,
+  resolveTimewaveContextFromSources,
+  resolveTimewaveDownlinkFPort,
+  hintsFromTelemetryProperties,
   rewriteDownlinkHex,
   looksLikeTimewaveFrame,
+  looksLikeTimewaveHex,
+  TIMEWAVE_DEFAULT_FPORT,
+  TIMEWAVE_EXAMPLE_METER_NO,
+  MILESIGHT_DEFAULT_FPORT,
   DI_READING,
   DI_VALVE,
   DI_INTERVAL,

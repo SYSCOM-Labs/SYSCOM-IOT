@@ -4,7 +4,7 @@ const { normalizeDeviceClass } = require('./resolve-downlink-class.cjs');
 const { remapWs501DownlinkList } = require('./ws501-downlink-legacy.cjs');
 const timewaveWaterMeter = require('../timewave-water-meter');
 
-const TIMEWAVE_EXAMPLE_METER = '022025001955';
+const TIMEWAVE_EXAMPLE_METER = timewaveWaterMeter.TIMEWAVE_EXAMPLE_METER_NO;
 
 function productModelFromTemplate(t) {
   const modelo = String(t?.modelo || '').trim();

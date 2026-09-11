@@ -15,7 +15,7 @@
 import { SEED_DEVICE_TEMPLATES } from '../constants/seedDeviceTemplates';
 import { downlinkDeferUntilUplink, forcedLorawanClassForProductModel } from '../utils/lorawanClassBehavior';
 import { remapWs501DownlinkList } from '../utils/ws501DownlinkHex';
-import { pickTimewaveMeterNoFromDevice } from '../utils/timewaveDownlinkHex';
+import { pickTimewaveMeterNoFromDevice, pickTimewaveDownlinkFPort } from '../utils/timewaveDownlinkHex';
 
 const STORAGE_KEY = 'device_profile_templates_v1';
 /** id de plantilla aplicada automáticamente al crear dispositivos (decoder + downlinks). */
@@ -415,12 +415,14 @@ export function getDownlinkSendOptionsForDevice(deviceId, deviceRow) {
   const cls =
     forcedLorawanClassForProductModel(deviceModel) || fromTpl || fromRow;
   const timewaveMeterNo = pickTimewaveMeterNoFromDevice(deviceRow);
+  const timewaveFPort = pickTimewaveDownlinkFPort(deviceRow, deviceModel);
   return {
     confirmed: false,
     ...(cls ? { lorawanClass: cls } : {}),
     deferUntilUplink: cls ? downlinkDeferUntilUplink(cls) : true,
     priority: 200,
     ...(timewaveMeterNo ? { timewaveMeterNo } : {}),
+    ...(timewaveFPort != null ? { fPort: timewaveFPort } : {}),
   };
 }
 

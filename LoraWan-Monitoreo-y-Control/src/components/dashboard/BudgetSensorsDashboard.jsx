@@ -2330,6 +2330,9 @@ function downlinkErrorMessage(err) {
   if (err.response?.data?.code === 'DOWNLINK_FPORT_MISSING' || msg.includes('Puerto LoRaWAN')) {
     return 'FPort no configurado: el «puerto» de la plantilla debe guardarse en el dispositivo (decoder). Reaplique la plantilla o pida al superadmin que actualice el canal.';
   }
+  if (err.response?.data?.code === 'TIMEWAVE_METER_NO_MISSING') {
+    return 'Timewave: falta el número de medidor (12 hex) de la última lectura. El DevEUI no sirve; espere un uplink o capture el n.º en el alta.';
+  }
   if (msg.toLowerCase().includes('offline') || msg.toLowerCase().includes('desconect')) return 'Dispositivo fuera de línea.';
   if (msg.toLowerCase().includes('hex') || msg.toLowerCase().includes('invalid')) return 'Comando inválido.';
   if (status === 501) return 'Downlink no disponible en este modo.';

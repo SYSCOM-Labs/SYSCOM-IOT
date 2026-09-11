@@ -490,6 +490,10 @@ export const sendDownlink = async (deviceId, hex, _credentials, _token, opts = {
       if (opts?.timewaveMeterNo != null && String(opts.timewaveMeterNo).trim() !== '') {
         body.timewaveMeterNo = String(opts.timewaveMeterNo).trim();
       }
+      if (opts?.fPort != null && String(opts.fPort).trim() !== '') {
+        const fp = Number(opts.fPort);
+        if (Number.isInteger(fp) && fp >= 1 && fp <= 223) body.fPort = fp;
+      }
       if (opts?.priority != null && Number.isFinite(Number(opts.priority))) {
         body.priority = Math.max(0, Math.min(255, Math.floor(Number(opts.priority))));
       }
