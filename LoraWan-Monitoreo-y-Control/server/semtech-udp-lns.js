@@ -6,6 +6,8 @@
  * Opcional: SYSCOM_LNS_DEFAULT_USER_ID si el GW aún no está dado de alta (solo pruebas).
  *
  * PULL_DATA → PULL_ACK y hasta SYSCOM_LNS_PULL_BURST mensajes PULL_RESP por ciclo (cola priorizada).
+ * Tras un uplink (PUSH_DATA), si hay PULL_RESP pendiente y un peer PULL reciente, se envía
+ * de inmediato al mismo UDP (no esperar el keepalive ~10 s: RX1 clase A es 1–5 s).
  * Con downlinks que esperan GW_TX_ACK, deje **SYSCOM_LNS_PULL_BURST=1**: varios PULL_RESP en el mismo PULL comparten token y el ACK solo correlaciona uno.
  * GW_TX_ACK → confirma o rechaza la transmisión; downlinks de aplicación confirman FCnt y reintentan si aplica.
  * Tras cada PULL_DATA: prune de await_tx_ack sin GW_TX_ACK (`SYSCOM_LNS_TX_ACK_TIMEOUT_MS` o `SYSCOM_LNS_TX_ACK_SILENCE_MS`) para no bloquear la API.
@@ -13,6 +15,7 @@
  */
 'use strict';
 
+const crypto = require('crypto');
 const dgram = require('dgram');
 const { ensureGatewaysAutoRegistered } = require('./lib/auto-fleet-sync.cjs');
 
@@ -30,8 +33,53 @@ function pullBurstLimit() {
   return Math.max(1, Math.min(20, n));
 }
 
+function pullPeerMaxAgeMs() {
+  const n = parseInt(process.env.SYSCOM_LNS_PULL_PEER_MAX_AGE_MS || '70000', 10);
+  return Number.isFinite(n) ? Math.max(3000, n) : 70000;
+}
+
+function pullRespOnPushEnabled() {
+  return String(process.env.SYSCOM_LNS_PULL_RESP_ON_PUSH || '1').trim() !== '0';
+}
+
+/**
+ * @param {{ address?: string, port?: number, lastMs?: number } | null | undefined} peer
+ * @param {number} [nowMs]
+ * @param {number} [maxAgeMs]
+ */
+function isPullPeerFresh(peer, nowMs, maxAgeMs) {
+  if (!peer || peer.address == null || String(peer.address).trim() === '') return false;
+  const port = Number(peer.port);
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) return false;
+  const last = Number(peer.lastMs);
+  if (!Number.isFinite(last) || last <= 0) return false;
+  const now = nowMs != null && Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const age = now - last;
+  const maxAge = maxAgeMs != null && Number.isFinite(Number(maxAgeMs)) ? Number(maxAgeMs) : pullPeerMaxAgeMs();
+  return age >= 0 && age <= maxAge;
+}
+
+function randomGwmpToken() {
+  return crypto.randomBytes(2);
+}
+
 function gwAck(version, token2, identifier) {
   return Buffer.from([version, token2[0], token2[1], identifier]);
+}
+
+/**
+ * @param {string} jsonOut
+ * @param {Buffer|Uint8Array} token2
+ */
+function buildPullRespPacket(jsonOut, token2) {
+  const inner = Buffer.from(String(jsonOut), 'utf8');
+  const pkt = Buffer.alloc(4 + inner.length);
+  pkt[0] = PROTOCOL_VERSION;
+  pkt[1] = token2[0];
+  pkt[2] = token2[1];
+  pkt[3] = GW_PULL_RESP;
+  inner.copy(pkt, 4);
+  return pkt;
 }
 
 /**
@@ -41,6 +89,88 @@ function gwAck(version, token2, identifier) {
  */
 function sendUdp(socket, buf, rinfo) {
   socket.send(buf, rinfo.port, rinfo.address, () => {});
+}
+
+/**
+ * @param {Map<string, { address: string, port: number, lastMs: number }>} pullPeers
+ * @param {string[]} keys
+ * @param {{ address: string, port: number }} rinfo
+ */
+function rememberPullPeer(pullPeers, keys, rinfo) {
+  if (!pullPeers || !rinfo) return;
+  const rec = { address: rinfo.address, port: rinfo.port, lastMs: Date.now() };
+  for (const raw of keys || []) {
+    const k = String(raw || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (k.length === 16 || k.length === 8) pullPeers.set(k, rec);
+  }
+}
+
+function lookupPullPeer(pullPeers, keys) {
+  if (!pullPeers) return null;
+  for (const raw of keys || []) {
+    const k = String(raw || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (!k) continue;
+    const peer = pullPeers.get(k);
+    if (isPullPeerFresh(peer)) return peer;
+  }
+  return null;
+}
+
+/**
+ * @param {{
+ *   socket: import('dgram').Socket,
+ *   store: object,
+ *   gwNorm: string,
+ *   rinfo: { address: string, port: number },
+ *   token2?: Buffer|Uint8Array,
+ *   reuseTokenForBurst?: boolean,
+ *   refreshPullRespJson?: Function,
+ * }} opts
+ * @returns {number} enviados
+ */
+function dequeueAndSendPullResps(opts) {
+  const { socket, store, gwNorm, rinfo, refreshPullRespJson } = opts;
+  if (!gwNorm || !rinfo || !socket || typeof store.lnsDequeuePullResp !== 'function') return 0;
+  const burst = pullBurstLimit();
+  const reuse = Boolean(opts.reuseTokenForBurst);
+  let sent = 0;
+  for (let b = 0; b < burst; b += 1) {
+    const row = store.lnsDequeuePullResp(gwNorm);
+    if (!row) break;
+    const tok =
+      reuse && opts.token2 && opts.token2.length >= 2 ? opts.token2 : randomGwmpToken();
+    try {
+      const jsonOut =
+        typeof refreshPullRespJson === 'function' ? refreshPullRespJson(row) : row.json;
+      sendUdp(socket, buildPullRespPacket(jsonOut, tok), rinfo);
+      if (row.trackTxAck && typeof store.lnsPullRespEnterAwaitTxAck === 'function') {
+        try {
+          store.lnsPullRespEnterAwaitTxAck(row.id, gwNorm, tok[0], tok[1]);
+        } catch (dbErr) {
+          console.error('[LNS-UDP] await TX_ACK DB:', dbErr.message);
+        }
+      } else if (typeof store.lnsMarkPullRespSent === 'function') {
+        store.lnsMarkPullRespSent(row.id);
+      }
+      sent += 1;
+    } catch (e) {
+      console.error('[LNS-UDP] PULL_RESP:', e.message);
+    }
+  }
+  return sent;
+}
+
+function pruneTxAckInflight(store) {
+  if (typeof store.lnsPruneStaleAppDownlinkTxAckInflight !== 'function') return;
+  try {
+    store.lnsPruneStaleAppDownlinkTxAckInflight();
+  } catch (e) {
+    console.warn('[LNS-UDP] prune TX_ACK:', e.message);
+  }
 }
 
 /**
@@ -55,6 +185,7 @@ function sendUdp(socket, buf, rinfo) {
 function startSemtechUdpLns(opts) {
   const { port, store, processPushDataJson, onHeartbeat, refreshPullRespJson } = opts;
   const socket = dgram.createSocket('udp4');
+  const pullPeers = new Map();
 
   socket.on('error', (err) => {
     console.error('[LNS-UDP]', err.message);
@@ -78,49 +209,27 @@ function startSemtechUdpLns(opts) {
       if (typeof onHeartbeat === 'function') onHeartbeat(mac);
       ensureGatewaysAutoRegistered(store, mac);
       const gwNorm = store.lnsResolveGatewayEuiNorm(mac);
-      if (gwNorm && typeof store.lnsDequeuePullResp === 'function') {
-        const burst = pullBurstLimit();
-        for (let b = 0; b < burst; b += 1) {
-          const row = store.lnsDequeuePullResp(gwNorm);
-          if (!row) break;
-          try {
-            const jsonOut =
-              typeof refreshPullRespJson === 'function' ? refreshPullRespJson(row) : row.json;
-            const inner = Buffer.from(jsonOut, 'utf8');
-            const pkt = Buffer.alloc(4 + inner.length);
-            pkt[0] = version;
-            pkt[1] = token[0];
-            pkt[2] = token[1];
-            pkt[3] = GW_PULL_RESP;
-            inner.copy(pkt, 4);
-            sendUdp(socket, pkt, rinfo);
-            if (row.trackTxAck && typeof store.lnsPullRespEnterAwaitTxAck === 'function') {
-              try {
-                store.lnsPullRespEnterAwaitTxAck(row.id, gwNorm, token[0], token[1]);
-              } catch (dbErr) {
-                console.error('[LNS-UDP] await TX_ACK DB:', dbErr.message);
-              }
-            } else {
-              store.lnsMarkPullRespSent(row.id);
-            }
-          } catch (e) {
-            console.error('[LNS-UDP] PULL_RESP:', e.message);
-          }
-        }
+      rememberPullPeer(pullPeers, [gwNorm, mac.toString('hex')], rinfo);
+      if (gwNorm) {
+        dequeueAndSendPullResps({
+          socket,
+          store,
+          gwNorm,
+          rinfo,
+          token2: token,
+          reuseTokenForBurst: true,
+          refreshPullRespJson,
+        });
       }
-      if (typeof store.lnsPruneStaleAppDownlinkTxAckInflight === 'function') {
-        try {
-          store.lnsPruneStaleAppDownlinkTxAckInflight();
-        } catch (e) {
-          console.warn('[LNS-UDP] prune TX_ACK:', e.message);
-        }
-      }
+      pruneTxAckInflight(store);
       return;
     }
 
     if (id === GW_TX_ACK) {
       if (msg.length < 12) return;
       const mac = msg.subarray(4, 12);
+      const gwNormTx = store.lnsResolveGatewayEuiNorm(mac);
+      rememberPullPeer(pullPeers, [gwNormTx, mac.toString('hex')], rinfo);
       let jsonObj;
       try {
         const raw = msg.subarray(12).toString('utf8');
@@ -149,7 +258,7 @@ function startSemtechUdpLns(opts) {
           jsonObj && typeof jsonObj === 'object' ? Object.keys(jsonObj).join(',') : ''
         );
       }
-      const gwNorm = store.lnsResolveGatewayEuiNorm(mac);
+      const gwNorm = gwNormTx;
       if (!gwNorm || typeof store.lnsHandleGatewayTxAck !== 'function') {
         console.warn('[LNS-UDP] GW_TX_ACK sin gwNorm o sin store.lnsHandleGatewayTxAck; mac8=', mac.toString('hex'));
         return;
@@ -210,6 +319,27 @@ function startSemtechUdpLns(opts) {
       } catch (e) {
         console.error('[LNS-UDP] Error al procesar PUSH_DATA:', e.message);
       }
+      /**
+       * Clase A: el medidor abre RX1 a 1–5 s. El keepalive PULL_DATA del UG65 suele ser ~10 s,
+       * así que esperar el próximo PULL deja el tmst vencido (TOO_LATE). Semtech permite
+       * PULL_RESP en cualquier momento al último peer de PULL_DATA.
+       */
+      if (pullRespOnPushEnabled()) {
+        const gwNorm = store.lnsResolveGatewayEuiNorm(mac);
+        const peer = lookupPullPeer(pullPeers, [gwNorm, mac.toString('hex')]);
+        if (gwNorm && peer) {
+          const n = dequeueAndSendPullResps({
+            socket,
+            store,
+            gwNorm,
+            rinfo: peer,
+            refreshPullRespJson,
+          });
+          if (n > 0 && String(process.env.SYSCOM_LNS_LOG_DOWNLINK_SCHEDULE || '').trim() === '1') {
+            console.log('[LNS-UDP] PULL_RESP tras PUSH_DATA', n, 'gw', gwNorm, 'peer', peer.address + ':' + peer.port);
+          }
+        }
+      }
       return;
     }
 
@@ -230,13 +360,7 @@ function startSemtechUdpLns(opts) {
   const pruneEveryMs = parseInt(process.env.SYSCOM_LNS_TX_ACK_PRUNE_INTERVAL_MS || '5000', 10);
   if (Number.isFinite(pruneEveryMs) && pruneEveryMs > 0) {
     const iv = setInterval(() => {
-      try {
-        if (typeof store.lnsPruneStaleAppDownlinkTxAckInflight === 'function') {
-          store.lnsPruneStaleAppDownlinkTxAckInflight();
-        }
-      } catch (e) {
-        console.warn('[LNS-UDP] prune interval:', e.message);
-      }
+      pruneTxAckInflight(store);
     }, Math.max(2000, pruneEveryMs));
     if (typeof iv.unref === 'function') iv.unref();
   }
@@ -250,4 +374,15 @@ function startSemtechUdpLns(opts) {
   return socket;
 }
 
-module.exports = { startSemtechUdpLns };
+module.exports = {
+  startSemtechUdpLns,
+  isPullPeerFresh,
+  pullPeerMaxAgeMs,
+  pullRespOnPushEnabled,
+  buildPullRespPacket,
+  rememberPullPeer,
+  lookupPullPeer,
+  dequeueAndSendPullResps,
+  PROTOCOL_VERSION,
+  GW_PULL_RESP,
+};
