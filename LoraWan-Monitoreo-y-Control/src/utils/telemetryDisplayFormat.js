@@ -1,55 +1,56 @@
 import { parseTelemetryScalar, parseTelemetryBoolish } from './gatewayPayload';
+import { applyTelemetryStatusEsMx, translateTelemetryStatusLabel } from './telemetryStatusEsMx.js';
 
 const GPIO_IO_RE = /^gpio_(input|output)_\d+$/i;
 const DIGITAL_IO_RE = /^digital_(input|output)_\d+$/i;
 
-/** Catálogo global (Milesight / SYSCOM): valores crudos → etiqueta en widgets. */
+/** Catálogo global (Milesight / SYSCOM): valores crudos → etiqueta en widgets (es-MX). */
 const GLOBAL_VALUE_LABELS_BY_FIELD = {
   press: {
-    1: 'Short',
-    2: 'Long',
-    3: 'Double',
-    short: 'Short',
-    long: 'Long',
-    double: 'Double',
-    'short press': 'Short press',
-    'long press': 'Long press',
-    'double press': 'Double press',
+    1: 'Corta',
+    2: 'Larga',
+    3: 'Doble',
+    short: 'Corta',
+    long: 'Larga',
+    double: 'Doble',
+    'short press': 'Pulsación corta',
+    'long press': 'Pulsación larga',
+    'double press': 'Pulsación doble',
   },
   button_event_status: {
-    1: 'Short',
-    2: 'Long',
-    3: 'Double',
-    short: 'Short',
-    long: 'Long',
-    double: 'Double',
-    'short press': 'Short press',
-    'long press': 'Long press',
-    'double press': 'Double press',
+    1: 'Corta',
+    2: 'Larga',
+    3: 'Doble',
+    short: 'Corta',
+    long: 'Larga',
+    double: 'Doble',
+    'short press': 'Pulsación corta',
+    'long press': 'Pulsación larga',
+    'double press': 'Pulsación doble',
   },
   temperature_control_mode: {
-    auto: 'Auto',
-    heat: 'Heat',
-    cool: 'Cool',
-    emergency_heat: 'Emergency heat',
-    'emergency heat': 'Emergency heat',
+    auto: 'Automático',
+    heat: 'Calor',
+    cool: 'Frío',
+    emergency_heat: 'Calor de emergencia',
+    'emergency heat': 'Calor de emergencia',
   },
   temperature_control_status: {
-    on: 'On',
-    off: 'Off',
-    stage: 'Stage',
-    'stage-2': 'Stage 2',
-    'stage 2': 'Stage 2',
+    on: 'Encendido',
+    off: 'Apagado',
+    stage: 'Etapa',
+    'stage-2': 'Etapa 2',
+    'stage 2': 'Etapa 2',
   },
   fan_mode: {
-    auto: 'Auto',
-    on: 'On',
-    off: 'Off',
-    circulate: 'Circulate',
+    auto: 'Automático',
+    on: 'Encendido',
+    off: 'Apagado',
+    circulate: 'Circular',
   },
   fan_status: {
-    on: 'On',
-    off: 'Off',
+    on: 'Encendido',
+    off: 'Apagado',
   },
 };
 
@@ -80,16 +81,16 @@ export function mapButtonPressDisplayLabel(raw) {
   if (typeof raw === 'string') {
     const t = raw.trim().toLowerCase().replace(/\s+/g, ' ');
     if (!t) return null;
-    if (t === 'short press' || t === 'short') return 'Short';
-    if (t === 'long press' || t === 'long') return 'Long';
-    if (t === 'double press' || t === 'double') return 'Double';
+    if (t === 'short press' || t === 'short') return 'Corta';
+    if (t === 'long press' || t === 'long') return 'Larga';
+    if (t === 'double press' || t === 'double') return 'Doble';
   }
   const code = parseTelemetryScalar(raw);
   if (code != null && Number.isFinite(Number(code))) {
     const r = Math.round(Number(code));
-    if (r === 1) return 'Short';
-    if (r === 2) return 'Long';
-    if (r === 3) return 'Double';
+    if (r === 1) return 'Corta';
+    if (r === 2) return 'Larga';
+    if (r === 3) return 'Doble';
   }
   return null;
 }
@@ -153,6 +154,13 @@ function lookupGlobalCatalogLabel(fieldKey, raw) {
   return null;
 }
 
+function polishDisplayLabel(text, fieldKey) {
+  if (text == null) return null;
+  const s = String(text).trim();
+  if (!s) return null;
+  return applyTelemetryStatusEsMx(s, fieldKey);
+}
+
 /**
  * Etiqueta legible para telemetría conocida (Milesight / patrones habituales).
  * Devuelve null para seguir con el formateo numérico o crudo del caller.
@@ -168,17 +176,17 @@ export function tryTelemetryDisplayLabel(model, fieldKey, raw, hintMap) {
   const fk = String(fieldKey || '').trim().toLowerCase();
 
   const fromTpl = lookupTemplateValueLabel(hintMap, fieldKey, raw);
-  if (fromTpl != null) return fromTpl;
+  if (fromTpl != null) return polishDisplayLabel(fromTpl, fieldKey);
 
   const fromCatalog = lookupGlobalCatalogLabel(fieldKey, raw);
-  if (fromCatalog != null) return fromCatalog;
+  if (fromCatalog != null) return polishDisplayLabel(fromCatalog, fieldKey);
 
   const hints = hintMap && typeof hintMap === 'object' && !Array.isArray(hintMap) ? hintMap : null;
   const fieldHint = hints && hints[fk] && typeof hints[fk] === 'object' ? hints[fk] : null;
   if (fieldHint && (fieldHint.trueText || fieldHint.falseText)) {
     const b = parseTelemetryBoolish(raw);
-    if (b === true && fieldHint.trueText) return String(fieldHint.trueText);
-    if (b === false && fieldHint.falseText) return String(fieldHint.falseText);
+    if (b === true && fieldHint.trueText) return polishDisplayLabel(String(fieldHint.trueText), fieldKey);
+    if (b === false && fieldHint.falseText) return polishDisplayLabel(String(fieldHint.falseText), fieldKey);
   }
 
   if (isButtonTelemetryFieldKey(fieldKey)) {
@@ -193,32 +201,42 @@ export function tryTelemetryDisplayLabel(model, fieldKey, raw, hintMap) {
 
   if (fk === 'switch_1' || fk === 'switch_2' || /^switch_\d+$/.test(fk)) {
     const b = parseTelemetryBoolish(raw);
-    if (b === true) return 'On';
-    if (b === false) return 'Off';
+    if (b === true) return 'Encendido';
+    if (b === false) return 'Apagado';
     if (typeof raw === 'string') {
       const t = raw.trim().toLowerCase();
-      if (t === 'on') return 'On';
-      if (t === 'off') return 'Off';
+      if (t === 'on') return 'Encendido';
+      if (t === 'off') return 'Apagado';
     }
-    return null;
+    return translateTelemetryStatusLabel(raw, fieldKey);
   }
 
   if (GPIO_IO_RE.test(fk) || DIGITAL_IO_RE.test(fk)) {
     const b = parseTelemetryBoolish(raw);
     if (b === true) return 'Encendido';
     if (b === false) return 'Apagado';
+    const fromRaw = translateTelemetryStatusLabel(raw, fieldKey);
+    if (fromRaw) return fromRaw;
     return null;
   }
 
-  if (/_enable$/.test(fk) || fk.endsWith('_status')) {
+  if (/_enable$/.test(fk)) {
     const b = parseTelemetryBoolish(raw);
-    if (b === true) return 'Enable';
-    if (b === false) return 'Disable';
+    if (b === true) return 'Activado';
+    if (b === false) return 'Desactivado';
     if (typeof raw === 'string') {
       const t = raw.trim().toLowerCase();
-      if (t === 'enable') return 'Enable';
-      if (t === 'disable') return 'Disable';
+      if (t === 'enable' || t === 'enabled') return 'Activado';
+      if (t === 'disable' || t === 'disabled') return 'Desactivado';
     }
+  }
+
+  if (fk.endsWith('_status')) {
+    const fromRaw = translateTelemetryStatusLabel(raw, fieldKey);
+    if (fromRaw) return fromRaw;
+    const b = parseTelemetryBoolish(raw);
+    if (b === true) return 'Encendido';
+    if (b === false) return 'Apagado';
   }
 
   if (fk.endsWith('_alarm') && typeof raw === 'string') {
@@ -229,11 +247,8 @@ export function tryTelemetryDisplayLabel(model, fieldKey, raw, hintMap) {
   }
 
   if (typeof raw === 'string' && raw.trim()) {
-    const t = raw.trim().toLowerCase();
-    if (t === 'enable') return 'Enable';
-    if (t === 'disable') return 'Disable';
-    if (t === 'yes') return 'Yes';
-    if (t === 'no') return 'No';
+    const fromRaw = translateTelemetryStatusLabel(raw, fieldKey);
+    if (fromRaw) return fromRaw;
   }
 
   return null;
@@ -296,7 +311,10 @@ export function formatWidgetTelemetryDisplay(opts = {}) {
     }
   }
   const s = String(raw).trim();
-  return { display: s.length ? s : '—', usedProcessedLabel: false };
+  if (!s) return { display: '—', usedProcessedLabel: false };
+  const fromRaw = translateTelemetryStatusLabel(s, fkStr);
+  if (fromRaw) return { display: fromRaw, usedProcessedLabel: true };
+  return { display: s, usedProcessedLabel: false };
 }
 
 /**
@@ -377,5 +395,7 @@ export function formatTelemetryChartTooltipValue(value, fieldKey, model, hintMap
 export function formatTelemetryForSummaryRow(model, fieldKey, raw, formatScalar, hintMap) {
   const mapped = tryTelemetryDisplayLabel(model, fieldKey, raw, hintMap);
   if (mapped != null) return mapped;
+  const fromRaw = translateTelemetryStatusLabel(raw, fieldKey);
+  if (fromRaw) return fromRaw;
   return formatScalar(raw);
 }

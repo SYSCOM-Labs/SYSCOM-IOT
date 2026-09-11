@@ -1,3 +1,5 @@
+import { translateTelemetryStatusLabel } from './telemetryStatusEsMx.js';
+
 /**
  * Infiere `telemetryLabels` para plantillas desde el texto del payload decoder (botón «Ajustar»).
  * Detecta: GPIO, pulsador WS101, mapas Milesight (`status_map`, `alarm_map`) y asignaciones `decoded.campo = readX()`.
@@ -10,20 +12,12 @@
  * @returns {string}
  */
 function formatEnumDisplayLabel(raw) {
+  const translated = translateTelemetryStatusLabel(raw);
+  if (translated) return translated;
   const t = String(raw ?? '')
     .trim()
     .replace(/_/g, ' ');
   if (!t) return '';
-  const low = t.toLowerCase();
-  if (low === 'short press' || low === 'short') return 'Short';
-  if (low === 'long press' || low === 'long') return 'Long';
-  if (low === 'double press' || low === 'double') return 'Double';
-  if (low === 'disable') return 'Disable';
-  if (low === 'enable') return 'Enable';
-  if (low === 'yes') return 'Yes';
-  if (low === 'no') return 'No';
-  if (low === 'alarm triggered' || low === 'alarm_triggered') return 'Alarm triggered';
-  if (low === 'alarm released' || low === 'alarm_released') return 'Alarm released';
   return t.replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
@@ -229,7 +223,12 @@ function inferFromReaderMaps(script, labelsByField) {
     }
   }
 
-  const onOffLabels = readerMaps.get('readOnOffStatus') || { on: 'On', off: 'Off', 1: 'On', 0: 'Off' };
+  const onOffLabels = readerMaps.get('readOnOffStatus') || {
+    on: 'Encendido',
+    off: 'Apagado',
+    1: 'Encendido',
+    0: 'Apagado',
+  };
   if (/readOnOffStatus\s*\(/.test(script)) {
     for (const m of String(script).matchAll(/decoded\.([\w.]+)\s*=\s*readOnOffStatus\s*\(/g)) {
       const field = m[1].replace(/\./g, '_');
@@ -237,8 +236,8 @@ function inferFromReaderMaps(script, labelsByField) {
       if (!labelsByField[field]?.trueText) {
         labelsByField[field] = {
           ...(labelsByField[field] || {}),
-          trueText: 'On',
-          falseText: 'Off',
+          trueText: 'Encendido',
+          falseText: 'Apagado',
         };
       }
     }
@@ -287,29 +286,29 @@ function inferGpioLabels(script, labelsByField) {
   for (const n of [...inputNums].sort((a, b) => a - b)) {
     const key = `gpio_input_${n}`;
     labelsByField[key] = {
-      trueText: `Input ${n} On`,
-      falseText: `Input ${n} Off`,
+      trueText: `Entrada ${n} encendida`,
+      falseText: `Entrada ${n} apagada`,
     };
   }
   for (const n of [...outputNums].sort((a, b) => a - b)) {
     const key = `gpio_output_${n}`;
     labelsByField[key] = {
-      trueText: `Output ${n} On`,
-      falseText: `Output ${n} Off`,
+      trueText: `Salida ${n} encendida`,
+      falseText: `Salida ${n} apagada`,
     };
   }
   for (const n of [...digitalInNums].sort((a, b) => a - b)) {
     const key = `digital_input_${n}`;
     labelsByField[key] = {
-      trueText: `Input ${n} On`,
-      falseText: `Input ${n} Off`,
+      trueText: `Entrada ${n} encendida`,
+      falseText: `Entrada ${n} apagada`,
     };
   }
   for (const n of [...digitalOutNums].sort((a, b) => a - b)) {
     const key = `digital_output_${n}`;
     labelsByField[key] = {
-      trueText: `Output ${n} On`,
-      falseText: `Output ${n} Off`,
+      trueText: `Salida ${n} encendida`,
+      falseText: `Salida ${n} apagada`,
     };
   }
 }
@@ -326,15 +325,15 @@ function inferButtonLabels(script, labelsByField) {
     return;
   }
   const buttonValueLabels = {
-    1: 'Short',
-    2: 'Long',
-    3: 'Double',
-    short: 'Short',
-    long: 'Long',
-    double: 'Double',
-    'short press': 'Short press',
-    'long press': 'Long press',
-    'double press': 'Double press',
+    1: 'Corta',
+    2: 'Larga',
+    3: 'Doble',
+    short: 'Corta',
+    long: 'Larga',
+    double: 'Doble',
+    'short press': 'Pulsación corta',
+    'long press': 'Pulsación larga',
+    'double press': 'Pulsación doble',
   };
   for (const key of ['press', 'button_event_status', 'button_event.status', 'button_event', 'press_raw']) {
     mergeFieldValueLabels(labelsByField, key, buttonValueLabels);

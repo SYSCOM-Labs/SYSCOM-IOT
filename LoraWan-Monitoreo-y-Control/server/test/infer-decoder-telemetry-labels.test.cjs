@@ -31,17 +31,17 @@ test('infer WS101: led_indicator_enable y press', async () => {
   const { inferTelemetryLabelsFromDecoderScript } = await import(modUrl);
   const script = extractExportedScript(ws101Path, 'WS101_DECODER_SCRIPT');
   const { labelsByField } = inferTelemetryLabelsFromDecoderScript(script);
-  assert.equal(labelsByField.led_indicator_enable?.valueLabels?.['1'], 'Enable');
-  assert.equal(labelsByField.press?.valueLabels?.['1'], 'Short');
-  assert.equal(labelsByField['button_event.status']?.valueLabels?.['2'], 'Long');
+  assert.equal(labelsByField.led_indicator_enable?.valueLabels?.['1'], 'Activado');
+  assert.equal(labelsByField.press?.valueLabels?.['1'], 'Corta');
+  assert.equal(labelsByField['button_event.status']?.valueLabels?.['2'], 'Larga');
 });
 
 test('infer VS133: confirm_mode_enable y occlusion_alarm', async () => {
   const { inferTelemetryLabelsFromDecoderScript } = await import(modUrl);
   const script = extractExportedScript(vs133Path, 'VS133_DECODER_SCRIPT');
   const { labelsByField } = inferTelemetryLabelsFromDecoderScript(script);
-  assert.equal(labelsByField.confirm_mode_enable?.valueLabels?.['1'], 'Enable');
+  assert.equal(labelsByField.confirm_mode_enable?.valueLabels?.['1'], 'Activado');
   const alarmKey = Object.keys(labelsByField).find((k) => k.includes('occlusion_alarm'));
   assert.ok(alarmKey);
-  assert.equal(labelsByField[alarmKey].valueLabels['1'], 'Alarm triggered');
+  assert.equal(labelsByField[alarmKey].valueLabels['1'], 'Alarma activa');
 });
