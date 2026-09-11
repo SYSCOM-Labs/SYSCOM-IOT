@@ -5,6 +5,7 @@ const lora_packet = require('lora-packet');
 const { deriveSessionKeys10x, parseKeyHex32 } = require('./lorawan-lns-crypto');
 const { lorawanUs915Only } = require('./lorawan-us915-region');
 const { resolveDownlinkDeviceClassForLns } = require('./lib/resolve-downlink-class.cjs');
+const { classARxStillOpen } = require('./lib/lorawan-class-behavior.cjs');
 const { syncDeviceTemplateFromCatalog } = require('./lib/auto-fleet-sync.cjs');
 const timewaveWaterMeter = require('./timewave-water-meter');
 
@@ -1723,11 +1724,17 @@ function createLorawanLnsEngine(ctx) {
       useImme = false;
       const lastUplinkWall = session.lastUplinkWallMs;
       const now = Date.now();
+      const elapsed = lastUplinkWall == null ? Number.POSITIVE_INFINITY : now - lastUplinkWall;
       const maxAgeMs = classARx1WindowMs();
-      if (lastUplinkWall == null || now - lastUplinkWall > maxAgeMs) {
+      const stillOpen = classARxStillOpen(elapsed, rxDelaySec, {
+        windowMode: classARxWindowMode(),
+        rx2AfterRx1Sec: getRx2AfterRx1Sec(),
+        slackMs: envInt('SYSCOM_LNS_CLASS_A_TX_SLACK_MS', 300),
+      });
+      if (lastUplinkWall == null || elapsed > maxAgeMs || !stillOpen) {
         const err = new Error(
-          'Downlink clase A: no hay uplink reciente. El dispositivo solo recibe justo después de enviar datos. ' +
-            'Espere telemetría y reintente en los primeros segundos, o configure el dispositivo como clase C en la plantilla.'
+          'Downlink clase A: no hay ventana RX abierta. El dispositivo solo recibe 1–5 s después de un uplink. ' +
+            'El comando se encola y se transmitirá en el próximo despertar (no envíe el downlink después de forzar la subida).'
         );
         err.code = 'CLASS_A_RX_WINDOW_CLOSED';
         throw err;
