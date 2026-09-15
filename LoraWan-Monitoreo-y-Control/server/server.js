@@ -4643,6 +4643,7 @@ app.get('/api/devices/:deviceId/properties/history', authMiddleware, deviceAssig
       ruleName: dl.ruleName != null ? String(dl.ruleName) : null,
       actorUserName: dl.actorUserName != null ? String(dl.actorUserName) : null,
       deferred: Boolean(dl.deferred),
+      flushed: Boolean(dl.flushed),
     };
   });
   res.json({

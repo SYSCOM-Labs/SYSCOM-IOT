@@ -62,6 +62,12 @@ export default function LnsDownlinkToastBridge() {
       if (d?.eventType === 'downlink_device_acked') {
         setToast({ type: 'success', message: 'Dispositivo recibió downlink' });
       }
+      if (d?.eventType === 'downlink_deferred_flushed') {
+        setToast({
+          type: 'success',
+          message: 'Downlink enviado en la ventana RX del medidor (tras el uplink).',
+        });
+      }
       if (d?.eventType === 'gateway_tx_rejected') {
         const m = d.meta && typeof d.meta === 'object' ? d.meta : {};
         const err = m.txpkError != null ? String(m.txpkError) : 'TX rechazada';
@@ -114,6 +120,12 @@ export default function LnsDownlinkToastBridge() {
           if (id > maxId) maxId = id;
           if (ev.eventType === 'downlink_device_acked') {
             setToast({ type: 'success', message: 'Dispositivo recibió downlink' });
+          }
+          if (ev.eventType === 'downlink_deferred_flushed') {
+            setToast({
+              type: 'success',
+              message: 'Downlink enviado en la ventana RX del medidor (tras el uplink).',
+            });
           }
           if (ev.eventType === 'gateway_tx_rejected') {
             const m = ev.meta && typeof ev.meta === 'object' ? ev.meta : {};

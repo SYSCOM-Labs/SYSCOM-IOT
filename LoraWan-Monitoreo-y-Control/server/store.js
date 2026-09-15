@@ -1240,6 +1240,12 @@ class Store {
       `),
       rtDelete: this.db.prepare('DELETE FROM report_templates WHERE user_id = ? AND template_id = ?'),
       rtDeleteUser: this.db.prepare('DELETE FROM report_templates WHERE user_id = ?'),
+      dlUpdateBody: this.db.prepare('UPDATE downlink_log SET body_json = ? WHERE id = ?'),
+      dlListByPendingId: this.db.prepare(
+        `SELECT id, body_json FROM downlink_log
+         WHERE user_id = ? AND json_extract(body_json, '$.pendingId') = ?
+         ORDER BY created_at DESC LIMIT 8`
+      ),
       dlInsert: this.db.prepare(
         'INSERT INTO downlink_log (id, user_id, created_at, body_json) VALUES (?, ?, ?, ?)'
       ),
@@ -3696,6 +3702,16 @@ class Store {
     };
   }
 
+  lnsCountDeferredAppDownlinks(userId, devEuiNorm16) {
+    const uid = String(userId || '').trim();
+    const deui = String(devEuiNorm16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (!uid || deui.length !== 16) return 0;
+    const r = this.st.lnsDefDlCount.get(uid, deui);
+    return r && r.n != null ? Number(r.n) : 0;
+  }
+
   lnsDeleteDeferredAppDownlinkById(id) {
     const n = Number(id);
     if (!Number.isFinite(n) || n <= 0) return 0;
@@ -4457,6 +4473,58 @@ class Store {
       )`
       )
       .run(userId, userId, cap);
+  }
+
+  /**
+   * El historial guardaba `deferred: true` para siempre; al transmitir en RX1 se marca como enviado.
+   * @returns {boolean}
+   */
+  markDownlinkLogFlushedByPendingId(userId, pendingId, extra) {
+    const uid = String(userId || '').trim();
+    const pid = Number(pendingId);
+    if (!uid || !Number.isFinite(pid) || pid <= 0) return false;
+    let rows = [];
+    try {
+      rows = this.st.dlListByPendingId.all(uid, pid);
+    } catch {
+      rows = [];
+    }
+    if (!rows.length) {
+      try {
+        const recent = this.st.dlList.all(uid, 200);
+        rows = recent.filter((r) => {
+          try {
+            const b = JSON.parse(r.body_json || '{}');
+            return Number(b.pendingId) === pid;
+          } catch {
+            return false;
+          }
+        });
+      } catch {
+        return false;
+      }
+    }
+    if (!rows.length) return false;
+    const extraObj = extra && typeof extra === 'object' ? extra : {};
+    const flushedAt = new Date().toISOString();
+    for (const r of rows) {
+      let body = {};
+      try {
+        body = JSON.parse(r.body_json || '{}');
+      } catch {
+        body = {};
+      }
+      const next = {
+        ...body,
+        ...extraObj,
+        deferred: false,
+        flushed: true,
+        flushedAt,
+        pendingId: pid,
+      };
+      this.st.dlUpdateBody.run(JSON.stringify(next), r.id);
+    }
+    return true;
   }
 
   listDownlinks(userId, limit) {

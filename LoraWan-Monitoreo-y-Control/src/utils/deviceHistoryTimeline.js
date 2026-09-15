@@ -28,6 +28,7 @@ export function mergeDeviceHistoryTimeline(telemetryRows, downlinkRows) {
         ruleName: row.ruleName != null ? String(row.ruleName) : null,
         actorUserName: row.actorUserName != null ? String(row.actorUserName) : null,
         deferred: Boolean(row.deferred),
+        flushed: Boolean(row.flushed),
       },
     };
   });

@@ -128,6 +128,20 @@ export function AppActivityLogProvider({ currentPage, children }) {
     const onLns = (ev) => {
       const d = ev.detail || {};
       const t = d.eventType || d.type || 'evento';
+      if (t === 'downlink_deferred_flushed') {
+        const meta = d.meta && typeof d.meta === 'object' ? d.meta : {};
+        const dev = normDevId(meta.deviceId || meta.devEUI || d.devEui);
+        append({
+          ts: Date.now(),
+          level: 'success',
+          tag: 'LNS',
+          message: dev
+            ? `Downlink transmitido en ventana RX · ${dev}`
+            : 'Downlink transmitido en ventana RX (tras uplink clase A)',
+          detail: Object.keys(meta).length ? meta : undefined,
+        });
+        return;
+      }
       if (t === 'downlink_device_acked') {
         const meta = d.meta && typeof d.meta === 'object' ? d.meta : {};
         const dev = normDevId(meta.deviceId || meta.devEUI || d.devEui);

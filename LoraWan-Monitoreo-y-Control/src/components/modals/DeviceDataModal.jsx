@@ -500,7 +500,11 @@ const DeviceDataModal = ({ device, onClose }) => {
                                   <>
                                     {' · '}
                                     <span className="device-data-premium-history-hex">{hex}</span>
-                                    {row.downlink?.deferred ? ' · encolado' : ''}
+                                    {row.downlink?.deferred
+                                      ? ' · encolado'
+                                      : row.downlink?.flushed
+                                        ? ' · enviado en RX'
+                                        : ''}
                                   </>
                                 ) : null}
                               </>

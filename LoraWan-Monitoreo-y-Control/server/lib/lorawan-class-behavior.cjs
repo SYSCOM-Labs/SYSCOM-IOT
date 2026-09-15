@@ -90,6 +90,23 @@ function downlinkPullRespUsesClassCGwFloor(cls) {
   return normalizeLorawanClassLetter(cls) === 'C';
 }
 
+/**
+ * RxDelay de TX clase A. Join-Accept US915 anuncia 5 s; una sesión con 1 (default SQL)
+ * programa RX1 a +1 s y el nodo escucha a +5 s.
+ * @param {number|null|undefined} sessionRxDelaySec
+ * @param {boolean} isUs915
+ * @returns {number}
+ */
+function resolveClassARxDelaySec(sessionRxDelaySec, isUs915) {
+  const raw = sessionRxDelaySec != null ? Number(sessionRxDelaySec) : NaN;
+  if (isUs915) {
+    if (!Number.isFinite(raw) || raw < 1 || raw === 1) return 5;
+    return Math.max(1, Math.min(15, raw));
+  }
+  if (Number.isFinite(raw) && raw >= 1) return Math.max(1, Math.min(15, raw));
+  return 1;
+}
+
 module.exports = {
   normalizeLorawanClassLetter,
   downlinkDeferUntilUplink,
@@ -97,4 +114,5 @@ module.exports = {
   classARxStillOpen,
   classCGwFloorMissesClassARx1,
   downlinkPullRespUsesClassCGwFloor,
+  resolveClassARxDelaySec,
 };

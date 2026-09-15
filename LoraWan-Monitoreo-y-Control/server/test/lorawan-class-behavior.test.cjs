@@ -36,3 +36,12 @@ test('hueco clase C post-uplink + GAP retrasa PULL_RESP más allá de RX1 US915 
   assert.equal(downlinkPullRespUsesClassCGwFloor('B'), false);
   assert.equal(downlinkPullRespUsesClassCGwFloor('C'), true);
 });
+
+test('resolveClassARxDelaySec: US915 no transmite a +1 s si la sesión quedó en default 1', () => {
+  const { resolveClassARxDelaySec } = require('../lib/lorawan-class-behavior.cjs');
+  assert.equal(resolveClassARxDelaySec(1, true), 5);
+  assert.equal(resolveClassARxDelaySec(null, true), 5);
+  assert.equal(resolveClassARxDelaySec(5, true), 5);
+  assert.equal(resolveClassARxDelaySec(1, false), 1);
+  assert.equal(resolveClassARxDelaySec(null, false), 1);
+});

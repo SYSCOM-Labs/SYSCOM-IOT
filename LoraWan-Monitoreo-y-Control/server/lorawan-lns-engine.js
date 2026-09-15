@@ -5,7 +5,7 @@ const lora_packet = require('lora-packet');
 const { deriveSessionKeys10x, parseKeyHex32 } = require('./lorawan-lns-crypto');
 const { lorawanUs915Only } = require('./lorawan-us915-region');
 const { resolveDownlinkDeviceClassForLns } = require('./lib/resolve-downlink-class.cjs');
-const { classARxStillOpen, downlinkPullRespUsesClassCGwFloor } = require('./lib/lorawan-class-behavior.cjs');
+const { classARxStillOpen, downlinkPullRespUsesClassCGwFloor, resolveClassARxDelaySec: resolveClassARxDelaySecFromSession } = require('./lib/lorawan-class-behavior.cjs');
 const { syncDeviceTemplateFromCatalog } = require('./lib/auto-fleet-sync.cjs');
 const timewaveWaterMeter = require('./timewave-water-meter');
 
@@ -71,6 +71,15 @@ function classARx1DelayUs(rxDelaySec) {
   /** Si no hay `rxDelaySec` de sesión (p. ej. `null` en `buildTxpk`), US915 típico usa 5 s; con Join-Accept sigue viniendo 1–15 s explícitos. */
   const s = rxDelaySec != null ? Math.max(1, Math.min(15, Number(rxDelaySec))) : 5;
   return s * 1000000;
+}
+
+/**
+ * RxDelay para TX clase A. El Join-Accept US915 anuncia 5 s; si la sesión quedó en 1
+ * (valor por defecto al leer NULL), el LNS transmite a +1 s y el medidor escucha a +5 s → el comando no llega.
+ */
+function resolveClassARxDelaySec(session, gwBandUpper) {
+  const isUs = isUs915Plan({ band: gwBandUpper }, null);
+  return resolveClassARxDelaySecFromSession(session && session.rxDelaySec, isUs);
 }
 
 function classARxWindowMode() {
@@ -1315,6 +1324,18 @@ function createLorawanLnsEngine(ctx) {
 
     store.lnsUpdateSessionAfterUplink(devEui, session);
 
+    /**
+     * Clase A: RX1/RX2 se mide en 1–5 s desde el uplink. Hay que programar el PULL_RESP
+     * **antes** del decoder/SQLite; si se espera a `saveIngestEntry`, `classARxStillOpen`
+     * ya es false y el comando (válvula TimeWave) se queda en cola para siempre.
+     */
+    const hasDeferredAppDl =
+      typeof store.lnsPeekOldestDeferredAppDownlink === 'function' &&
+      Boolean(store.lnsPeekOldestDeferredAppDownlink(ownerUserId, devEui));
+    if (hasDeferredAppDl) {
+      tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false);
+    }
+
     try {
       syncDeviceTemplateFromCatalog(store, telemetryDeviceId, ud, ownerUserId);
     } catch (eSync) {
@@ -1355,10 +1376,6 @@ function createLorawanLnsEngine(ctx) {
       },
     });
 
-    let linkCheckQueuedOk = false;
-    const hasDeferredAppDl =
-      typeof store.lnsPeekOldestDeferredAppDownlink === 'function' &&
-      Boolean(store.lnsPeekOldestDeferredAppDownlink(ownerUserId, devEui));
     const deferLinkCheck =
       hasDeferredAppDl ||
       (typeof store.lnsHasPendingPullRespForDev === 'function' &&
@@ -1372,23 +1389,19 @@ function createLorawanLnsEngine(ctx) {
           priority: 10,
           skipTxAckTrack: true,
         });
-        linkCheckQueuedOk = true;
         console.log('[LNS] LinkCheckAns encolado →', devEui, 'margin=', margin, 'GwCnt=', gwcnt);
       } catch (e) {
         console.warn('[LNS] LinkCheckAns no encolado:', e && e.message ? e.message : e);
       }
     }
 
-    /** Clase A: una sola ventana RX. Priorizar comando de aplicación diferido (válvula/intervalo) sobre LinkCheckAns. */
-    tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, linkCheckQueuedOk && !hasDeferredAppDl);
-
     return true;
   }
 
   /**
-   * Tras un uplink, intenta un downlink de aplicación que quedó en cola diferida (clase A / sin tmst, etc.).
-   * Si hay comando de aplicación pendiente, no se debe haber encolado LinkCheckAns en el mismo ciclo
-   * (el medidor Timewave clase A solo abre una ventana RX cada ~24 h).
+   * Tras un uplink, envía UN downlink de aplicación diferido (clase A: una ventana RX).
+   * El HEX TimeWave ya se reescribió al encolar; aquí solo se confirma el n.º con la última telemetría
+   * (sin recorrer historial: eso retrasaba RX1 y el comando de válvula nunca salía).
    */
   function tryFlushOneDeferredAppDownlinkAfterUplink(userId, devEui, skipBecauseLinkCheckQueued) {
     if (skipBecauseLinkCheckQueued) return;
@@ -1418,22 +1431,12 @@ function createLorawanLnsEngine(ctx) {
             : null) ||
           store.getUserDevice(userId, devEui);
         const deviceId = ud && ud.deviceId ? ud.deviceId : devEui;
-        let latestProps = {};
-        const historyPropsList = [];
         const latest = store.getLatestForDevice(userId, deviceId);
-        if (latest?.properties && typeof latest.properties === 'object') latestProps = latest.properties;
-        const hist =
-          typeof store.getTelemetryHistory === 'function'
-            ? store.getTelemetryHistory(userId, deviceId, { limit: 40 })
-            : [];
-        for (const histRow of hist || []) {
-          if (histRow?.properties && typeof histRow.properties === 'object') {
-            historyPropsList.push(histRow.properties);
-          }
-        }
+        const latestProps =
+          latest?.properties && typeof latest.properties === 'object' ? latest.properties : {};
         const twCtx = timewaveWaterMeter.resolveTimewaveContextFromSources({
           latestProps,
-          historyPropsList,
+          historyPropsList: [],
           deviceSerialHex: ud?.deviceSerialHex,
         });
         if (twCtx.meter) {
@@ -1443,18 +1446,14 @@ function createLorawanLnsEngine(ctx) {
             flushBuf = Buffer.from(rewritten, 'hex');
           }
         }
-        const cfg =
-          typeof store.getDeviceDecodeConfig === 'function' ? store.getDeviceDecodeConfig(String(deviceId)) : null;
-        flushFPort = timewaveWaterMeter.resolveTimewaveDownlinkFPort({
-          explicitFPort:
-            row.fPort === timewaveWaterMeter.MILESIGHT_DEFAULT_FPORT ? undefined : row.fPort,
-          lastUplinkFPort: twCtx.lastAppFPort,
-          configChannel: cfg && cfg.channel,
-        });
       } catch (eTw) {
         console.warn('[LNS] Timewave repair en flush diferido:', eTw && eTw.message ? eTw.message : eTw);
       }
     }
+    const queuedCount =
+      typeof store.lnsCountDeferredAppDownlinks === 'function'
+        ? store.lnsCountDeferredAppDownlinks(userId, devEui)
+        : 1;
     try {
       enqueueAppDownlink(userId, devEui, flushFPort, flushBuf, {
         confirmed: row.confirmed,
@@ -1463,9 +1462,20 @@ function createLorawanLnsEngine(ctx) {
         deviceClass: row.deviceClass || 'A',
         gatewayEui: row.gatewayEui && row.gatewayEui.length === 16 ? row.gatewayEui : undefined,
         skipTxAckTrack: false,
+        fPending: queuedCount > 1,
       });
       store.lnsDeleteDeferredAppDownlinkById(row.id);
       console.log('[LNS] Downlink diferido enviado tras uplink →', devEui, 'fPort', flushFPort, 'cola id', row.id);
+      if (typeof store.markDownlinkLogFlushedByPendingId === 'function') {
+        try {
+          store.markDownlinkLogFlushedByPendingId(userId, row.id, {
+            fPort: flushFPort,
+            payloadHex: flushHex,
+          });
+        } catch (eLog) {
+          console.warn('[LNS] mark downlink log flushed:', eLog.message);
+        }
+      }
       try {
         insertUiEvent(
           userId,
@@ -1475,6 +1485,7 @@ function createLorawanLnsEngine(ctx) {
             fPort: flushFPort,
             payloadHex: flushHex,
             deferredQueueId: row.id,
+            pendingId: row.id,
           })
         );
       } catch (e2) {
@@ -1488,6 +1499,15 @@ function createLorawanLnsEngine(ctx) {
         c === 'CLASS_A_MISSING_GATEWAY_TMST' ||
         c === 'NO_GATEWAY'
       ) {
+        console.warn(
+          '[LNS] deferred flush aplazado (se conserva en cola):',
+          c,
+          e.message,
+          'dev=',
+          devEui,
+          'id=',
+          row.id
+        );
         return;
       }
       console.warn('[LNS] deferred flush falló, se conserva en cola:', e.message, c, 'id=', row.id);
@@ -1579,7 +1599,7 @@ function createLorawanLnsEngine(ctx) {
   }
 
   /**
-   * @param {{ delayMs?: number, confirmed?: boolean, priority?: number, skipTxAckTrack?: boolean, deviceClass?: string, gatewayEui?: string }} [opts]
+   * @param {{ delayMs?: number, confirmed?: boolean, priority?: number, skipTxAckTrack?: boolean, deviceClass?: string, gatewayEui?: string, fPending?: boolean }} [opts]
    */
   function enqueueAppDownlink(userId, devEuiNorm16, fPort, payloadBuf, opts) {
     const opt = opts || {};
@@ -1646,7 +1666,7 @@ function createLorawanLnsEngine(ctx) {
       {
         MType: mType,
         DevAddr: Buffer.from(session.devAddr, 'hex'),
-        FCtrl: { ADR: false, ACK: macAck, FPending: false },
+        FCtrl: { ADR: false, ACK: macAck, FPending: Boolean(opt.fPending) },
         FCnt: nextDown,
         FPort: fPort,
         payload: payloadBuf,
@@ -1674,7 +1694,7 @@ function createLorawanLnsEngine(ctx) {
       rfch: session.lastRxRfch != null ? session.lastRxRfch : 0,
     };
 
-    const rxDelaySec = session.rxDelaySec != null ? session.rxDelaySec : 1;
+    const rxDelaySec = resolveClassARxDelaySec(session, gwBandU);
     let useImme = false;
     let notBeforeMs = 0;
     let classAWindow = 'RX1';
@@ -1927,8 +1947,7 @@ function createLorawanLnsEngine(ctx) {
     const omitCodr500 =
       String(process.env.SYSCOM_LNS_TXPK_OMIT_CODR_BW500 || '').trim() === '1' &&
       String(r2.datr || '').includes('BW500');
-    const rxDelaySec =
-      session.rxDelaySec != null ? Math.max(1, Math.min(15, Number(session.rxDelaySec))) : isUs ? 5 : 1;
+    const rxDelaySec = resolveClassARxDelaySec(session, isUs ? 'US915' : '');
     const win = classARxWindowMode();
     const prevTmst = tx.tmst != null ? Number(tx.tmst) : null;
     tx.imme = false;
@@ -2072,7 +2091,7 @@ function createLorawanLnsEngine(ctx) {
         }
       }
     } else if (cls === 'A' && hasTmst && !tmstStale) {
-      const rxDelaySec = session.rxDelaySec != null ? session.rxDelaySec : 1;
+      const rxDelaySec = resolveClassARxDelaySec(session, gwBandU);
       const win = classARxWindowMode();
       tx.imme = false;
       if (win === 'RX2') {

@@ -68,7 +68,7 @@ export function inferSwitchStateFromDownlinkHex(hex, pair) {
  */
 export function parseAutomationDownlinkLnsEvent(detail) {
   const t = detail?.eventType || detail?.type || '';
-  if (t !== 'downlink_sent' && t !== 'downlink_deferred') return null;
+  if (t !== 'downlink_sent' && t !== 'downlink_deferred' && t !== 'downlink_deferred_flushed') return null;
   const meta = detail?.meta && typeof detail.meta === 'object' ? detail.meta : {};
   if (String(meta.source || '').toLowerCase() !== 'automation') return null;
   const deviceId = meta.deviceId != null ? String(meta.deviceId).trim() : '';
