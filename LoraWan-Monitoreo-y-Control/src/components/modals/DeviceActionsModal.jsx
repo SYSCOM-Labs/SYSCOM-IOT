@@ -1,65 +1,95 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import './DeviceActionsModal.css';
 import { X, Send, Save, Trash2, Plus } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
-import { fetchDeviceDownlinkPresets, putDeviceDownlinkPresets } from '../../services/api';
+import {
+  fetchDeviceDownlinkPresets,
+  putDeviceDownlinkPresets,
+  fetchDeviceAccountDownlinks,
+  putDeviceAccountDownlinks,
+} from '../../services/api';
 import {
   resolveDownlinksForDevice,
+  readDownlinksFromLocalStorage,
   downlinksLocalStorageKey,
   getStoredTemplateIdForDevice,
   getDeviceTemplateById,
   normalizeTelemetryLabelHints,
   primeDeviceSharedPresetsFromDeviceRows,
+  isTimewaveBrandDevice,
+  cacheTimewaveAccountDownlinks,
 } from '../../services/deviceTemplates';
 
-const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
-  const { credentials, token } = useAuth();
-  const downlinkServerTimerRef = useRef(null);
+const EMPTY_ROW = { name: '', hex: '' };
 
-  const persistDownlinksToServer = useCallback(async (deviceId) => {
-    if (!deviceId) return;
-    try {
-      const raw = readDownlinksFromLocalStorage(deviceId);
-      const useful = (Array.isArray(raw) ? raw : []).filter(
-        (d) => String(d?.name || '').trim() && String(d?.hex || '').trim()
-      );
-      const tid = getStoredTemplateIdForDevice(deviceId);
-      const tpl = tid ? getDeviceTemplateById(tid) : null;
-      const telemetryLabels = tpl ? normalizeTelemetryLabelHints(tpl.telemetryLabels) : {};
-      await putDeviceDownlinkPresets(deviceId, {
-        downlinks: useful,
-        catalogTemplateId: tid || null,
-        telemetryLabels,
-      });
-      primeDeviceSharedPresetsFromDeviceRows([
-        {
-          deviceId,
-          deviceSharedPresets: {
-            downlinks: useful,
-            catalogTemplateId: tid || null,
-            telemetryLabels,
+function usefulDownlinks(list) {
+  return (Array.isArray(list) ? list : []).filter(
+    (d) => String(d?.name || '').trim() && String(d?.hex || '').trim()
+  );
+}
+
+const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
+  const { user } = useAuth();
+  const downlinkServerTimerRef = useRef(null);
+  const timewave = useMemo(
+    () =>
+      Boolean(
+        device?.deviceId &&
+          isTimewaveBrandDevice(device.deviceId, device.model || device.productModel || '')
+      ),
+    [device?.deviceId, device?.model, device?.productModel]
+  );
+
+  const persistDownlinksToServer = useCallback(
+    async (deviceId) => {
+      if (!deviceId || timewave) return;
+      try {
+        const raw = readDownlinksFromLocalStorage(deviceId, {
+          deviceModel: device?.model || device?.productModel || '',
+          preferTemplate: false,
+        });
+        const useful = usefulDownlinks(raw);
+        const tid = getStoredTemplateIdForDevice(deviceId);
+        const tpl = tid ? getDeviceTemplateById(tid) : null;
+        const telemetryLabels = tpl ? normalizeTelemetryLabelHints(tpl.telemetryLabels) : {};
+        await putDeviceDownlinkPresets(deviceId, {
+          downlinks: useful,
+          catalogTemplateId: tid || null,
+          telemetryLabels,
+        });
+        primeDeviceSharedPresetsFromDeviceRows([
+          {
+            deviceId,
+            deviceSharedPresets: {
+              downlinks: useful,
+              catalogTemplateId: tid || null,
+              telemetryLabels,
+            },
           },
-        },
-      ]);
-    } catch (e) {
-      console.warn('[DeviceActionsModal] presets servidor:', e?.message || e);
-    }
-  }, []);
+        ]);
+      } catch (e) {
+        console.warn('[DeviceActionsModal] presets servidor:', e?.message || e);
+      }
+    },
+    [timewave, device?.model, device?.productModel]
+  );
 
   const scheduleDownlinksServerSave = useCallback(
     (deviceId) => {
-      if (!deviceId) return;
+      if (!deviceId || timewave) return;
       if (downlinkServerTimerRef.current) clearTimeout(downlinkServerTimerRef.current);
       downlinkServerTimerRef.current = setTimeout(() => {
         downlinkServerTimerRef.current = null;
         persistDownlinksToServer(deviceId);
       }, 650);
     },
-    [persistDownlinksToServer]
+    [persistDownlinksToServer, timewave]
   );
   const [name, setName] = useState(device?.name || '');
   const [tag, setTag] = useState(device?.tag != null ? String(device.tag) : '');
-  const [downlinks, setDownlinks] = useState(() => [{ name: '', hex: '' }]);
+  const [downlinks, setDownlinks] = useState(() => [{ ...EMPTY_ROW }]);
+  const [saveState, setSaveState] = useState('idle');
+  const [saveError, setSaveError] = useState('');
 
   useEffect(() => {
     setName(device?.name || '');
@@ -69,6 +99,22 @@ const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
   useEffect(() => {
     const loadFromTemplate = async () => {
       if (!device?.deviceId || type !== 'downlink') return;
+      const model = device.model || device.productModel || '';
+      if (timewave) {
+        try {
+          const resp = await fetchDeviceAccountDownlinks(device.deviceId);
+          const list = Array.isArray(resp?.downlinks) ? resp.downlinks : [];
+          cacheTimewaveAccountDownlinks(device.deviceId, list);
+          setDownlinks(list.length > 0 ? list.map((d) => ({ name: d.name || '', hex: d.hex || '' })) : [{ ...EMPTY_ROW }]);
+        } catch (e) {
+          console.warn('[DeviceActionsModal] account-downlinks:', e?.message || e);
+          const local = resolveDownlinksForDevice(device.deviceId, model);
+          setDownlinks(local.length > 0 ? local : [{ ...EMPTY_ROW }]);
+        }
+        setSaveState('idle');
+        setSaveError('');
+        return;
+      }
       try {
         const resp = await fetchDeviceDownlinkPresets(device.deviceId);
         const presets = resp?.presets;
@@ -83,16 +129,14 @@ const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
       } catch (e) {
         console.warn('[DeviceActionsModal] downlink-presets:', e?.message || e);
       }
-      const model = device.model || device.productModel || '';
       const fromTpl = resolveDownlinksForDevice(device.deviceId, model);
-      const normalized = fromTpl.length > 0 ? fromTpl : [{ name: '', hex: '' }];
-      const storageKey = downlinksLocalStorageKey(device.deviceId);
-      localStorage.setItem(storageKey, JSON.stringify(normalized));
+      const normalized = fromTpl.length > 0 ? fromTpl : [{ ...EMPTY_ROW }];
+      localStorage.setItem(downlinksLocalStorageKey(device.deviceId), JSON.stringify(normalized));
       setDownlinks(normalized);
     };
 
     loadFromTemplate();
-  }, [type, device?.deviceId, device?.model, device?.productModel]);
+  }, [type, device?.deviceId, device?.model, device?.productModel, timewave, user?.id]);
 
   const handleEdit = (e) => {
     e.preventDefault();
@@ -102,25 +146,63 @@ const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
   };
 
   const addDownlinkRow = () => {
-    const next = [...downlinks, { name: '', hex: '' }];
+    const next = [...downlinks, { ...EMPTY_ROW }];
     setDownlinks(next);
-    localStorage.setItem(downlinksLocalStorageKey(device?.deviceId), JSON.stringify(next));
-    scheduleDownlinksServerSave(device?.deviceId);
+    if (!timewave) {
+      localStorage.setItem(downlinksLocalStorageKey(device?.deviceId), JSON.stringify(next));
+      scheduleDownlinksServerSave(device?.deviceId);
+    } else {
+      setSaveState('idle');
+    }
   };
 
   const updateDownlinkRow = (index, field, value) => {
     const newDownlinks = [...downlinks];
     newDownlinks[index][field] = value;
     setDownlinks(newDownlinks);
-    localStorage.setItem(downlinksLocalStorageKey(device?.deviceId), JSON.stringify(newDownlinks));
-    scheduleDownlinksServerSave(device?.deviceId);
+    if (!timewave) {
+      localStorage.setItem(downlinksLocalStorageKey(device?.deviceId), JSON.stringify(newDownlinks));
+      scheduleDownlinksServerSave(device?.deviceId);
+    } else {
+      setSaveState('idle');
+    }
   };
 
   const removeDownlinkRow = (index) => {
     const newDownlinks = downlinks.filter((_, i) => i !== index);
-    setDownlinks(newDownlinks);
-    localStorage.setItem(downlinksLocalStorageKey(device?.deviceId), JSON.stringify(newDownlinks));
-    scheduleDownlinksServerSave(device?.deviceId);
+    const next = newDownlinks.length ? newDownlinks : [{ ...EMPTY_ROW }];
+    setDownlinks(next);
+    if (!timewave) {
+      localStorage.setItem(downlinksLocalStorageKey(device?.deviceId), JSON.stringify(next));
+      scheduleDownlinksServerSave(device?.deviceId);
+    } else {
+      setSaveState('idle');
+    }
+  };
+
+  const handleSaveTimewaveDownlinks = async () => {
+    if (!device?.deviceId || !timewave) return;
+    const useful = usefulDownlinks(downlinks);
+    setSaveState('saving');
+    setSaveError('');
+    try {
+      const resp = await putDeviceAccountDownlinks(device.deviceId, { downlinks: useful });
+      const saved = Array.isArray(resp?.downlinks) ? resp.downlinks : useful;
+      cacheTimewaveAccountDownlinks(device.deviceId, saved);
+      primeDeviceSharedPresetsFromDeviceRows([
+        {
+          deviceId: device.deviceId,
+          productModel: device.model || device.productModel || '',
+          accountDownlinks: saved,
+          deviceSharedPresets: { downlinks: [] },
+        },
+      ]);
+      setDownlinks(saved.length > 0 ? saved.map((d) => ({ name: d.name || '', hex: d.hex || '' })) : [{ ...EMPTY_ROW }]);
+      setSaveState('saved');
+    } catch (e) {
+      setSaveState('error');
+      setSaveError(e?.response?.data?.error || e?.message || 'No se pudieron guardar los comandos.');
+    }
   };
 
   const [sendingRow, setSendingRow] = useState(null);
@@ -187,19 +269,25 @@ const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
           </form>
         ) : (
           <div className="modal-body">
+            {timewave ? (
+              <p className="downlink-timewave-hint">
+                TimeWave no hereda comandos de la plantilla. Cree HEX para este dispositivo; se guardan solo en
+                su cuenta y no cambian otros equipos ni el catálogo.
+              </p>
+            ) : null}
             <div className="downlink-list">
               {downlinks.map((dl, index) => (
                 <div key={index} className="downlink-row glass">
                   <div className="row-inputs">
                     <input 
                       type="text" 
-                      placeholder="Nombre (ej. Abrir)" 
+                      placeholder="Nombre (ej. Cerrar válvula)" 
                       value={dl.name}
                       onChange={e => updateDownlinkRow(index, 'name', e.target.value)}
                     />
                     <input 
                       type="text" 
-                      placeholder="Hex o Service ID (ej. ff01 / reboot)" 
+                      placeholder="Hex (ej. FEFEFEFE68…16)" 
                       value={dl.hex}
                       onChange={e => updateDownlinkRow(index, 'hex', e.target.value)}
                     />
@@ -244,9 +332,20 @@ const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
             <button className="btn btn-secondary add-btn" onClick={addDownlinkRow}>
               <Plus size={16} /> Añadir Downlink
             </button>
+            {timewave && saveError ? <p className="downlink-timewave-error">{saveError}</p> : null}
             
             <div className="modal-footer">
-              <button className="btn btn-primary" onClick={onClose}>Cerrar</button>
+              {timewave ? (
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleSaveTimewaveDownlinks}
+                  disabled={saveState === 'saving'}
+                >
+                  <Save size={18} /> {saveState === 'saving' ? 'Guardando…' : saveState === 'saved' ? 'Guardado' : 'Guardar'}
+                </button>
+              ) : null}
+              <button className="btn btn-secondary" onClick={onClose}>Cerrar</button>
             </div>
           </div>
         )}

@@ -395,6 +395,13 @@ body.theme-dark .templates-search-field__input::placeholder {
   gap: 0.65rem;
 }
 
+.templates-timewave-downlinks-note {
+  margin: 0;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: var(--text-muted, #64748b);
+}
+
 .templates-downlinks-head {
   display: flex;
   align-items: center;

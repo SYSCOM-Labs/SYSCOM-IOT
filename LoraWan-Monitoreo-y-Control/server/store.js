@@ -518,6 +518,15 @@ class Store {
         );
       `);
       this.db.exec(`
+        CREATE TABLE IF NOT EXISTS user_device_account_downlinks (
+          user_id TEXT NOT NULL,
+          device_id TEXT NOT NULL,
+          body_json TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (user_id, device_id)
+        );
+      `);
+      this.db.exec(`
         CREATE TABLE IF NOT EXISTS report_templates (
           user_id TEXT NOT NULL,
           template_id TEXT NOT NULL,
@@ -1189,6 +1198,14 @@ class Store {
         ON CONFLICT(device_id) DO UPDATE SET body_json = excluded.body_json, updated_at = excluded.updated_at
       `),
       dspDelete: this.db.prepare('DELETE FROM device_shared_presets WHERE device_id = ?'),
+      udAccDlGet: this.db.prepare(
+        'SELECT body_json, updated_at FROM user_device_account_downlinks WHERE user_id = ? AND device_id = ?'
+      ),
+      udAccDlUpsert: this.db.prepare(`
+        INSERT INTO user_device_account_downlinks (user_id, device_id, body_json, updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, device_id) DO UPDATE SET body_json = excluded.body_json, updated_at = excluded.updated_at
+      `),
       udDelete: this.db.prepare('DELETE FROM user_devices WHERE user_id = ? AND device_id = ?'),
       udDeleteAllForUser: this.db.prepare('DELETE FROM user_devices WHERE user_id = ?'),
       udUserIdsForDevice: this.db.prepare(
@@ -1413,6 +1430,49 @@ class Store {
     const iso = new Date().toISOString();
     const payload = JSON.stringify(bodyObj && typeof bodyObj === 'object' ? bodyObj : {});
     this.st.dspUpsert.run(did, payload, iso);
+  }
+
+  getUserDeviceAccountDownlinks(userId, deviceId) {
+    const uid = String(userId || '').trim();
+    const did = String(deviceId || '').trim();
+    if (!uid || !did) return [];
+    try {
+      const row = this.st.udAccDlGet.get(uid, did);
+      if (!row || row.body_json == null || String(row.body_json).trim() === '') return [];
+      const o = JSON.parse(String(row.body_json));
+      const list = o && Array.isArray(o.downlinks) ? o.downlinks : Array.isArray(o) ? o : [];
+      return list
+        .map((d) => ({
+          name: String(d?.name || '').trim(),
+          hex: String(d?.hex || '')
+            .trim()
+            .replace(/\s/g, '')
+            .toLowerCase()
+            .replace(/^0x/, ''),
+        }))
+        .filter((d) => d.name && d.hex && d.hex.length % 2 === 0);
+    } catch {
+      return [];
+    }
+  }
+
+  setUserDeviceAccountDownlinks(userId, deviceId, downlinks) {
+    const uid = String(userId || '').trim();
+    const did = String(deviceId || '').trim();
+    if (!uid || !did) return [];
+    const list = (Array.isArray(downlinks) ? downlinks : [])
+      .map((d) => ({
+        name: String(d?.name || '').trim(),
+        hex: String(d?.hex || '')
+          .trim()
+          .replace(/\s/g, '')
+          .toLowerCase()
+          .replace(/^0x/, ''),
+      }))
+      .filter((d) => d.name && d.hex && d.hex.length % 2 === 0);
+    const iso = new Date().toISOString();
+    this.st.udAccDlUpsert.run(uid, did, JSON.stringify({ downlinks: list }), iso);
+    return list;
   }
 
   /** `device_id` cuyos presets compartidos referencian esta plantilla del catálogo. */
@@ -4781,8 +4841,21 @@ class Store {
     if (!row || !row.prefs_json) return false;
     const raw = String(row.prefs_json).trim();
     if (!raw || raw === '{}') return false;
+    let json = raw;
+    try {
+      const prefs = JSON.parse(raw);
+      const dl = prefs && Array.isArray(prefs.downlinks) ? prefs.downlinks : [];
+      const twDl = dl.some((d) => /fefefefe/i.test(String(d?.hex || '')));
+      if (twDl && prefs && typeof prefs === 'object') {
+        const next = { ...prefs };
+        delete next.downlinks;
+        json = JSON.stringify(next);
+      }
+    } catch {
+      json = raw;
+    }
     const now = new Date().toISOString();
-    this.st.bsdPrefUpsert.run(to, did, raw, now);
+    this.st.bsdPrefUpsert.run(to, did, json, now);
     return true;
   }
 

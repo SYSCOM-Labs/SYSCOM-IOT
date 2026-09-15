@@ -49,29 +49,8 @@ export const SEED_DEVICE_TEMPLATES = [
     /** Medidor a pilas: habitualmente clase A (downlink en RX tras uplink). */
     lorawanClass: 'A',
     decoderScript: TIMEWAVE_DECODER_SCRIPT,
-    /** Ficha TimeWave: Cut off, Cut on, intervalos de subida 24 h / 12 h / 1 h (HEX de ejemplo 022025001955). */
-    downlinks: [
-      {
-        name: 'Cerrar válvula (Cut off)',
-        hex: 'fefefefe6855190025200268140e35dd93373533333363636363eeeeb916',
-      },
-      {
-        name: 'Abrir válvula (Cut on)',
-        hex: 'fefefefe6855190025200268140e35dd93373533333363636363dddd9716',
-      },
-      {
-        name: 'Intervalo de subida 1440 min (24 h)',
-        hex: 'fefefefe6855190025200268140e3534a33735333333636363637347fe16',
-      },
-      {
-        name: 'Intervalo de subida 720 min (12 h)',
-        hex: 'fefefefe6855190025200268140e3534a3373533333363636363533ad116',
-      },
-      {
-        name: 'Intervalo de subida 60 min (1 h)',
-        hex: 'fefefefe6855190025200268140e3534a337353333336363636393330a16',
-      },
-    ],
+    /** Comandos por cuenta y dispositivo (no se heredan de la plantilla). */
+    downlinks: [],
   },
   {
     modelo: 'SDM230-LoRaWAN',

@@ -380,3 +380,16 @@ body.theme-dark .downlink-action-btn--delete {
   padding: 12px;
   border-style: dashed;
 }
+
+.downlink-timewave-hint {
+  margin: 0 0 14px;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  color: var(--text-muted, #93a0b5);
+}
+
+.downlink-timewave-error {
+  margin: 10px 0 0;
+  font-size: 0.88rem;
+  color: #f07178;
+}

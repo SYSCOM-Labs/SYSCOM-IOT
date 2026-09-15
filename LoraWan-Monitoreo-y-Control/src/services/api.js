@@ -600,6 +600,23 @@ export const putDeviceDownlinkPresets = async (deviceId, presets) => {
   return response.data;
 };
 
+export const fetchDeviceAccountDownlinks = async (deviceId) => {
+  const response = await axios.get(
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/account-downlinks`,
+    { headers: authHeaders() }
+  );
+  return response.data;
+};
+
+export const putDeviceAccountDownlinks = async (deviceId, body) => {
+  const response = await axios.put(
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/account-downlinks`,
+    body,
+    { headers: authHeaders() }
+  );
+  return response.data;
+};
+
 /** Borra sesión OTAA del LNS integrado para este deviceId (requiere JWT). Útil si el servidor rechaza uplinks (MIC inválido). */
 export const deleteLnsSession = async (deviceId) => {
   const response = await axios.delete(

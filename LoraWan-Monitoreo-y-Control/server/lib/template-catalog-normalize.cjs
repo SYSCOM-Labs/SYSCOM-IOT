@@ -55,6 +55,15 @@ function isTimewaveWaterMeterLoraTemplate(t) {
   return marca === 'timewave' && modelo === 'water-meter-lora';
 }
 
+function isTimewaveBrandTemplate(t) {
+  const { marca, modelo } = timewaveMarcaModelo(t);
+  return marca.includes('timewave') || modelo.includes('timewave');
+}
+
+function isTimewaveBrandLabel(...parts) {
+  return parts.some((p) => /timewave/i.test(String(p || '')));
+}
+
 /** Los 5 comandos Timewave Water-Meter-LoRa (ficha fabricante: Cut off, Cut on, intervalos 24 h / 12 h / 1 h). */
 function canonicalTimewaveLoraDownlinks() {
   return [
@@ -134,20 +143,9 @@ function sanitizeTemplateCatalogEntry(t) {
       .filter((d) => d.name && d.hex && d.hex.length % 2 === 0),
     pm
   );
-  if (isTimewaveWaterMeterLoraTemplate({ marca, modelo })) {
-    if (timewaveLoraDownlinksLookStale(downlinks) || timewaveLoraDownlinksAreManufacturerSet(downlinks)) {
-      downlinks = canonicalTimewaveLoraDownlinks();
-    } else {
-      downlinks = downlinks.map((d) => {
-        const rewritten = timewaveWaterMeter.rewriteDownlinkHex(d.hex, null);
-        return rewritten ? { ...d, hex: rewritten } : d;
-      });
-    }
-  } else if (/timewave/i.test(marca)) {
-    downlinks = downlinks.map((d) => {
-      const rewritten = timewaveWaterMeter.rewriteDownlinkHex(d.hex, null);
-      return rewritten ? { ...d, hex: rewritten } : d;
-    });
+  if (isTimewaveBrandTemplate({ marca, modelo })) {
+    /** TimeWave: la plantilla general no publica downlinks; cada cuenta los crea en el dispositivo. */
+    downlinks = [];
   }
   return {
     ...t,
@@ -175,5 +173,7 @@ module.exports = {
   productModelFromTemplate,
   isStaleTimewaveWaterMeterTemplate,
   isTimewaveWaterMeterLoraTemplate,
+  isTimewaveBrandTemplate,
+  isTimewaveBrandLabel,
   canonicalTimewaveLoraDownlinks,
 };

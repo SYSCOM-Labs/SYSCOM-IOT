@@ -12,7 +12,7 @@ const { shouldSkipTelemetryInsert, isJoinOnlyProperties } = require('./lib/telem
 const { resolveWt201DownlinkHex } = require('./lib/wt201-downlink-encode.cjs');
 const { remapWs501LegacyDownlinkHex } = require('./lib/ws501-downlink-legacy.cjs');
 const timewaveWaterMeter = require('./timewave-water-meter');
-const { sanitizeTemplatesCatalog } = require('./lib/template-catalog-normalize.cjs');
+const { sanitizeTemplatesCatalog, isTimewaveBrandLabel } = require('./lib/template-catalog-normalize.cjs');
 const { resolveDownlinkDeviceClassForLns, productModelForcedClass } = require('./lib/resolve-downlink-class.cjs');
 const {
   normalizeDownlinks,
@@ -90,7 +90,7 @@ function invalidateDevicesListCache() {
 
 function buildDevicesContentForUser(role, userId) {
   return role === 'superadmin'
-    ? buildDevicesContentSuperadmin()
+    ? buildDevicesContentSuperadmin(userId)
     : buildDevicesContentAssignedOnly(userId);
 }
 
@@ -523,27 +523,35 @@ function normalizeDeviceSharedPresetsBody(body, deviceId) {
   return { downlinks, catalogTemplateId, telemetryLabels };
 }
 
-function attachDeviceSharedPresetsToContent(content) {
+function attachDeviceSharedPresetsToContent(content, userId) {
   if (!Array.isArray(content) || content.length === 0) return;
   const ids = [];
   for (const row of content) {
     if (row && row.deviceId) ids.push(row.deviceId);
   }
   const map = store.getDeviceSharedPresetsMap(ids);
+  const uid = userId != null ? String(userId).trim() : '';
   for (const row of content) {
-    const p = map[row.deviceId];
-    if (!p || typeof p !== 'object') continue;
-    row.deviceSharedPresets = {
-      downlinks: Array.isArray(p.downlinks) ? p.downlinks : [],
-      catalogTemplateId:
-        p.catalogTemplateId != null && String(p.catalogTemplateId).trim()
-          ? String(p.catalogTemplateId).trim()
-          : null,
-      telemetryLabels:
-        p.telemetryLabels && typeof p.telemetryLabels === 'object' && !Array.isArray(p.telemetryLabels)
-          ? p.telemetryLabels
-          : {},
-    };
+    const did = row && row.deviceId != null ? String(row.deviceId).trim() : '';
+    if (!did) continue;
+    const p = map[did];
+    const tw = isTimewaveBrandLabel(row.productModel, row.model, row.marca);
+    if (p && typeof p === 'object') {
+      row.deviceSharedPresets = {
+        downlinks: tw ? [] : Array.isArray(p.downlinks) ? p.downlinks : [],
+        catalogTemplateId:
+          p.catalogTemplateId != null && String(p.catalogTemplateId).trim()
+            ? String(p.catalogTemplateId).trim()
+            : null,
+        telemetryLabels:
+          p.telemetryLabels && typeof p.telemetryLabels === 'object' && !Array.isArray(p.telemetryLabels)
+            ? p.telemetryLabels
+            : {},
+      };
+    }
+    if (tw && uid) {
+      row.accountDownlinks = store.getUserDeviceAccountDownlinks(uid, did);
+    }
   }
 }
 
@@ -889,12 +897,12 @@ function buildDevicesContentAssignedOnly(userId) {
       content.push(row);
     }
   }
-  attachDeviceSharedPresetsToContent(content);
+  attachDeviceSharedPresetsToContent(content, userId);
   return content;
 }
 
 /** Vista global para superadmin: todos los dispositivos + asignaciones (correo / rol). */
-function buildDevicesContentSuperadmin() {
+function buildDevicesContentSuperadmin(actorUserId) {
   const udList = store.listUserDevicesWithAccounts();
   const labelsByDevice = store.getAllLabelsGroupedByDevice();
 
@@ -982,7 +990,7 @@ function buildDevicesContentSuperadmin() {
     content.push(row);
   }
   content.sort((a, b) => String(a.deviceId).localeCompare(String(b.deviceId)));
-  attachDeviceSharedPresetsToContent(content);
+  attachDeviceSharedPresetsToContent(content, actorUserId);
   return content;
 }
 
@@ -3641,6 +3649,9 @@ app.get(
       raw && typeof raw === 'object'
         ? normalizeDeviceSharedPresetsBody(raw, did)
         : normalizeDeviceSharedPresetsBody({}, did);
+    if (isTimewaveBrandLabel(ud?.productModel, ud?.model, store.getDeviceDecodeConfig(did)?.productModel)) {
+      presets.downlinks = [];
+    }
     res.json({ deviceId: did, presets });
   }
 );
@@ -3652,7 +3663,13 @@ app.put(
   (req, res) => {
     const did = decodeURIComponent(String(req.params.deviceId || '').trim());
     const ud = store.getUserDevice(req.user.id, did) || store.getAnyUserDeviceForDeviceId(did);
-    store.setDeviceSharedPresetsParsed(did, normalizeDeviceSharedPresetsBody(req.body || {}, did));
+    const body = normalizeDeviceSharedPresetsBody(req.body || {}, did);
+    if (
+      isTimewaveBrandLabel(ud?.productModel, ud?.model, store.getDeviceDecodeConfig(did)?.productModel)
+    ) {
+      body.downlinks = [];
+    }
+    store.setDeviceSharedPresetsParsed(did, body);
     try {
       syncDeviceTemplateFromCatalog(store, did, ud, req.user.id);
     } catch (e) {
@@ -3660,6 +3677,48 @@ app.put(
     }
     const presets = normalizeDeviceSharedPresetsBody(store.getDeviceSharedPresetsParsed(did) || {}, did);
     res.json({ deviceId: did, presets });
+  }
+);
+
+function isTimewaveDeviceForUser(deviceId, ud) {
+  const cfg = store.getDeviceDecodeConfig(String(deviceId || ''));
+  return isTimewaveBrandLabel(ud?.productModel, ud?.model, cfg?.productModel);
+}
+
+app.get(
+  '/api/devices/:deviceId/account-downlinks',
+  authMiddleware,
+  deviceAssignmentMiddleware,
+  (req, res) => {
+    const did = decodeURIComponent(String(req.params.deviceId || '').trim());
+    const ud = store.getUserDevice(req.user.id, did) || store.getAnyUserDeviceForDeviceId(did);
+    if (!isTimewaveDeviceForUser(did, ud)) {
+      return res.json({ deviceId: did, applicable: false, downlinks: [] });
+    }
+    res.json({
+      deviceId: did,
+      applicable: true,
+      downlinks: store.getUserDeviceAccountDownlinks(req.user.id, did),
+    });
+  }
+);
+
+app.put(
+  '/api/devices/:deviceId/account-downlinks',
+  authMiddleware,
+  deviceAssignmentMiddleware,
+  (req, res) => {
+    const did = decodeURIComponent(String(req.params.deviceId || '').trim());
+    const ud = store.getUserDevice(req.user.id, did) || store.getAnyUserDeviceForDeviceId(did);
+    if (!isTimewaveDeviceForUser(did, ud)) {
+      return res.status(400).json({
+        error: 'Los comandos por cuenta solo aplican a dispositivos TimeWave.',
+        code: 'TIMEWAVE_ACCOUNT_DOWNLINKS_ONLY',
+      });
+    }
+    const downlinks = store.setUserDeviceAccountDownlinks(req.user.id, did, req.body?.downlinks);
+    invalidateDevicesLatestCache();
+    res.json({ deviceId: did, applicable: true, downlinks });
   }
 );
 

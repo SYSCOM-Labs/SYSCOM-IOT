@@ -25,6 +25,7 @@ import {
 import { saveDeviceDecodeConfig } from '../services/api';
 import { adaptDecoderScriptForSyscom } from '../utils/adaptDecoderScript';
 import { inferTelemetryLabelsFromDecoderScript } from '../utils/inferDecoderTelemetryLabels';
+import { isTimewaveBrandLabel } from '../utils/timewaveDownlinkHex';
 import { getDuplicateEntityNotice } from '../utils/duplicateEntityNotice';
 import CenteredAlertModal from '../components/CenteredAlertModal';
 import './TemplatesPage.css';
@@ -147,35 +148,40 @@ const TemplatesPage = () => {
       return;
     }
     const previousTemplate = form.id ? getDeviceTemplateById(form.id) : null;
-    const downlinkRows = (Array.isArray(form.downlinks) ? form.downlinks : []).map((d) => ({
-      name: String(d?.name || '').trim(),
-      hex: String(d?.hex || '')
-        .trim()
-        .replace(/\s/g, ''),
-    }));
-    const incompleteDownlink = downlinkRows.find((d) => Boolean(d.name) !== Boolean(d.hex));
-    if (incompleteDownlink) {
-      setTemplatesNoticeModal({
-        open: true,
-        title: 'Downlinks incompletos',
-        message: 'Cada comando necesita nombre y hex. Complete la fila o quítela antes de guardar.',
-        variant: 'error',
-        wide: false,
-        confirmLabel: 'Aceptar',
-      });
-      return;
-    }
-    const oddHex = downlinkRows.find((d) => d.hex && d.hex.length % 2 !== 0);
-    if (oddHex) {
-      setTemplatesNoticeModal({
-        open: true,
-        title: 'Hex inválido',
-        message: `El comando «${oddHex.name || oddHex.hex}» tiene un hex de longitud impar. Debe tener un número par de caracteres (bytes completos).`,
-        variant: 'error',
-        wide: false,
-        confirmLabel: 'Aceptar',
-      });
-      return;
+    const timewaveBrand = isTimewaveBrandLabel(form.marca, form.modelo);
+    const downlinkRows = timewaveBrand
+      ? []
+      : (Array.isArray(form.downlinks) ? form.downlinks : []).map((d) => ({
+          name: String(d?.name || '').trim(),
+          hex: String(d?.hex || '')
+            .trim()
+            .replace(/\s/g, ''),
+        }));
+    if (!timewaveBrand) {
+      const incompleteDownlink = downlinkRows.find((d) => Boolean(d.name) !== Boolean(d.hex));
+      if (incompleteDownlink) {
+        setTemplatesNoticeModal({
+          open: true,
+          title: 'Downlinks incompletos',
+          message: 'Cada comando necesita nombre y hex. Complete la fila o quítela antes de guardar.',
+          variant: 'error',
+          wide: false,
+          confirmLabel: 'Aceptar',
+        });
+        return;
+      }
+      const oddHex = downlinkRows.find((d) => d.hex && d.hex.length % 2 !== 0);
+      if (oddHex) {
+        setTemplatesNoticeModal({
+          open: true,
+          title: 'Hex inválido',
+          message: `El comando «${oddHex.name || oddHex.hex}» tiene un hex de longitud impar. Debe tener un número par de caracteres (bytes completos).`,
+          variant: 'error',
+          wide: false,
+          confirmLabel: 'Aceptar',
+        });
+        return;
+      }
     }
     let entry;
     try {
@@ -841,6 +847,15 @@ const TemplatesPage = () => {
                 </label>
               </div>
 
+              {isTimewaveBrandLabel(form.marca, form.modelo) ? (
+                <div className="templates-downlinks-block">
+                  <p className="device-modal-label-text">Downlinks TimeWave</p>
+                  <p className="templates-timewave-downlinks-note">
+                    Esta marca no publica comandos en la plantilla. Cada usuario crea y guarda HEX en el
+                    dispositivo (solo su cuenta, sin afectar el catálogo ni otros equipos).
+                  </p>
+                </div>
+              ) : (
               <div className="templates-downlinks-block">
                 <div className="templates-downlinks-head">
                   <span className="device-modal-label-text">Downlinks (múltiples)</span>
@@ -891,6 +906,7 @@ const TemplatesPage = () => {
                   </div>
                 ))}
               </div>
+              )}
 
               <div className="modal-footer">
                 <button

@@ -15,7 +15,8 @@
 import { SEED_DEVICE_TEMPLATES } from '../constants/seedDeviceTemplates';
 import { downlinkDeferUntilUplink, forcedLorawanClassForProductModel } from '../utils/lorawanClassBehavior';
 import { remapWs501DownlinkList } from '../utils/ws501DownlinkHex';
-import { pickTimewaveMeterNoFromDevice, pickTimewaveDownlinkFPort } from '../utils/timewaveDownlinkHex';
+import { pickTimewaveMeterNoFromDevice, pickTimewaveDownlinkFPort, isTimewaveBrandLabel } from '../utils/timewaveDownlinkHex';
+import { getLocalUser } from './localAuth';
 
 const STORAGE_KEY = 'device_profile_templates_v1';
 /** id de plantilla aplicada automáticamente al crear dispositivos (decoder + downlinks). */
@@ -45,9 +46,21 @@ function deviceKeyNorm(deviceId) {
 export function primeDeviceSharedPresetsFromDeviceRows(rows) {
   for (const row of rows || []) {
     const p = row.deviceSharedPresets;
-    if (!p || typeof p !== 'object') continue;
     const k = deviceKeyNorm(row.deviceId);
     if (!k) continue;
+    const tw = isTimewaveBrandLabel(row.productModel, row.model, row.marca, p?.productModel);
+    if (tw) {
+      const account = Array.isArray(row.accountDownlinks) ? row.accountDownlinks : [];
+      primedDownlinksByNorm.set(k, normalizeDownlinks(account));
+      cacheTimewaveAccountDownlinks(row.deviceId, account);
+      if (p && p.catalogTemplateId != null && String(p.catalogTemplateId).trim()) {
+        primedCatalogTemplateIdByNorm.set(k, String(p.catalogTemplateId).trim());
+      }
+      const tl = normalizeTelemetryLabelHints(p?.telemetryLabels || {});
+      if (Object.keys(tl).length) primedTelemetryLabelsByNorm.set(k, tl);
+      continue;
+    }
+    if (!p || typeof p !== 'object') continue;
     if (Array.isArray(p.downlinks) && p.downlinks.length) {
       primedDownlinksByNorm.set(k, normalizeDownlinks(p.downlinks));
     }
@@ -561,6 +574,9 @@ function cacheDownlinksForDevice(deviceId, template, downlinks) {
  * @param {string} [deviceModel] p. ej. `Milesight · WS501`
  */
 export function resolveDownlinksForDevice(deviceId, deviceModel) {
+  if (isTimewaveBrandDevice(deviceId, deviceModel)) {
+    return readDownlinksFromLocalStorage(deviceId, { deviceModel, preferTemplate: false });
+  }
   const tpl = findTemplateForDevice(deviceId, deviceModel);
   if (tpl) {
     const dls = normalizeDownlinks(tpl.downlinks, tpl);
@@ -658,6 +674,37 @@ export function downlinksLocalStorageKey(deviceId) {
   return `downlinks_${n}`;
 }
 
+function timewaveAccountDownlinksStorageKey(deviceId) {
+  const uid = (() => {
+    try {
+      const u = getLocalUser();
+      return u && u.id != null ? String(u.id).trim() : '';
+    } catch {
+      return '';
+    }
+  })();
+  const n = storageDeviceIdKey(deviceId) || String(deviceId || '').trim().toLowerCase();
+  return `account_downlinks_${uid || 'anon'}_${n}`;
+}
+
+export function isTimewaveBrandDevice(deviceId, deviceModel) {
+  if (isTimewaveBrandLabel(deviceModel)) return true;
+  const tpl = findTemplateForDevice(deviceId, deviceModel);
+  return isTimewaveBrandLabel(tpl?.marca, tpl?.modelo, tpl?.productModel);
+}
+
+export function cacheTimewaveAccountDownlinks(deviceId, downlinks) {
+  if (typeof window === 'undefined' || !deviceId) return;
+  const dls = Array.isArray(downlinks) ? downlinks : [];
+  try {
+    localStorage.setItem(timewaveAccountDownlinksStorageKey(deviceId), JSON.stringify(dls));
+  } catch {
+    /* ignore quota */
+  }
+  const k = deviceKeyNorm(deviceId);
+  if (k) primedDownlinksByNorm.set(k, normalizeDownlinks(dls));
+}
+
 /**
  * Lee downlinks (plantilla del catálogo predomina; si no hay plantilla, caché local/servidor).
  * @param {string} deviceId
@@ -667,6 +714,19 @@ export function readDownlinksFromLocalStorage(deviceId, opts = {}) {
   if (typeof window === 'undefined' || !deviceId) return [];
   const preferTemplate = opts.preferTemplate !== false;
   const deviceModel = opts.deviceModel != null ? String(opts.deviceModel) : '';
+  if (isTimewaveBrandDevice(deviceId, deviceModel)) {
+    const k = storageDeviceIdKey(deviceId) || String(deviceId).trim().toLowerCase();
+    if (k && primedDownlinksByNorm.has(k)) {
+      return remapWs501DownlinkList([...primedDownlinksByNorm.get(k)], deviceModel);
+    }
+    try {
+      const raw = localStorage.getItem(timewaveAccountDownlinksStorageKey(deviceId));
+      const list = raw ? JSON.parse(raw) : [];
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  }
   if (preferTemplate) {
     const tpl = findTemplateForDevice(deviceId, deviceModel);
     if (tpl) {
@@ -785,55 +845,14 @@ function pruneStaleTimewaveWaterMeterTemplates(list) {
   });
 }
 
-function timewaveManufacturerDownlinksFromSeed() {
-  const seed = SEED_DEVICE_TEMPLATES.find(
-    (s) =>
-      String(s.marca || '')
-        .trim()
-        .toLowerCase() === 'timewave' &&
-      String(s.modelo || '')
-        .trim()
-        .toLowerCase() === 'water-meter-lora'
-  );
-  if (!seed || !Array.isArray(seed.downlinks)) return null;
-  return seed.downlinks.map((d) => ({
-    name: String(d.name || '').trim(),
-    hex: String(d.hex || '')
-      .trim()
-      .replace(/\s/g, '')
-      .toLowerCase()
-      .replace(/^0x/, ''),
-  }));
-}
-
 /**
- * Sustituye nombres/orden antiguos de Water-Meter-LoRa por la ficha del fabricante
- * cuando los HEX son los 5 comandos de ejemplo (no toca listas personalizadas).
+ * TimeWave: la plantilla no publica downlinks; cada cuenta los define en el dispositivo.
  */
 function applyTimewaveManufacturerDownlinkLabels(list) {
-  const canon = timewaveManufacturerDownlinksFromSeed();
-  if (!canon || !canon.length) return Array.isArray(list) ? [...list] : [];
-  const known = new Set(canon.map((d) => d.hex));
   return (Array.isArray(list) ? list : []).map((t) => {
     if (!t) return t;
-    const marca = String(t.marca || '')
-      .trim()
-      .toLowerCase();
-    const modelo = String(t.modelo || '')
-      .trim()
-      .toLowerCase();
-    if (marca !== 'timewave' || modelo !== 'water-meter-lora') return t;
-    const hexes = (Array.isArray(t.downlinks) ? t.downlinks : [])
-      .map((d) =>
-        String(d?.hex || '')
-          .trim()
-          .replace(/\s/g, '')
-          .toLowerCase()
-          .replace(/^0x/, '')
-      )
-      .filter(Boolean);
-    if (!hexes.length || !hexes.every((h) => known.has(h))) return t;
-    return { ...t, downlinks: canon.map((d) => ({ name: d.name, hex: d.hex })) };
+    if (!isTimewaveBrandLabel(t.marca, t.modelo)) return t;
+    return { ...t, downlinks: [] };
   });
 }
 
@@ -899,7 +918,9 @@ export function saveDeviceTemplate(payload) {
     channel: String(payload.channel || '').trim(),
     lorawanClass: normalizeTemplateLorawanClass(payload.lorawanClass),
     decoderScript: String(payload.decoderScript || ''),
-    downlinks: normalizeDownlinks(payload.downlinks, productModelLabelFromTemplate(payload)),
+    downlinks: isTimewaveBrandLabel(payload.marca, payload.modelo)
+      ? []
+      : normalizeDownlinks(payload.downlinks, productModelLabelFromTemplate(payload)),
     otaaAppEui: otaa.otaaAppEui,
     otaaAppKey: otaa.otaaAppKey,
     telemetryLabels: normalizeTelemetryLabelHints(
@@ -1027,31 +1048,39 @@ export async function persistTemplateForDeviceId(deviceId, template, saveDeviceD
       productModel: productModelLabelFromTemplate(template),
     });
   }
-  const dls = normalizeDownlinks(template.downlinks, template);
+  const dls = isTimewaveBrandLabel(template.marca, template.modelo)
+    ? []
+    : normalizeDownlinks(template.downlinks, template);
   const tid = template.id != null && String(template.id).trim() ? String(template.id).trim() : '';
   if (typeof localStorage !== 'undefined') {
-    const kDl = downlinksLocalStorageKey(deviceId);
     const kSrc = templateSourceLocalStorageKey(deviceId);
-    localStorage.setItem(kDl, JSON.stringify(dls));
+    if (!isTimewaveBrandLabel(template.marca, template.modelo)) {
+      const kDl = downlinksLocalStorageKey(deviceId);
+      localStorage.setItem(kDl, JSON.stringify(dls));
+    }
     if (tid) {
       localStorage.setItem(kSrc, tid);
     }
   }
   const kNorm = deviceKeyNorm(deviceId);
   if (kNorm) {
-    primedDownlinksByNorm.set(kNorm, dls);
+    if (!isTimewaveBrandLabel(template.marca, template.modelo)) {
+      primedDownlinksByNorm.set(kNorm, dls);
+    }
     if (tid) primedCatalogTemplateIdByNorm.set(kNorm, tid);
     const tl = normalizeTelemetryLabelHints(template.telemetryLabels);
     if (Object.keys(tl).length) primedTelemetryLabelsByNorm.set(kNorm, tl);
     else primedTelemetryLabelsByNorm.delete(kNorm);
   }
   try {
-    const { putDeviceDownlinkPresets } = await import('./api.js');
-    await putDeviceDownlinkPresets(idApi, {
-      downlinks: dls,
-      catalogTemplateId: tid || null,
-      telemetryLabels: normalizeTelemetryLabelHints(template.telemetryLabels),
-    });
+    if (!isTimewaveBrandLabel(template.marca, template.modelo)) {
+      const { putDeviceDownlinkPresets } = await import('./api.js');
+      await putDeviceDownlinkPresets(idApi, {
+        downlinks: dls,
+        catalogTemplateId: tid || null,
+        telemetryLabels: normalizeTelemetryLabelHints(template.telemetryLabels),
+      });
+    }
   } catch (e) {
     console.warn('[deviceTemplates] putDeviceDownlinkPresets:', e?.message || e);
   }

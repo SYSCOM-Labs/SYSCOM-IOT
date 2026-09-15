@@ -10,7 +10,11 @@ import {
   loadDashboardVisibility,
 } from '../components/dashboard/widgetConfigUtils';
 import { dashboardGridLayoutStorageKey, readStoredBsdGridLayout } from '../components/dashboard/bsdDashboardLayout';
-import { readDownlinksFromLocalStorage, downlinksLocalStorageKey } from '../services/deviceTemplates';
+import {
+  readDownlinksFromLocalStorage,
+  downlinksLocalStorageKey,
+  isTimewaveBrandDevice,
+} from '../services/deviceTemplates';
 
 /**
  * @param {string | number | null | undefined} deviceId
@@ -38,7 +42,8 @@ export function collectDeviceBsdBundle(deviceId) {
   const gridKey = dashboardGridLayoutStorageKey('device', id, undefined, undefined);
   const gridLayout = readStoredBsdGridLayout(gridKey);
   const visibility = loadDashboardVisibility('device', id);
-  const downlinksRaw = readDownlinksFromLocalStorage(id);
+  const skipTimewaveDownlinks = isTimewaveBrandDevice(id);
+  const downlinksRaw = skipTimewaveDownlinks ? [] : readDownlinksFromLocalStorage(id);
   const out = {
     valueWidgets,
     gridLayout,
@@ -94,7 +99,7 @@ export function applyDeviceBsdBundle(deviceId, bundle) {
   }
 
   const dl = bundle.downlinks;
-  if (Array.isArray(dl)) {
+  if (Array.isArray(dl) && !isTimewaveBrandDevice(id)) {
     const incomingHasHex = dl.some((r) => r && String(r.hex || '').trim());
     let skipEmptyOverwrite = false;
     if (!incomingHasHex) {

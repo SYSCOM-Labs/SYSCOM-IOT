@@ -1,3 +1,8 @@
+/** Marca TimeWave en plantilla, modelo o productModel (`Timewave · Water-Meter-LoRa`). */
+export function isTimewaveBrandLabel(...parts) {
+  return parts.some((p) => /timewave/i.test(String(p || '')));
+}
+
 /** Número de medidor TimeWave: 12 hex (6 BCD). El DevEUI (16 hex) no vale. */
 export function normalizeTimewaveMeterNo12(raw) {
   const h = String(raw || '')

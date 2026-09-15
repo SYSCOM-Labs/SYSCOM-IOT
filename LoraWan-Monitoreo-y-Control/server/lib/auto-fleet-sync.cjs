@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { resolveDownlinkDeviceClassForLns, normalizeDeviceClass } = require('./resolve-downlink-class.cjs');
 const { remapWs501LegacyDownlinkHex, remapWs501DownlinkList } = require('./ws501-downlink-legacy.cjs');
-const { sanitizeTemplateCatalogEntry, sanitizeTemplatesCatalog } = require('./template-catalog-normalize.cjs');
+const { sanitizeTemplateCatalogEntry, sanitizeTemplatesCatalog, isTimewaveBrandTemplate } = require('./template-catalog-normalize.cjs');
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -240,7 +240,7 @@ function syncDeviceTemplateFromCatalog(store, deviceId, ud, userId) {
 
   store.setDeviceDecodeConfig(did, useScript, channel, cls, pm);
 
-  const downlinks = normalizeDownlinks(sanitized.downlinks, pm);
+  const downlinks = isTimewaveBrandTemplate(sanitized) ? [] : normalizeDownlinks(sanitized.downlinks, pm);
   store.setDeviceSharedPresetsParsed(did, {
     downlinks,
     catalogTemplateId: String(template.id || '').trim() || null,
