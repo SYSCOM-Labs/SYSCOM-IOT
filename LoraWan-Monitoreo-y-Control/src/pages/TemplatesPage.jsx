@@ -20,7 +20,6 @@ import {
   hydrateDeviceTemplatesCatalogFromServer,
   publishLocalCustomTemplatesIfServerEmpty,
   flushDeviceTemplatesCatalogToServer,
-  templateMatchesSeedCatalog,
   reconcileDuplicateDeviceTemplatesInCatalog,
 } from '../services/deviceTemplates';
 import { saveDeviceDecodeConfig } from '../services/api';
@@ -59,7 +58,6 @@ const TemplatesPage = () => {
   const importInputRef = useRef(null);
   const [templates, setTemplates] = useState(() => getDeviceTemplates());
   const [editorOpen, setEditorOpen] = useState(false);
-  const [editingTemplate, setEditingTemplate] = useState(null);
   const [form, setForm] = useState(emptyForm);
   /** Contenido decoder “congelado” al abrir o tras «Ajustar»; si el textarea difiere, hay que ajustar antes de guardar. */
   const [decoderSnapshot, setDecoderSnapshot] = useState('');
@@ -96,7 +94,6 @@ const TemplatesPage = () => {
   }, [refresh, isSuperAdmin]);
 
   const openNew = () => {
-    setEditingTemplate(null);
     setDecoderSnapshot('');
     setForm(emptyForm());
     setDecoderAdjustAck(true);
@@ -105,7 +102,6 @@ const TemplatesPage = () => {
 
   const openEdit = (t) => {
     const dec = t.decoderScript || '';
-    setEditingTemplate(t);
     setDecoderSnapshot(dec);
     setForm({
       id: t.id,
@@ -151,6 +147,36 @@ const TemplatesPage = () => {
       return;
     }
     const previousTemplate = form.id ? getDeviceTemplateById(form.id) : null;
+    const downlinkRows = (Array.isArray(form.downlinks) ? form.downlinks : []).map((d) => ({
+      name: String(d?.name || '').trim(),
+      hex: String(d?.hex || '')
+        .trim()
+        .replace(/\s/g, ''),
+    }));
+    const incompleteDownlink = downlinkRows.find((d) => Boolean(d.name) !== Boolean(d.hex));
+    if (incompleteDownlink) {
+      setTemplatesNoticeModal({
+        open: true,
+        title: 'Downlinks incompletos',
+        message: 'Cada comando necesita nombre y hex. Complete la fila o quítela antes de guardar.',
+        variant: 'error',
+        wide: false,
+        confirmLabel: 'Aceptar',
+      });
+      return;
+    }
+    const oddHex = downlinkRows.find((d) => d.hex && d.hex.length % 2 !== 0);
+    if (oddHex) {
+      setTemplatesNoticeModal({
+        open: true,
+        title: 'Hex inválido',
+        message: `El comando «${oddHex.name || oddHex.hex}» tiene un hex de longitud impar. Debe tener un número par de caracteres (bytes completos).`,
+        variant: 'error',
+        wide: false,
+        confirmLabel: 'Aceptar',
+      });
+      return;
+    }
     let entry;
     try {
       entry = saveDeviceTemplate({
@@ -160,7 +186,7 @@ const TemplatesPage = () => {
         channel: form.channel,
         lorawanClass: form.lorawanClass,
         decoderScript: form.decoderScript,
-        downlinks: form.downlinks,
+        downlinks: downlinkRows,
         telemetryLabels: form.telemetryLabels,
       });
     } catch (err) {
@@ -284,7 +310,6 @@ const TemplatesPage = () => {
         confirmLabel: 'Aceptar',
       });
       setEditorOpen(false);
-      setEditingTemplate(null);
       setForm(emptyForm());
       setDecoderAdjustAck(true);
     } catch (err) {
@@ -476,7 +501,6 @@ const TemplatesPage = () => {
     !decoderAdjustAck;
 
   const isEditing = Boolean(form.id);
-  const editingBuiltinSeed = editingTemplate && templateMatchesSeedCatalog(editingTemplate);
 
   const handleTemplateRowClick = (t, e) => {
     if (e.target.closest('button, a, input, label')) return;
@@ -686,7 +710,6 @@ const TemplatesPage = () => {
           role="presentation"
           onClick={() => {
             setEditorOpen(false);
-            setEditingTemplate(null);
           }}
         >
           <div className="modal-content glass um-modal-shell templates-editor-modal" role="dialog" onClick={(e) => e.stopPropagation()}>
@@ -705,7 +728,6 @@ const TemplatesPage = () => {
                 className="btn-icon um-modal-close"
                 onClick={() => {
                   setEditorOpen(false);
-                  setEditingTemplate(null);
                 }}
                 aria-label="Cerrar"
               >
@@ -713,12 +735,6 @@ const TemplatesPage = () => {
               </button>
             </div>
             <form onSubmit={handleSave} className="templates-editor-form">
-              {editingBuiltinSeed ? (
-                <p className="templates-editor-seed-hint glass" role="status">
-                  Plantilla integrada del sistema: al guardar se creará una versión personalizada en el catálogo (mismo
-                  modelo) con sus cambios.
-                </p>
-              ) : null}
               <div className="device-create-grid">
                 <label className="device-modal-field templates-editor-label">
                   <span className="device-modal-label-text">
@@ -882,7 +898,6 @@ const TemplatesPage = () => {
                   className="btn btn-secondary"
                   onClick={() => {
                     setEditorOpen(false);
-                    setEditingTemplate(null);
                   }}
                 >
                   Cancelar

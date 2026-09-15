@@ -98,7 +98,9 @@ function resolveDefaultTemplateIdFromDoc(doc) {
 /** Actualiza catálogo en memoria y localStorage (sin semillas integradas). */
 function commitDeviceTemplatesCatalog(list, defaultTemplateId = undefined, preferId = undefined) {
   let templates = Array.isArray(list) ? list.map((t) => (t && typeof t === 'object' ? { ...t } : {})) : [];
-  templates = pruneStaleTimewaveWaterMeterTemplates(dedupeCustomCatalogByModelo(templates, preferId));
+  templates = applyTimewaveManufacturerDownlinkLabels(
+    pruneStaleTimewaveWaterMeterTemplates(dedupeCustomCatalogByModelo(templates, preferId))
+  );
   const def =
     defaultTemplateId === undefined
       ? getDefaultTemplateId()
@@ -118,8 +120,10 @@ function commitDeviceTemplatesCatalog(list, defaultTemplateId = undefined, prefe
  * @param {object} doc respuesta GET /api/device-templates
  */
 export function applyServerDeviceTemplatesCatalog(doc) {
-  const templates = pruneStaleTimewaveWaterMeterTemplates(
-    dedupeCustomCatalogByModelo(Array.isArray(doc?.templates) ? doc.templates : [])
+  const templates = applyTimewaveManufacturerDownlinkLabels(
+    pruneStaleTimewaveWaterMeterTemplates(
+      dedupeCustomCatalogByModelo(Array.isArray(doc?.templates) ? doc.templates : [])
+    )
   );
   serverTemplatesState = {
     status: 'loaded',
@@ -147,24 +151,36 @@ export async function hydrateDeviceTemplatesCatalogFromServer(opts = {}) {
   const merged = mergeCatalogTemplatesById(serverTemplates, localTemplates);
   const filtered = filterCatalogByExcludedBuiltinSeeds(merged);
   const pruned = pruneStaleTimewaveWaterMeterTemplates(filtered);
-  const deduped = pruneStaleTimewaveWaterMeterTemplates(dedupeCustomCatalogByModelo(pruned));
-  applyServerDeviceTemplatesCatalog({
-    ...doc,
-    templates: deduped,
-    defaultTemplateId: resolveDefaultTemplateIdFromDoc(doc),
-  });
-  persistList(deduped);
-
+  const afterDedupe = pruneStaleTimewaveWaterMeterTemplates(dedupeCustomCatalogByModelo(pruned));
   const hadServerEntriesRemovedByExclusion = filtered.length < merged.length;
   const hadStaleTimewaveRemoved = pruned.length < filtered.length;
-  const hadDuplicatesRemoved = deduped.length < pruned.length;
+  const hadDuplicatesRemoved = afterDedupe.length < pruned.length;
+  const materialized = pruneStaleTimewaveWaterMeterTemplates(
+    dedupeCustomCatalogByModelo(mergeSeedsIntoTemplateList(afterDedupe))
+  );
+  const hadSeedsMaterialized = materialized.length > afterDedupe.length;
+  const latestLocal = loadRaw();
+  const finalList = pruneStaleTimewaveWaterMeterTemplates(
+    dedupeCustomCatalogByModelo(mergeCatalogTemplatesById(materialized, latestLocal))
+  );
+  applyServerDeviceTemplatesCatalog({
+    ...doc,
+    templates: finalList,
+    defaultTemplateId: resolveDefaultTemplateIdFromDoc(doc),
+  });
+  persistList(finalList);
+
   if (
     opts.syncLocalExtrasToServer &&
-    (localOnlyCount > 0 || hadServerEntriesRemovedByExclusion || hadStaleTimewaveRemoved || hadDuplicatesRemoved)
+    (localOnlyCount > 0 ||
+      hadServerEntriesRemovedByExclusion ||
+      hadStaleTimewaveRemoved ||
+      hadDuplicatesRemoved ||
+      hadSeedsMaterialized)
   ) {
     await flushDeviceTemplatesCatalogToServer();
   }
-  return { ...doc, templates: deduped };
+  return { ...doc, templates: finalList };
 }
 
 export async function publishLocalCustomTemplatesIfServerEmpty(isSuperAdmin) {
@@ -172,7 +188,9 @@ export async function publishLocalCustomTemplatesIfServerEmpty(isSuperAdmin) {
   const { fetchDeviceTemplatesCatalog, putDeviceTemplatesCatalog } = await import('./api.js');
   const cat = await fetchDeviceTemplatesCatalog();
   if (Array.isArray(cat.templates) && cat.templates.length > 0) return false;
-  const customs = loadRaw().filter((t) => !templateMatchesSeedCatalog(t));
+  const customs = pruneStaleTimewaveWaterMeterTemplates(
+    dedupeCustomCatalogByModelo(mergeSeedsIntoTemplateList(loadRaw()))
+  );
   if (customs.length === 0) return false;
   let def = cat.defaultTemplateId != null && String(cat.defaultTemplateId).trim() ? String(cat.defaultTemplateId).trim() : null;
   if (!def && typeof window !== 'undefined') {
@@ -217,29 +235,82 @@ export async function reconcileDuplicateDeviceTemplatesInCatalog(opts = {}) {
   return true;
 }
 
+function stableBuiltinTemplateId(modelo) {
+  const m = String(modelo || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_');
+  return m ? `tpl_builtin_${m}` : '';
+}
+
+function downlinksFingerprint(arr) {
+  return (Array.isArray(arr) ? arr : [])
+    .map((d) => {
+      const name = String(d?.name || '').trim();
+      const hex = String(d?.hex || '')
+        .trim()
+        .replace(/\s/g, '')
+        .toLowerCase()
+        .replace(/^0x/, '');
+      return `${name}|${hex}`;
+    })
+    .filter((row) => row !== '|')
+    .join(';');
+}
+
+function findSeedForTemplate(t) {
+  if (!t) return null;
+  const k = seedCatalogKey(t.marca, t.modelo);
+  return SEED_DEVICE_TEMPLATES.find((s) => seedKeyForSeedEntry(s) === k) || null;
+}
+
+/** True si marca/modelo coinciden con una semilla y decoder/puerto/clase/downlinks no se han tocado. */
+function templateLooksLikeUnmodifiedSeed(t) {
+  const seed = findSeedForTemplate(t);
+  if (!seed) return false;
+  const decEq = String(t.decoderScript || '') === String(seed.decoderScript || '');
+  const chEq = String(t.channel || '').trim() === String(seed.channel || '').trim();
+  const clsEq =
+    normalizeTemplateLorawanClass(t.lorawanClass) === normalizeTemplateLorawanClass(seed.lorawanClass);
+  const dlEq = downlinksFingerprint(t.downlinks) === downlinksFingerprint(seed.downlinks);
+  return decEq && chEq && clsEq && dlEq;
+}
+
+function templateEntryFromSeed(seed) {
+  const modelo = String(seed?.modelo || '').trim();
+  return {
+    id: stableBuiltinTemplateId(modelo),
+    modelo,
+    marca: (seed.marca || 'Milesight').trim(),
+    channel: String(seed.channel || '1').trim(),
+    lorawanClass: normalizeTemplateLorawanClass(seed.lorawanClass),
+    decoderScript: String(seed.decoderScript || ''),
+    downlinks: Array.isArray(seed.downlinks)
+      ? seed.downlinks.map((d) => ({
+          name: String(d?.name || '').trim(),
+          hex: String(d?.hex || '')
+            .trim()
+            .replace(/\s/g, '')
+            .toLowerCase()
+            .replace(/^0x/, ''),
+        }))
+      : [],
+    otaaAppEui: '',
+    otaaAppKey: '',
+  };
+}
+
 function mergeSeedsIntoTemplateList(customList) {
   const list = Array.isArray(customList) ? [...customList] : [];
   const modeloSet = new Set(list.map((t) => (t.modelo || '').trim().toLowerCase()));
   const excludedSeeds = loadExcludedBuiltinSeedKeys();
   const additions = [];
-  let salt = 0;
   for (const seed of SEED_DEVICE_TEMPLATES) {
     const m = (seed.modelo || '').trim().toLowerCase();
     if (!m || modeloSet.has(m)) continue;
     if (excludedSeeds.has(seedKeyForSeedEntry(seed))) continue;
     modeloSet.add(m);
-    salt += 1;
-    additions.push({
-      id: `tpl_builtin_${m.replace(/[^a-z0-9]+/g, '_')}_${Date.now()}_${salt}`,
-      modelo: seed.modelo.trim(),
-      marca: (seed.marca || 'Milesight').trim(),
-      channel: String(seed.channel || '1').trim(),
-      lorawanClass: normalizeTemplateLorawanClass(seed.lorawanClass),
-      decoderScript: String(seed.decoderScript || ''),
-      downlinks: normalizeDownlinks(seed.downlinks),
-      otaaAppEui: '',
-      otaaAppKey: '',
-    });
+    additions.push(templateEntryFromSeed(seed));
   }
   return [...list, ...additions];
 }
@@ -272,6 +343,9 @@ function pickPreferredTemplateEntry(a, b, preferId) {
     if (String(a?.id) === String(preferId)) return a;
     if (String(b?.id) === String(preferId)) return b;
   }
+  const aUnmodified = templateLooksLikeUnmodifiedSeed(a);
+  const bUnmodified = templateLooksLikeUnmodifiedSeed(b);
+  if (aUnmodified !== bUnmodified) return aUnmodified ? b : a;
   return templateRichnessScore(a) >= templateRichnessScore(b) ? a : b;
 }
 
@@ -673,40 +747,18 @@ function loadRaw() {
 }
 
 function persistList(list) {
-  const pruned = pruneStaleTimewaveWaterMeterTemplates(Array.isArray(list) ? list : []);
+  const pruned = applyTimewaveManufacturerDownlinkLabels(
+    pruneStaleTimewaveWaterMeterTemplates(Array.isArray(list) ? list : [])
+  );
   localStorage.setItem(STORAGE_KEY, JSON.stringify(pruned));
 }
 
 function ensureBuiltinSeedsMerged() {
   if (typeof window === 'undefined') return;
   if (serverTemplatesState.status === 'loaded') return;
-
   const list = loadRaw();
-  const modeloSet = new Set(list.map((t) => (t.modelo || '').trim().toLowerCase()));
-  const excludedSeeds = loadExcludedBuiltinSeedKeys();
-  const additions = [];
-  let salt = 0;
-  for (const seed of SEED_DEVICE_TEMPLATES) {
-    const m = (seed.modelo || '').trim().toLowerCase();
-    if (!m || modeloSet.has(m)) continue;
-    if (excludedSeeds.has(seedKeyForSeedEntry(seed))) continue;
-    modeloSet.add(m);
-    salt += 1;
-    additions.push({
-      id: `tpl_builtin_${m.replace(/[^a-z0-9]+/g, '_')}_${Date.now()}_${salt}`,
-      modelo: seed.modelo.trim(),
-      marca: (seed.marca || 'Milesight').trim(),
-      channel: String(seed.channel || '1').trim(),
-      lorawanClass: normalizeTemplateLorawanClass(seed.lorawanClass),
-      decoderScript: String(seed.decoderScript || ''),
-      downlinks: normalizeDownlinks(seed.downlinks),
-      otaaAppEui: '',
-      otaaAppKey: '',
-    });
-  }
-  if (additions.length > 0) {
-    persistList([...list, ...additions]);
-  }
+  const next = mergeSeedsIntoTemplateList(list);
+  if (next.length !== list.length) persistList(next);
 }
 
 function filterCatalogByExcludedBuiltinSeeds(list) {
@@ -733,16 +785,74 @@ function pruneStaleTimewaveWaterMeterTemplates(list) {
   });
 }
 
+function timewaveManufacturerDownlinksFromSeed() {
+  const seed = SEED_DEVICE_TEMPLATES.find(
+    (s) =>
+      String(s.marca || '')
+        .trim()
+        .toLowerCase() === 'timewave' &&
+      String(s.modelo || '')
+        .trim()
+        .toLowerCase() === 'water-meter-lora'
+  );
+  if (!seed || !Array.isArray(seed.downlinks)) return null;
+  return seed.downlinks.map((d) => ({
+    name: String(d.name || '').trim(),
+    hex: String(d.hex || '')
+      .trim()
+      .replace(/\s/g, '')
+      .toLowerCase()
+      .replace(/^0x/, ''),
+  }));
+}
+
+/**
+ * Sustituye nombres/orden antiguos de Water-Meter-LoRa por la ficha del fabricante
+ * cuando los HEX son los 5 comandos de ejemplo (no toca listas personalizadas).
+ */
+function applyTimewaveManufacturerDownlinkLabels(list) {
+  const canon = timewaveManufacturerDownlinksFromSeed();
+  if (!canon || !canon.length) return Array.isArray(list) ? [...list] : [];
+  const known = new Set(canon.map((d) => d.hex));
+  return (Array.isArray(list) ? list : []).map((t) => {
+    if (!t) return t;
+    const marca = String(t.marca || '')
+      .trim()
+      .toLowerCase();
+    const modelo = String(t.modelo || '')
+      .trim()
+      .toLowerCase();
+    if (marca !== 'timewave' || modelo !== 'water-meter-lora') return t;
+    const hexes = (Array.isArray(t.downlinks) ? t.downlinks : [])
+      .map((d) =>
+        String(d?.hex || '')
+          .trim()
+          .replace(/\s/g, '')
+          .toLowerCase()
+          .replace(/^0x/, '')
+      )
+      .filter(Boolean);
+    if (!hexes.length || !hexes.every((h) => known.has(h))) return t;
+    return { ...t, downlinks: canon.map((d) => ({ name: d.name, hex: d.hex })) };
+  });
+}
+
 export function getDeviceTemplates() {
   if (serverTemplatesState.status === 'loaded') {
     const custom = dedupeCustomCatalogByModelo(
-      pruneStaleTimewaveWaterMeterTemplates(filterCatalogByExcludedBuiltinSeeds(serverTemplatesState.templates))
+      applyTimewaveManufacturerDownlinkLabels(
+        pruneStaleTimewaveWaterMeterTemplates(filterCatalogByExcludedBuiltinSeeds(serverTemplatesState.templates))
+      )
     );
-    return pruneStaleTimewaveWaterMeterTemplates(dedupeCustomCatalogByModelo(mergeSeedsIntoTemplateList(custom)));
+    return applyTimewaveManufacturerDownlinkLabels(
+      pruneStaleTimewaveWaterMeterTemplates(dedupeCustomCatalogByModelo(mergeSeedsIntoTemplateList(custom)))
+    );
   }
   ensureBuiltinSeedsMerged();
-  return pruneStaleTimewaveWaterMeterTemplates(
-    dedupeCustomCatalogByModelo(filterCatalogByExcludedBuiltinSeeds(loadRaw()))
+  return applyTimewaveManufacturerDownlinkLabels(
+    pruneStaleTimewaveWaterMeterTemplates(
+      dedupeCustomCatalogByModelo(filterCatalogByExcludedBuiltinSeeds(loadRaw()))
+    )
   );
 }
 
@@ -764,22 +874,23 @@ export function saveDeviceTemplate(payload) {
     }
   }
 
-  if (customIdx < 0 && incomingId) {
-    const edited = getDeviceTemplates().find((t) => String(t.id) === String(incomingId));
-    if (edited && templateMatchesSeedCatalog(edited)) {
-      id = `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-    }
-  }
-
   if (!id) {
     id = `tpl_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   }
+
+  const previous =
+    customIdx >= 0
+      ? customList[customIdx]
+      : customList.find((t) => templateModeloKey(t) === modeloNorm) || null;
 
   customList = customList.filter(
     (t) => templateModeloKey(t) !== modeloNorm || String(t.id) === String(id)
   );
 
-  const otaa = normalizeOtaaTemplateFields(payload);
+  const otaa = normalizeOtaaTemplateFields({
+    ...(previous && typeof previous === 'object' ? previous : {}),
+    ...payload,
+  });
   validateOtaaTemplateFields(otaa);
   const entry = {
     id,
@@ -791,7 +902,9 @@ export function saveDeviceTemplate(payload) {
     downlinks: normalizeDownlinks(payload.downlinks, productModelLabelFromTemplate(payload)),
     otaaAppEui: otaa.otaaAppEui,
     otaaAppKey: otaa.otaaAppKey,
-    telemetryLabels: normalizeTelemetryLabelHints(payload.telemetryLabels),
+    telemetryLabels: normalizeTelemetryLabelHints(
+      payload.telemetryLabels != null ? payload.telemetryLabels : previous?.telemetryLabels
+    ),
   };
 
   customIdx = customList.findIndex((t) => String(t.id) === String(entry.id));
