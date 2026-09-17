@@ -72,7 +72,7 @@ El bloque en aire `3534A337` corresponde al identificador sin cifrar **`04 70 01
    - **Válvula en aire:** cut on = `DDDD`, cut off = `EEEE` (AAAA/BBBB lógicos con +0x33).  
   - Al encolar, el servidor **sustituye el número de medidor** (12 hex) con `timewave_meterNo` / `meterNumber` del último uplink **o del historial reciente**, o `device_serial_hex` si es 12 hex. El **DevEUI no es el nº de medidor**. Si no hay n.º resoluble, el API responde `TIMEWAVE_METER_NO_MISSING` en lugar de mandar el ejemplo del PDF (el MCU ignoraría el comando).  
   - El **FPort** de downlink es el del último uplink Timewave (habitualmente **2**). No se usa el puerto 85 de Milesight.  
-  - Los HEX de la plantilla usan el ejemplo del PDF (`022025001955`); no hace falta editarlos a mano si el uplink ya trae `meterNumber`.  
+  - Los HEX de la plantilla usan el medidor de referencia `022026003618`; no hace falta editarlos a mano si el uplink ya trae `meterNumber`.  
   - Clase A a pilas: el comando queda en cola y se transmite en la **siguiente ventana RX** (tras el próximo uplink). Si el nodo pide LinkCheck, el LNS prioriza el comando de válvula/intervalo en esa ventana.
 
 ```bash

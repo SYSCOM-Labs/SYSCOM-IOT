@@ -29,6 +29,29 @@ test('buildIntervalCommand 60 y 1440 coinciden con el PDF (medidor ejemplo)', ()
   );
 });
 
+test('HEX de plantilla (medidor 022026003618) coinciden con válvula e intervalos operativos', () => {
+  assert.equal(
+    tw.buildValveCommand(REAL, false).toString('hex'),
+    'fefefefe6818360026200268140e35dd93373533333363636363eeee9a16'
+  );
+  assert.equal(
+    tw.buildValveCommand(REAL, true).toString('hex'),
+    'fefefefe6818360026200268140e35dd93373533333363636363dddd7816'
+  );
+  assert.equal(
+    tw.buildIntervalCommand(REAL, 1440).toString('hex'),
+    'fefefefe6818360026200268140e3534a33735333333636363637347df16'
+  );
+  assert.equal(
+    tw.buildIntervalCommand(REAL, 720).toString('hex'),
+    'fefefefe6818360026200268140e3534a3373533333363636363533ab216'
+  );
+  assert.equal(
+    tw.buildIntervalCommand(REAL, 60).toString('hex'),
+    'fefefefe6818360026200268140e3534a33735333333636363639333eb16'
+  );
+});
+
 test('rewriteDownlinkHex sustituye medidor y corrige válvula AAAA legado', () => {
   const legacyOpen = 'fefefefe6855190025200268140e35dd93373533333363636363aaaa3116';
   const rewritten = tw.rewriteDownlinkHex(legacyOpen, REAL);

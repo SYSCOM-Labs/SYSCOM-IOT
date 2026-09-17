@@ -846,13 +846,44 @@ function pruneStaleTimewaveWaterMeterTemplates(list) {
 }
 
 /**
- * TimeWave: la plantilla no publica downlinks; cada cuenta los define en el dispositivo.
+ * TimeWave: si el catálogo está vacío, con AAAA/BBBB o con el medidor de ejemplo del PDF,
+ * aplica los 5 HEX de referencia de la semilla.
  */
+function timewaveCatalogDownlinksNeedRefresh(downlinks) {
+  const list = Array.isArray(downlinks) ? downlinks : [];
+  const hexes = list
+    .map((d) =>
+      String(d?.hex || '')
+        .trim()
+        .replace(/\s/g, '')
+        .replace(/^0x/i, '')
+        .toLowerCase()
+    )
+    .filter(Boolean);
+  if (!hexes.length) return true;
+  return hexes.some((h) => h.includes('aaaa') || h.includes('bbbb') || h.includes('551900252002'));
+}
+
+function canonicalTimewaveSeedDownlinks() {
+  const seed = SEED_DEVICE_TEMPLATES.find(
+    (s) =>
+      String(s?.marca || '')
+        .trim()
+        .toLowerCase() === 'timewave' &&
+      String(s?.modelo || '')
+        .trim()
+        .toLowerCase() === 'water-meter-lora'
+  );
+  return normalizeDownlinks(seed?.downlinks);
+}
+
 function applyTimewaveManufacturerDownlinkLabels(list) {
+  const canonical = canonicalTimewaveSeedDownlinks();
   return (Array.isArray(list) ? list : []).map((t) => {
     if (!t) return t;
     if (!isTimewaveBrandLabel(t.marca, t.modelo)) return t;
-    return { ...t, downlinks: [] };
+    if (!timewaveCatalogDownlinksNeedRefresh(t.downlinks)) return t;
+    return { ...t, downlinks: canonical };
   });
 }
 
@@ -918,9 +949,7 @@ export function saveDeviceTemplate(payload) {
     channel: String(payload.channel || '').trim(),
     lorawanClass: normalizeTemplateLorawanClass(payload.lorawanClass),
     decoderScript: String(payload.decoderScript || ''),
-    downlinks: isTimewaveBrandLabel(payload.marca, payload.modelo)
-      ? []
-      : normalizeDownlinks(payload.downlinks, productModelLabelFromTemplate(payload)),
+    downlinks: normalizeDownlinks(payload.downlinks, productModelLabelFromTemplate(payload)),
     otaaAppEui: otaa.otaaAppEui,
     otaaAppKey: otaa.otaaAppKey,
     telemetryLabels: normalizeTelemetryLabelHints(

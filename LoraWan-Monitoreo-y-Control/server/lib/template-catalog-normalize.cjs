@@ -4,7 +4,8 @@ const { normalizeDeviceClass } = require('./resolve-downlink-class.cjs');
 const { remapWs501DownlinkList } = require('./ws501-downlink-legacy.cjs');
 const timewaveWaterMeter = require('../timewave-water-meter');
 
-const TIMEWAVE_EXAMPLE_METER = timewaveWaterMeter.TIMEWAVE_EXAMPLE_METER_NO;
+/** Medidor de referencia de la plantilla Water-Meter-LoRa (el n.º real se reescribe al encolar). */
+const TIMEWAVE_TEMPLATE_METER = '022026003618';
 
 function productModelFromTemplate(t) {
   const modelo = String(t?.modelo || '').trim();
@@ -64,28 +65,28 @@ function isTimewaveBrandLabel(...parts) {
   return parts.some((p) => /timewave/i.test(String(p || '')));
 }
 
-/** Los 5 comandos Timewave Water-Meter-LoRa (ficha fabricante: Cut off, Cut on, intervalos 24 h / 12 h / 1 h). */
+/** Los 5 comandos Timewave Water-Meter-LoRa (cerrar, abrir, intervalos 24 h / 12 h / 1 h). */
 function canonicalTimewaveLoraDownlinks() {
   return [
     {
-      name: 'Cerrar válvula (Cut off)',
-      hex: timewaveWaterMeter.buildValveCommand(TIMEWAVE_EXAMPLE_METER, false).toString('hex'),
+      name: 'Cerrar válvula',
+      hex: timewaveWaterMeter.buildValveCommand(TIMEWAVE_TEMPLATE_METER, false).toString('hex'),
     },
     {
-      name: 'Abrir válvula (Cut on)',
-      hex: timewaveWaterMeter.buildValveCommand(TIMEWAVE_EXAMPLE_METER, true).toString('hex'),
+      name: 'Abrir válvula',
+      hex: timewaveWaterMeter.buildValveCommand(TIMEWAVE_TEMPLATE_METER, true).toString('hex'),
     },
     {
-      name: 'Intervalo de subida 1440 min (24 h)',
-      hex: timewaveWaterMeter.buildIntervalCommand(TIMEWAVE_EXAMPLE_METER, 1440).toString('hex'),
+      name: 'Intervalo de 1440 min (24 h)',
+      hex: timewaveWaterMeter.buildIntervalCommand(TIMEWAVE_TEMPLATE_METER, 1440).toString('hex'),
     },
     {
-      name: 'Intervalo de subida 720 min (12 h)',
-      hex: timewaveWaterMeter.buildIntervalCommand(TIMEWAVE_EXAMPLE_METER, 720).toString('hex'),
+      name: 'Intervalo de 720 min (12 h)',
+      hex: timewaveWaterMeter.buildIntervalCommand(TIMEWAVE_TEMPLATE_METER, 720).toString('hex'),
     },
     {
-      name: 'Intervalo de subida 60 min (1 h)',
-      hex: timewaveWaterMeter.buildIntervalCommand(TIMEWAVE_EXAMPLE_METER, 60).toString('hex'),
+      name: 'Intervalo de 60 min (1 h)',
+      hex: timewaveWaterMeter.buildIntervalCommand(TIMEWAVE_TEMPLATE_METER, 60).toString('hex'),
     },
   ];
 }
@@ -98,25 +99,19 @@ function timewaveHexNorm(hex) {
     .toLowerCase();
 }
 
+/** Trama del PDF (`022025001955` → bytes 5–10 `551900252002`). */
+const TIMEWAVE_PDF_EXAMPLE_METER_FRAME = '551900252002';
+
 /**
- * Catálogos antiguos con AAAA/BBBB (ejemplo incorrecto). No usar esto para plantillas
- * con comandos distintos a la ficha TimeWave.
+ * Vacío, AAAA/BBBB legado, o HEX del medidor de ejemplo del PDF: hay que poner la ficha actual.
  */
-function timewaveLoraDownlinksLookStale(downlinks) {
-  const list = Array.isArray(downlinks) ? downlinks : [];
-  if (!list.length) return false;
+function timewaveCatalogDownlinksNeedRefresh(downlinks) {
+  const list = Array.isArray(downlinks) ? downlinks.filter((d) => timewaveHexNorm(d?.hex)) : [];
+  if (!list.length) return true;
   return list.some((d) => {
     const h = timewaveHexNorm(d?.hex);
-    return h.includes('aaaa') || h.includes('bbbb');
+    return h.includes('aaaa') || h.includes('bbbb') || h.includes(TIMEWAVE_PDF_EXAMPLE_METER_FRAME);
   });
-}
-
-/** HEX de ejemplo del PDF: sustituir nombres/orden antiguos por la ficha del fabricante. */
-function timewaveLoraDownlinksAreManufacturerSet(downlinks) {
-  const list = Array.isArray(downlinks) ? downlinks.filter((d) => timewaveHexNorm(d?.hex)) : [];
-  if (!list.length) return false;
-  const known = new Set(canonicalTimewaveLoraDownlinks().map((d) => timewaveHexNorm(d.hex)));
-  return list.every((d) => known.has(timewaveHexNorm(d.hex)));
 }
 
 /**
@@ -144,8 +139,12 @@ function sanitizeTemplateCatalogEntry(t) {
     pm
   );
   if (isTimewaveBrandTemplate({ marca, modelo })) {
-    /** TimeWave: la plantilla general no publica downlinks; cada cuenta los crea en el dispositivo. */
-    downlinks = [];
+    if (timewaveCatalogDownlinksNeedRefresh(downlinks)) {
+      downlinks = canonicalTimewaveLoraDownlinks().map((d) => ({
+        name: d.name,
+        hex: timewaveHexNorm(d.hex),
+      }));
+    }
   }
   return {
     ...t,

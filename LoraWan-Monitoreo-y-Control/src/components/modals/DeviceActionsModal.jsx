@@ -18,6 +18,7 @@ import {
   primeDeviceSharedPresetsFromDeviceRows,
   isTimewaveBrandDevice,
   cacheTimewaveAccountDownlinks,
+  findTemplateForDevice,
 } from '../../services/deviceTemplates';
 
 const EMPTY_ROW = { name: '', hex: '' };
@@ -101,15 +102,17 @@ const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
       if (!device?.deviceId || type !== 'downlink') return;
       const model = device.model || device.productModel || '';
       if (timewave) {
+        const fromTemplate = usefulDownlinks(findTemplateForDevice(device.deviceId, model)?.downlinks);
+        const fallback = fromTemplate.length > 0 ? fromTemplate.map((d) => ({ name: d.name || '', hex: d.hex || '' })) : [{ ...EMPTY_ROW }];
         try {
           const resp = await fetchDeviceAccountDownlinks(device.deviceId);
           const list = Array.isArray(resp?.downlinks) ? resp.downlinks : [];
           cacheTimewaveAccountDownlinks(device.deviceId, list);
-          setDownlinks(list.length > 0 ? list.map((d) => ({ name: d.name || '', hex: d.hex || '' })) : [{ ...EMPTY_ROW }]);
+          setDownlinks(list.length > 0 ? list.map((d) => ({ name: d.name || '', hex: d.hex || '' })) : fallback);
         } catch (e) {
           console.warn('[DeviceActionsModal] account-downlinks:', e?.message || e);
           const local = resolveDownlinksForDevice(device.deviceId, model);
-          setDownlinks(local.length > 0 ? local : [{ ...EMPTY_ROW }]);
+          setDownlinks(local.length > 0 ? local : fallback);
         }
         setSaveState('idle');
         setSaveError('');
@@ -271,8 +274,8 @@ const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
           <div className="modal-body">
             {timewave ? (
               <p className="downlink-timewave-hint">
-                TimeWave no hereda comandos de la plantilla. Cree HEX para este dispositivo; se guardan solo en
-                su cuenta y no cambian otros equipos ni el catálogo.
+                Si aún no hay comandos en esta cuenta, se muestran los HEX de la plantilla. Al guardar quedan
+                solo en su cuenta y no cambian el catálogo ni otros equipos.
               </p>
             ) : null}
             <div className="downlink-list">
