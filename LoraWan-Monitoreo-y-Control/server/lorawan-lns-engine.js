@@ -1467,7 +1467,22 @@ function createLorawanLnsEngine(ctx) {
         fromUplinkFlush: true,
       });
       store.lnsDeleteDeferredAppDownlinkById(row.id);
-      console.log('[LNS] Downlink diferido enviado tras uplink →', devEui, 'fPort', flushFPort, 'cola id', row.id);
+      if (row.userId && String(row.userId) !== String(userId)) {
+        console.log(
+          '[LNS] Downlink diferido enviado tras uplink →',
+          devEui,
+          'fPort',
+          flushFPort,
+          'cola id',
+          row.id,
+          'encolado_por',
+          row.userId,
+          'sesión',
+          userId
+        );
+      } else {
+        console.log('[LNS] Downlink diferido enviado tras uplink →', devEui, 'fPort', flushFPort, 'cola id', row.id);
+      }
       if (typeof store.markDownlinkLogFlushedByPendingId === 'function') {
         try {
           store.markDownlinkLogFlushedByPendingId(userId, row.id, {

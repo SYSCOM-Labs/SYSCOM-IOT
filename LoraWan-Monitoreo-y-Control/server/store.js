@@ -1147,6 +1147,23 @@ class Store {
         WHERE user_id = ? AND dev_eui = ?
         ORDER BY id ASC LIMIT 1
       `),
+      lnsDefDlPeekOldestByDev: this.db.prepare(`
+        SELECT id, user_id, dev_eui, f_port, payload_hex, confirmed, priority, delay_ms, gateway_eui, device_class, created_at
+        FROM lorawan_lns_deferred_app_dl
+        WHERE dev_eui = ?
+        ORDER BY id ASC LIMIT 1
+      `),
+      lnsDefDlCountByDev: this.db.prepare(`
+        SELECT COUNT(*) AS n FROM lorawan_lns_deferred_app_dl WHERE dev_eui = ?
+      `),
+      lnsSessionDeleteOtherUsersForDev: this.db.prepare(
+        'DELETE FROM lorawan_lns_sessions WHERE dev_eui = ? AND user_id != ?'
+      ),
+      lnsSessionLatestUserForDev: this.db.prepare(`
+        SELECT user_id FROM lorawan_lns_sessions
+        WHERE dev_eui = ?
+        ORDER BY datetime(updated_at) DESC LIMIT 1
+      `),
       lnsDefDlDeleteById: this.db.prepare('DELETE FROM lorawan_lns_deferred_app_dl WHERE id = ?'),
       lnsDefDlDeleteForDev: this.db.prepare(
         'DELETE FROM lorawan_lns_deferred_app_dl WHERE user_id = ? AND dev_eui = ?'
@@ -2925,12 +2942,34 @@ class Store {
    * registró el join bajo esa cuenta).
    * @param {{ allowGlobalSessionFallback?: boolean }} [opts] solo superadmin: última sesión con este DevEUI en el servidor.
    */
+  lnsLatestSessionUserIdForDevEui(devEuiNorm16) {
+    const d = String(devEuiNorm16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (d.length !== 16) return null;
+    try {
+      const row = this.st.lnsSessionLatestUserForDev.get(d);
+      return row && row.user_id ? String(row.user_id) : null;
+    } catch {
+      return null;
+    }
+  }
+
   lnsResolveSessionUserIdForDevice(deviceId, requestingUserId, devEuiNorm16, opts = {}) {
     const d = String(devEuiNorm16 || '')
       .replace(/[^0-9a-fA-F]/g, '')
       .toLowerCase();
     const req = String(requestingUserId || '').trim();
     if (d.length !== 16) return req;
+    /**
+     * Superadmin: no usar una sesión propia obsoleta (p. ej. DevAddr anterior) si el último OTAA
+     * quedó en otra cuenta. Esa fila deja el HEX en `lorawan_lns_deferred_app_dl` bajo SYSCOM y el
+     * flush del uplink (dueño de la sesión viva) nunca lo ve.
+     */
+    if (opts.allowGlobalSessionFallback) {
+      const latest = this.lnsLatestSessionUserIdForDevEui(d);
+      if (latest) return latest;
+    }
     if (this.lnsGetSessionByDevEui(req, d)) return req;
     const did = String(deviceId || '').trim();
     if (opts.allowGlobalSessionFallback && this.isSuperadminUserId(req)) {
@@ -2943,18 +2982,6 @@ class Store {
       const u = String(uid).trim();
       if (u === req) continue;
       if (this.lnsGetSessionByDevEui(u, d)) return u;
-    }
-    if (opts.allowGlobalSessionFallback) {
-      try {
-        const row = this.db
-          .prepare(
-            `SELECT user_id FROM lorawan_lns_sessions WHERE dev_eui = ? ORDER BY datetime(updated_at) DESC LIMIT 1`
-          )
-          .get(d);
-        if (row && row.user_id) return String(row.user_id);
-      } catch {
-        /* ignore */
-      }
     }
     return req;
   }
@@ -2987,6 +3014,17 @@ class Store {
     const deviceClass = cls === 'B' || cls === 'C' ? cls : 'A';
     const rxDelaySec =
       row.rxDelaySec != null ? Math.max(1, Math.min(15, Number(row.rxDelaySec))) : 1;
+    const keepUid = String(row.userId || '').trim();
+    const joinDevEui = String(row.devEui || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (keepUid && joinDevEui.length === 16 && this.st.lnsSessionDeleteOtherUsersForDev) {
+      try {
+        this.st.lnsSessionDeleteOtherUsersForDev.run(joinDevEui, keepUid);
+      } catch {
+        /* ignore */
+      }
+    }
     this.st.lnsUpsertSession.run(
       row.userId,
       row.devEui,
@@ -3742,13 +3780,7 @@ class Store {
     return { ok: true, id, queueLength: count + 1 };
   }
 
-  lnsPeekOldestDeferredAppDownlink(userId, devEuiNorm16) {
-    const uid = String(userId || '').trim();
-    const deui = String(devEuiNorm16 || '')
-      .replace(/[^0-9a-fA-F]/g, '')
-      .toLowerCase();
-    if (!uid || deui.length !== 16) return null;
-    const r = this.st.lnsDefDlPeekOldest.get(uid, deui);
+  _mapDeferredAppDlRow(r) {
     if (!r) return null;
     return {
       id: Number(r.id),
@@ -3767,12 +3799,35 @@ class Store {
     };
   }
 
+  lnsPeekOldestDeferredAppDownlink(userId, devEuiNorm16) {
+    const uid = String(userId || '').trim();
+    const deui = String(devEuiNorm16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (deui.length !== 16) return null;
+    if (uid) {
+      const r = this.st.lnsDefDlPeekOldest.get(uid, deui);
+      if (r) return this._mapDeferredAppDlRow(r);
+    }
+    /** Clase A: el HEX puede haberse encolado bajo SYSCOM y el uplink llegar con sesión de otra cuenta. */
+    if (this.st.lnsDefDlPeekOldestByDev) {
+      return this._mapDeferredAppDlRow(this.st.lnsDefDlPeekOldestByDev.get(deui));
+    }
+    return null;
+  }
+
   lnsCountDeferredAppDownlinks(userId, devEuiNorm16) {
     const uid = String(userId || '').trim();
     const deui = String(devEuiNorm16 || '')
       .replace(/[^0-9a-fA-F]/g, '')
       .toLowerCase();
-    if (!uid || deui.length !== 16) return 0;
+    if (deui.length !== 16) return 0;
+    if (this.st.lnsDefDlCountByDev) {
+      const rDev = this.st.lnsDefDlCountByDev.get(deui);
+      const nDev = rDev && rDev.n != null ? Number(rDev.n) : 0;
+      if (nDev > 0) return nDev;
+    }
+    if (!uid) return 0;
     const r = this.st.lnsDefDlCount.get(uid, deui);
     return r && r.n != null ? Number(r.n) : 0;
   }
