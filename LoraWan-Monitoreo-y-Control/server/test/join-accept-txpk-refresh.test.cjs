@@ -140,3 +140,13 @@ test('Join-Accept diferido (join_session_json, sin sesión en BD)', () => {
   assert.equal(out.txpk.imme, false);
   assert.equal(Number(out.txpk.tmst), 7_000_000);
 });
+
+test('US915 RX1: mismo SF y BW500 (RP002 Rx1DROffset 0)', () => {
+  const { getUs915Rx1Datr, getUs915Rx1Freq } = require('../lorawan-lns-engine');
+  assert.equal(getUs915Rx1Datr('SF10BW125'), 'SF10BW500');
+  assert.equal(getUs915Rx1Datr('SF9BW125'), 'SF9BW500');
+  assert.equal(getUs915Rx1Datr('SF8BW125'), 'SF8BW500');
+  assert.equal(getUs915Rx1Datr('SF7BW125'), 'SF7BW500');
+  assert.equal(getUs915Rx1Datr('SF8BW500'), 'SF7BW500');
+  assert.equal(getUs915Rx1Freq(904.3), 924.5);
+});

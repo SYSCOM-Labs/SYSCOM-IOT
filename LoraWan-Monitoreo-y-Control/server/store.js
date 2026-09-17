@@ -1263,6 +1263,11 @@ class Store {
          WHERE user_id = ? AND json_extract(body_json, '$.pendingId') = ?
          ORDER BY created_at DESC LIMIT 8`
       ),
+      dlListByPendingIdAny: this.db.prepare(
+        `SELECT id, body_json FROM downlink_log
+         WHERE json_extract(body_json, '$.pendingId') = ?
+         ORDER BY created_at DESC LIMIT 16`
+      ),
       dlInsert: this.db.prepare(
         'INSERT INTO downlink_log (id, user_id, created_at, body_json) VALUES (?, ?, ?, ?)'
       ),
@@ -4548,6 +4553,13 @@ class Store {
       rows = this.st.dlListByPendingId.all(uid, pid);
     } catch {
       rows = [];
+    }
+    if (!rows.length) {
+      try {
+        rows = this.st.dlListByPendingIdAny.all(pid);
+      } catch {
+        rows = [];
+      }
     }
     if (!rows.length) {
       try {

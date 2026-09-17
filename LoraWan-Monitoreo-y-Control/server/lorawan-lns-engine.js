@@ -329,16 +329,16 @@ function getUs915Rx1Freq(upFreqMhz) {
 }
 
 /**
- * Mapeo de DataRate RX1 para US915.
- * Uplink DR0..DR4 -> Downlink DR10..DR13 (500kHz).
+ * Mapeo de DataRate RX1 para US915 (RP002, Rx1DROffset = 0).
+ * Subida DR0..DR4 → bajada DR10..DR13 en 500 kHz (mismo SF, BW125→BW500; DR4 SF8/500 → SF7/500).
  */
 function getUs915Rx1Datr(upDatr) {
   const drMap = {
-    SF10BW125: 'SF10BW500', // DR0 -> DR10
-    SF9BW125: 'SF11BW500',  // DR1 -> DR11
-    SF8BW125: 'SF12BW500',  // DR2 -> DR12
-    SF7BW125: 'SF13BW500',  // DR3 -> DR13
-    SF8BW500: 'SF13BW500',  // DR4 -> DR13
+    SF10BW125: 'SF10BW500', // DR0 → DR10
+    SF9BW125: 'SF9BW500', // DR1 → DR11
+    SF8BW125: 'SF8BW500', // DR2 → DR12
+    SF7BW125: 'SF7BW500', // DR3 → DR13
+    SF8BW500: 'SF7BW500', // DR4 → DR13
   };
   return drMap[upDatr] || 'SF12BW500';
 }
@@ -1333,7 +1333,8 @@ function createLorawanLnsEngine(ctx) {
       typeof store.lnsPeekOldestDeferredAppDownlink === 'function' &&
       Boolean(store.lnsPeekOldestDeferredAppDownlink(ownerUserId, devEui));
     if (hasDeferredAppDl) {
-      tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false);
+      const flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false);
+      if (flushed && flushed.macAckIncluded) session.pendingMacAck = false;
     }
 
     try {
@@ -1404,21 +1405,21 @@ function createLorawanLnsEngine(ctx) {
    * (sin recorrer historial: eso retrasaba RX1 y el comando de válvula nunca salía).
    */
   function tryFlushOneDeferredAppDownlinkAfterUplink(userId, devEui, skipBecauseLinkCheckQueued) {
-    if (skipBecauseLinkCheckQueued) return;
-    if (typeof store.lnsPeekOldestDeferredAppDownlink !== 'function') return;
+    if (skipBecauseLinkCheckQueued) return null;
+    if (typeof store.lnsPeekOldestDeferredAppDownlink !== 'function') return null;
     const row = store.lnsPeekOldestDeferredAppDownlink(userId, devEui);
-    if (!row) return;
+    if (!row) return null;
     let buf;
     try {
       buf = Buffer.from(row.payloadHex, 'hex');
     } catch {
       store.lnsDeleteDeferredAppDownlinkById(row.id);
       console.warn('[LNS] deferred app downlink: hex inválido, descartado id=', row.id);
-      return;
+      return null;
     }
     if (!buf.length) {
       store.lnsDeleteDeferredAppDownlinkById(row.id);
-      return;
+      return null;
     }
     let flushBuf = buf;
     let flushFPort = row.fPort;
@@ -1455,7 +1456,7 @@ function createLorawanLnsEngine(ctx) {
         ? store.lnsCountDeferredAppDownlinks(userId, devEui)
         : 1;
     try {
-      enqueueAppDownlink(userId, devEui, flushFPort, flushBuf, {
+      const sent = enqueueAppDownlink(userId, devEui, flushFPort, flushBuf, {
         confirmed: row.confirmed,
         delayMs: row.delayMs,
         priority: row.priority,
@@ -1463,6 +1464,7 @@ function createLorawanLnsEngine(ctx) {
         gatewayEui: row.gatewayEui && row.gatewayEui.length === 16 ? row.gatewayEui : undefined,
         skipTxAckTrack: false,
         fPending: queuedCount > 1,
+        fromUplinkFlush: true,
       });
       store.lnsDeleteDeferredAppDownlinkById(row.id);
       console.log('[LNS] Downlink diferido enviado tras uplink →', devEui, 'fPort', flushFPort, 'cola id', row.id);
@@ -1491,6 +1493,7 @@ function createLorawanLnsEngine(ctx) {
       } catch (e2) {
         console.warn('[LNS] UI event deferred flush:', e2.message);
       }
+      return sent || { ok: true };
     } catch (e) {
       const c = e && e.code ? String(e.code) : '';
       if (
@@ -1508,9 +1511,10 @@ function createLorawanLnsEngine(ctx) {
           'id=',
           row.id
         );
-        return;
+        return null;
       }
       console.warn('[LNS] deferred flush falló, se conserva en cola:', e.message, c, 'id=', row.id);
+      return null;
     }
   }
 
@@ -1599,7 +1603,7 @@ function createLorawanLnsEngine(ctx) {
   }
 
   /**
-   * @param {{ delayMs?: number, confirmed?: boolean, priority?: number, skipTxAckTrack?: boolean, deviceClass?: string, gatewayEui?: string, fPending?: boolean }} [opts]
+   * @param {{ delayMs?: number, confirmed?: boolean, priority?: number, skipTxAckTrack?: boolean, deviceClass?: string, gatewayEui?: string, fPending?: boolean, fromUplinkFlush?: boolean }} [opts]
    */
   function enqueueAppDownlink(userId, devEuiNorm16, fPort, payloadBuf, opts) {
     const opt = opts || {};
@@ -1742,23 +1746,6 @@ function createLorawanLnsEngine(ctx) {
       }
     } else {
       useImme = false;
-      const lastUplinkWall = session.lastUplinkWallMs;
-      const now = Date.now();
-      const elapsed = lastUplinkWall == null ? Number.POSITIVE_INFINITY : now - lastUplinkWall;
-      const maxAgeMs = classARx1WindowMs();
-      const stillOpen = classARxStillOpen(elapsed, rxDelaySec, {
-        windowMode: classARxWindowMode(),
-        rx2AfterRx1Sec: getRx2AfterRx1Sec(),
-        slackMs: envInt('SYSCOM_LNS_CLASS_A_TX_SLACK_MS', 300),
-      });
-      if (lastUplinkWall == null || elapsed > maxAgeMs || !stillOpen) {
-        const err = new Error(
-          'Downlink clase A: no hay ventana RX abierta. El dispositivo solo recibe 1–5 s después de un uplink. ' +
-            'El comando se encola y se transmitirá en el próximo despertar (no envíe el downlink después de forzar la subida).'
-        );
-        err.code = 'CLASS_A_RX_WINDOW_CLOSED';
-        throw err;
-      }
       const tmstOk =
         session.lastRxTmst != null &&
         Number.isFinite(Number(session.lastRxTmst)) &&
@@ -1770,6 +1757,26 @@ function createLorawanLnsEngine(ctx) {
         );
         err.code = 'CLASS_A_MISSING_GATEWAY_TMST';
         throw err;
+      }
+      /** Tras un uplink acabamos de fijar tmst; no revalidar el reloj de pared (SQLite/reload podía cerrar RX1 y dejar la válvula en cola). */
+      if (!opt.fromUplinkFlush) {
+        const lastUplinkWall = session.lastUplinkWallMs;
+        const now = Date.now();
+        const elapsed = lastUplinkWall == null ? Number.POSITIVE_INFINITY : now - lastUplinkWall;
+        const maxAgeMs = classARx1WindowMs();
+        const stillOpen = classARxStillOpen(elapsed, rxDelaySec, {
+          windowMode: classARxWindowMode(),
+          rx2AfterRx1Sec: getRx2AfterRx1Sec(),
+          slackMs: envInt('SYSCOM_LNS_CLASS_A_TX_SLACK_MS', 300),
+        });
+        if (lastUplinkWall == null || elapsed > maxAgeMs || !stillOpen) {
+          const err = new Error(
+            'Downlink clase A: no hay ventana RX abierta. El dispositivo solo recibe 1–5 s después de un uplink. ' +
+              'El comando se encola y se transmitirá en el próximo despertar (no envíe el downlink después de forzar la subida).'
+          );
+          err.code = 'CLASS_A_RX_WINDOW_CLOSED';
+          throw err;
+        }
       }
       classAWindow = classARxWindowMode();
     }
@@ -2156,4 +2163,4 @@ function createLorawanLnsEngine(ctx) {
   };
 }
 
-module.exports = { createLorawanLnsEngine };
+module.exports = { createLorawanLnsEngine, getUs915Rx1Datr, getUs915Rx1Freq };
