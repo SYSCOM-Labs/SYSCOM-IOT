@@ -487,6 +487,9 @@ export const sendDownlink = async (deviceId, hex, _credentials, _token, opts = {
         /** Medidores clase A: permite respuesta 202 y cola SQLite si la ventana RX ya cerró (anula SYSCOM_LNS_DEFER_APP_DOWNLINK=0). */
         deferUntilUplink: opts?.deferUntilUplink !== false,
       };
+      if (opts?.replaceQueued === true) {
+        body.replaceQueued = true;
+      }
       if (opts?.timewaveMeterNo != null && String(opts.timewaveMeterNo).trim() !== '') {
         body.timewaveMeterNo = String(opts.timewaveMeterNo).trim();
       }
@@ -625,6 +628,18 @@ export const deleteLnsSession = async (deviceId) => {
   );
   if (response.data?.status !== 'Success') {
     throw new Error(response.data?.errMsg || 'No se pudo borrar la sesión LNS');
+  }
+  return response.data;
+};
+
+/** Vacía HEX clase A encolados y PULL_RESP de aplicación de este dispositivo. */
+export const deleteLnsDeferredDownlinks = async (deviceId) => {
+  const response = await axios.delete(
+    `${SERVER_API()}/devices/${encodeURIComponent(deviceId)}/lns/deferred-downlinks`,
+    { headers: authHeaders() }
+  );
+  if (response.data?.status !== 'Success') {
+    throw new Error(response.data?.errMsg || 'No se pudo vaciar la cola de downlinks');
   }
   return response.data;
 };

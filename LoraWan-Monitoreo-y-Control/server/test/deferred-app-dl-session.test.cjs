@@ -140,3 +140,69 @@ test('superadmin encola contra la sesión OTAA más reciente, no contra DevAddr 
     unlinkDb(file);
   }
 });
+
+test('purgeQueuedAppDownlinksForDevice borra HEX diferido y marca el historial', () => {
+  const file = tmpDb();
+  const store = new Store(file);
+  try {
+    seedUser(store, 'syscom', 'superadmin');
+    const ins = store.lnsInsertDeferredAppDownlink('syscom', DEV_EUI, 2, HEX, {});
+    store.appendDownlinkLog('syscom', {
+      deviceId: DEV_EUI,
+      devEUI: DEV_EUI,
+      deferred: true,
+      pendingId: ins.id,
+      payloadHex: HEX,
+    });
+    const r = store.purgeQueuedAppDownlinksForDevice(DEV_EUI, DEV_EUI);
+    assert.equal(r.deferredRemoved, 1);
+    assert.equal(store.lnsPeekOldestDeferredAppDownlink('syscom', DEV_EUI), null);
+    assert.equal(r.logsCancelled, 1);
+  } finally {
+    store.close();
+    unlinkDb(file);
+  }
+});
+
+test('Join-Accept caducado se descarta y no tapa el HEX de aplicación', () => {
+  const file = tmpDb();
+  const store = new Store(file);
+  try {
+    seedUser(store, 'syscom', 'superadmin');
+    store.lnsEnqueuePullResp(
+      'syscom',
+      '24e124fffefaf79f',
+      { txpk: { imme: false }, _syscomLnsKind: 'join_accept' },
+      0,
+      255,
+      { devEui: DEV_EUI }
+    );
+    store.db.prepare('UPDATE lorawan_lns_downlink SET created_at = ?').run(Date.now() - 60_000);
+    assert.equal(store.lnsDropStalePendingJoinAccepts(8000) > 0, true);
+    const left = store.db.prepare('SELECT COUNT(*) AS n FROM lorawan_lns_downlink WHERE status = ?').get('pending').n;
+    assert.equal(Number(left), 0);
+  } finally {
+    store.close();
+    unlinkDb(file);
+  }
+});
+
+test('uplink de datos cancela Join-Accept pendiente del mismo DevEUI', () => {
+  const file = tmpDb();
+  const store = new Store(file);
+  try {
+    seedUser(store, 'syscom', 'superadmin');
+    store.lnsEnqueuePullResp(
+      'syscom',
+      '24e124fffefaf79f',
+      { txpk: { imme: false }, _syscomLnsKind: 'join_accept' },
+      0,
+      255,
+      { devEui: DEV_EUI }
+    );
+    assert.equal(store.lnsCancelPendingJoinAcceptsForDevEui(DEV_EUI) > 0, true);
+  } finally {
+    store.close();
+    unlinkDb(file);
+  }
+});

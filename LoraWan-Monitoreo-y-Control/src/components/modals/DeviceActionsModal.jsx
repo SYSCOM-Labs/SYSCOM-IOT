@@ -1,12 +1,13 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import './DeviceActionsModal.css';
-import { X, Send, Save, Trash2, Plus } from 'lucide-react';
+import { X, Send, Save, Trash2, Plus, ListX } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import {
   fetchDeviceDownlinkPresets,
   putDeviceDownlinkPresets,
   fetchDeviceAccountDownlinks,
   putDeviceAccountDownlinks,
+  deleteLnsDeferredDownlinks,
 } from '../../services/api';
 import {
   resolveDownlinksForDevice,
@@ -210,6 +211,8 @@ const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
 
   const [sendingRow, setSendingRow] = useState(null);
   const [sentFlashRow, setSentFlashRow] = useState(null);
+  const [clearingQueue, setClearingQueue] = useState(false);
+  const [clearQueueMsg, setClearQueueMsg] = useState('');
 
   const handleSendRow = async (index, hex, name) => {
     const payload = String(hex || '').trim();
@@ -223,6 +226,25 @@ const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
       }, 520);
     } finally {
       setSendingRow(null);
+    }
+  };
+
+  const handleClearQueuedDownlinks = async () => {
+    if (!device?.deviceId || clearingQueue || sendingRow !== null) return;
+    setClearingQueue(true);
+    setClearQueueMsg('');
+    try {
+      const r = await deleteLnsDeferredDownlinks(device.deviceId);
+      const n = Number(r?.deferredRemoved || 0) + Number(r?.pendingRemoved || 0);
+      setClearQueueMsg(
+        n > 0
+          ? `Cola vaciada (${n} comando${n === 1 ? '' : 's'}). Ya puede enviar uno nuevo.`
+          : 'No había comandos encolados. Ya puede enviar uno nuevo.'
+      );
+    } catch (e) {
+      setClearQueueMsg(e?.response?.data?.errMsg || e?.message || 'No se pudo vaciar la cola.');
+    } finally {
+      setClearingQueue(false);
     }
   };
 
@@ -335,6 +357,15 @@ const DeviceActionsModal = ({ type, device, onClose, onSave, onSend }) => {
             <button className="btn btn-secondary add-btn" onClick={addDownlinkRow}>
               <Plus size={16} /> Añadir Downlink
             </button>
+            <button
+              type="button"
+              className="btn btn-secondary add-btn"
+              onClick={handleClearQueuedDownlinks}
+              disabled={clearingQueue || sendingRow !== null}
+            >
+              <ListX size={16} /> {clearingQueue ? 'Vaciando…' : 'Vaciar cola encolada'}
+            </button>
+            {clearQueueMsg ? <p className="downlink-timewave-hint">{clearQueueMsg}</p> : null}
             {timewave && saveError ? <p className="downlink-timewave-error">{saveError}</p> : null}
             
             <div className="modal-footer">

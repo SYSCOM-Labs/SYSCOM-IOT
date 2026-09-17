@@ -1324,6 +1324,17 @@ function createLorawanLnsEngine(ctx) {
 
     store.lnsUpdateSessionAfterUplink(devEui, session);
 
+    if (typeof store.lnsCancelPendingJoinAcceptsForDevEui === 'function') {
+      try {
+        const droppedJa = store.lnsCancelPendingJoinAcceptsForDevEui(devEui);
+        if (droppedJa > 0) {
+          console.log('[LNS] Join-Accept pendiente descartado (uplink de datos) →', devEui, droppedJa);
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
     /**
      * Clase A: RX1/RX2 se mide en 1–5 s desde el uplink. Hay que programar el PULL_RESP
      * **antes** del decoder/SQLite; si se espera a `saveIngestEntry`, `classARxStillOpen`
@@ -2133,6 +2144,11 @@ function createLorawanLnsEngine(ctx) {
         }
       }
       if (!omitCodr500) tx.codr = r2.codr;
+    } else if (cls === 'A') {
+      /**
+       * No pasar a `imme` (el medidor clase A no está escuchando en continuo).
+       * Si el tmst ya es viejo el GW marcará TOO_LATE; reencolar al próximo uplink es correcto.
+       */
     } else {
       tx.imme = true;
       delete tx.tmst;

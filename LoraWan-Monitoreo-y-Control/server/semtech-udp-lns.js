@@ -135,6 +135,16 @@ function lookupPullPeer(pullPeers, keys) {
 function dequeueAndSendPullResps(opts) {
   const { socket, store, gwNorm, rinfo, refreshPullRespJson } = opts;
   if (!gwNorm || !rinfo || !socket || typeof store.lnsDequeuePullResp !== 'function') return 0;
+  if (typeof store.lnsDropStalePendingJoinAccepts === 'function') {
+    try {
+      const nJa = store.lnsDropStalePendingJoinAccepts();
+      if (nJa > 0) {
+        console.warn('[LNS-UDP] Join-Accept caducados descartados (evitar TOO_LATE y bloquear RX1):', nJa, 'gw', gwNorm);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
   const burst = pullBurstLimit();
   const reuse = Boolean(opts.reuseTokenForBurst);
   let sent = 0;

@@ -1097,6 +1097,18 @@ class Store {
         AND lower(replace(replace(replace(tx_dev_eui,':',''),'-',''),' ','')) = ?
         AND (priority >= 255 OR (join_session_json IS NOT NULL AND trim(join_session_json) != ''))
       `),
+      lnsDlCancelPendingJoinForDevAny: this.db.prepare(`
+        DELETE FROM lorawan_lns_downlink
+        WHERE status = 'pending'
+        AND lower(replace(replace(replace(tx_dev_eui,':',''),'-',''),' ','')) = ?
+        AND (priority >= 255 OR (join_session_json IS NOT NULL AND trim(join_session_json) != ''))
+      `),
+      lnsDlDropStalePendingJoins: this.db.prepare(`
+        DELETE FROM lorawan_lns_downlink
+        WHERE status = 'pending'
+        AND created_at < ?
+        AND (priority >= 255 OR (join_session_json IS NOT NULL AND trim(join_session_json) != ''))
+      `),
       lnsTxInflightInsert: this.db.prepare(`
         INSERT INTO lorawan_lns_tx_inflight (gateway_eui, token_h, token_l, downlink_id, created_at)
         VALUES (?, ?, ?, ?, ?)
@@ -1168,6 +1180,7 @@ class Store {
       lnsDefDlDeleteForDev: this.db.prepare(
         'DELETE FROM lorawan_lns_deferred_app_dl WHERE user_id = ? AND dev_eui = ?'
       ),
+      lnsDefDlDeleteByDevEui: this.db.prepare('DELETE FROM lorawan_lns_deferred_app_dl WHERE dev_eui = ?'),
       lnsDefDlPruneOldForDev: this.db.prepare(
         'DELETE FROM lorawan_lns_deferred_app_dl WHERE user_id = ? AND dev_eui = ? AND created_at < ?'
       ),
@@ -3143,6 +3156,31 @@ class Store {
     return Number(info.changes || 0);
   }
 
+  /**
+   * Join-Accept ya no sirve si el nodo está mandando datos (sesión viva).
+   * Un JA pendiente (prioridad 255) se come el único PULL_RESP del gateway y el HEX de válvula llega TOO_LATE.
+   */
+  lnsCancelPendingJoinAcceptsForDevEui(devEuiNorm16) {
+    const deui = String(devEuiNorm16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (deui.length !== 16 || !this.st.lnsDlCancelPendingJoinForDevAny) return 0;
+    const info = this.st.lnsDlCancelPendingJoinForDevAny.run(deui);
+    return Number(info.changes || 0);
+  }
+
+  /**
+   * Join-Accept cuya ventana RX1 (~5 s) ya cerró: el concentrador respondería TOO_LATE
+   * y, con PULL_BURST=1, bloquearía el downlink de aplicación de otros nodos en el mismo GW.
+   */
+  lnsDropStalePendingJoinAccepts(maxAgeMs) {
+    const age = Number(maxAgeMs);
+    const cut = Date.now() - (Number.isFinite(age) && age >= 1000 ? age : 8000);
+    if (!this.st.lnsDlDropStalePendingJoins) return 0;
+    const info = this.st.lnsDlDropStalePendingJoins.run(cut);
+    return Number(info.changes || 0);
+  }
+
   lnsEnqueuePullResp(userId, gatewayEuiNorm16, pullRespObj, notBeforeMs, priority, txMeta) {
     const gwKey = normalizeLnsGatewayEuiKey(gatewayEuiNorm16);
     const nb = notBeforeMs != null ? Number(notBeforeMs) : 0;
@@ -3849,6 +3887,18 @@ class Store {
     return Number(info.changes || 0);
   }
 
+  lnsDeleteAllDeferredAppDownlinksForDevEui(devEuiNorm16) {
+    const deui = String(devEuiNorm16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (deui.length !== 16) return 0;
+    if (this.st.lnsDefDlDeleteByDevEui) {
+      const info = this.st.lnsDefDlDeleteByDevEui.run(deui);
+      return Number(info.changes || 0);
+    }
+    return 0;
+  }
+
   /**
    * Borra downlinks de aplicación pendientes (PULL_RESP aún no confirmados) para este DevEUI.
    * Útil antes de reajustar `fcnt_down` si la cola quedó bloqueada o desincronizada.
@@ -3874,6 +3924,102 @@ class Store {
     this.db.prepare(`DELETE FROM lorawan_lns_tx_inflight WHERE downlink_id IN (${ph})`).run(...ids);
     const info = this.db.prepare(`DELETE FROM lorawan_lns_downlink WHERE id IN (${ph})`).run(...ids);
     return Number(info.changes || 0);
+  }
+
+  lnsDeletePendingAppDownlinksForDevEui(devEuiNorm16) {
+    const d = String(devEuiNorm16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (d.length !== 16) return 0;
+    const rows = this.db
+      .prepare(
+        `SELECT id FROM lorawan_lns_downlink
+         WHERE lower(replace(replace(replace(ifnull(tx_dev_eui,''),':',''),'-',''),' ','')) = ?
+           AND status IN ('pending','await_tx_ack')
+           AND (join_session_json IS NULL OR trim(join_session_json) = '')`
+      )
+      .all(d);
+    const ids = rows.map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
+    if (!ids.length) return 0;
+    const ph = ids.map(() => '?').join(',');
+    this.db.prepare(`DELETE FROM lorawan_lns_tx_inflight WHERE downlink_id IN (${ph})`).run(...ids);
+    const info = this.db.prepare(`DELETE FROM lorawan_lns_downlink WHERE id IN (${ph})`).run(...ids);
+    return Number(info.changes || 0);
+  }
+
+  /**
+   * Marca en historial los downlinks aún `deferred` de este dispositivo como cancelados.
+   * @returns {number} filas actualizadas
+   */
+  markDownlinkLogsCancelledForDevice(deviceId, devEuiNorm16) {
+    const did = String(deviceId || '').trim();
+    const deui = String(devEuiNorm16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (!did && deui.length !== 16) return 0;
+    let rows = [];
+    try {
+      rows = this.db
+        .prepare(
+          `SELECT id, body_json FROM downlink_log
+           WHERE json_extract(body_json, '$.deferred') IN (1, 'true', true)
+           ORDER BY created_at DESC
+           LIMIT 400`
+        )
+        .all();
+    } catch {
+      return 0;
+    }
+    const cancelledAt = new Date().toISOString();
+    let n = 0;
+    for (const r of rows) {
+      let body = {};
+      try {
+        body = JSON.parse(r.body_json || '{}');
+      } catch {
+        continue;
+      }
+      if (body.flushed === true || body.cancelled === true) continue;
+      const bDid = String(body.deviceId || '').trim();
+      const bEui = String(body.devEUI || body.devEui || '')
+        .replace(/[^0-9a-fA-F]/g, '')
+        .toLowerCase();
+      if (did && bDid === did) {
+        /* match */
+      } else if (deui.length === 16 && bEui === deui) {
+        /* match */
+      } else {
+        continue;
+      }
+      const next = {
+        ...body,
+        deferred: false,
+        cancelled: true,
+        cancelledAt,
+      };
+      this.st.dlUpdateBody.run(JSON.stringify(next), r.id);
+      n += 1;
+    }
+    return n;
+  }
+
+  /**
+   * Vacía HEX diferidos + PULL_RESP de aplicación + marca historial, para reenviar un comando limpio.
+   */
+  purgeQueuedAppDownlinksForDevice(deviceId, devEuiNorm16) {
+    const deui = String(devEuiNorm16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    const deferredRemoved =
+      deui.length === 16 && typeof this.lnsDeleteAllDeferredAppDownlinksForDevEui === 'function'
+        ? this.lnsDeleteAllDeferredAppDownlinksForDevEui(deui)
+        : 0;
+    const pendingRemoved =
+      deui.length === 16 && typeof this.lnsDeletePendingAppDownlinksForDevEui === 'function'
+        ? this.lnsDeletePendingAppDownlinksForDevEui(deui)
+        : 0;
+    const logsCancelled = this.markDownlinkLogsCancelledForDevice(deviceId, deui);
+    return { deferredRemoved, pendingRemoved, logsCancelled };
   }
 
   lnsInsertUiEvent(userId, devEuiNorm16, eventType, metaJson) {

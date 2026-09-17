@@ -1888,6 +1888,18 @@ function tryLnsAppDownlinkEnqueue(userId, idStr, ud, body, lnsEnqueueExtras = {}
     delayMs = Math.max(0, (Number.isFinite(delayBody) ? delayBody : 0) + (Number.isFinite(delayExtra) ? delayExtra : 0));
   }
 
+  const replaceQueued =
+    body?.replaceQueued === true ||
+    body?.replace_queued === true ||
+    lnsEnqueueExtras?.replaceQueued === true;
+  if (replaceQueued && typeof store.purgeQueuedAppDownlinksForDevice === 'function') {
+    try {
+      store.purgeQueuedAppDownlinksForDevice(idStr, deui);
+    } catch (ePurge) {
+      console.warn('[LNS] purge cola previa:', ePurge && ePurge.message ? ePurge.message : ePurge);
+    }
+  }
+
   try {
     const out = eng.enqueueAppDownlink(sessionUserId, deui, fPort, payloadBuf, {
       confirmed: confirmedDl,
@@ -4703,6 +4715,7 @@ app.get('/api/devices/:deviceId/properties/history', authMiddleware, deviceAssig
       actorUserName: dl.actorUserName != null ? String(dl.actorUserName) : null,
       deferred: Boolean(dl.deferred),
       flushed: Boolean(dl.flushed),
+      cancelled: Boolean(dl.cancelled),
     };
   });
   res.json({
@@ -4904,6 +4917,40 @@ app.get('/api/devices/:deviceId/lns/session', authMiddleware, deviceAssignmentMi
     },
   });
 });
+
+/**
+ * Vacía HEX diferidos (clase A) y PULL_RESP de aplicación de este DevEUI para poder enviar un comando nuevo.
+ */
+app.delete(
+  '/api/devices/:deviceId/lns/deferred-downlinks',
+  authMiddleware,
+  deviceAssignmentMiddleware,
+  requireDeviceDownlinkPermission,
+  (req, res) => {
+    const idStr = String(req.params.deviceId || '').trim();
+    const ud = getUserDeviceForActorReq(req, idStr);
+    if (!ud) return res.status(404).json({ status: 'Error', errMsg: 'Dispositivo no encontrado' });
+    const deui = String(ud.devEUI || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (deui.length !== 16) {
+      return res.status(400).json({
+        status: 'Error',
+        errMsg: 'El dispositivo no tiene DevEUI (16 hex); no hay cola LNS que vaciar.',
+      });
+    }
+    const purged =
+      typeof store.purgeQueuedAppDownlinksForDevice === 'function'
+        ? store.purgeQueuedAppDownlinksForDevice(idStr, deui)
+        : { deferredRemoved: 0, pendingRemoved: 0, logsCancelled: 0 };
+    res.json({
+      status: 'Success',
+      devEui: deui,
+      ...purged,
+      hint: 'Cola vaciada. Ya puede enviar un downlink nuevo (quedará encolado hasta el próximo uplink si el nodo es clase A).',
+    });
+  }
+);
 
 /**
  * Ajusta solo `fcnt_down` en sesión (p. ej. el servidor avanzó el contador sin TX al aire y el nodo rechaza downlinks).

@@ -572,7 +572,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
         hex,
         credentials,
         token,
-        getDownlinkSendOptionsForDevice(deviceId, devRow)
+        { ...getDownlinkSendOptionsForDevice(deviceId, devRow), replaceQueued: true }
       );
       /* Toast global: LnsDownlinkToastBridge → "Downlink enviado" */
     } catch (err) {
