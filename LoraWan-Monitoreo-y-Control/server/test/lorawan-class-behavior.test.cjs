@@ -49,10 +49,10 @@ test('resolveClassARxDelaySec: US915 no transmite a +1 s si la sesión quedó en
 test('shouldSuppressOtaaJoinForLiveSession: no rotar claves si hay fcntUp reciente', () => {
   const { shouldSuppressOtaaJoinForLiveSession } = require('../lib/lorawan-class-behavior.cjs');
   const now = 1_789_745_324_126;
-  const win = 3 * 60 * 60 * 1000;
+  const win = 45_000;
   assert.equal(
     shouldSuppressOtaaJoinForLiveSession(
-      { fcntUp: 2, lastUplinkWallMs: now - 60 * 60 * 1000 },
+      { fcntUp: 2, lastUplinkWallMs: now - 10_000 },
       now,
       win
     ),
@@ -64,13 +64,21 @@ test('shouldSuppressOtaaJoinForLiveSession: no rotar claves si hay fcntUp recien
   );
   assert.equal(
     shouldSuppressOtaaJoinForLiveSession(
-      { fcntUp: 2, lastUplinkWallMs: now - 4 * 60 * 60 * 1000 },
+      { fcntUp: 2, lastUplinkWallMs: now - 60_000 },
       now,
       win
     ),
     false
   );
   assert.equal(shouldSuppressOtaaJoinForLiveSession({ fcntUp: 2, lastUplinkWallMs: now }, now, 0), false);
+  assert.equal(
+    shouldSuppressOtaaJoinForLiveSession(
+      { fcntUp: 2, lastUplinkWallMs: now - 5_000, pendingMacAck: true },
+      now,
+      win
+    ),
+    false
+  );
 });
 
 test('ACK-only FPort 0: MIC válido con NwkSKey', () => {

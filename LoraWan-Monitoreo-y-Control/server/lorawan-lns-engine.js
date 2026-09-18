@@ -991,7 +991,8 @@ function createLorawanLnsEngine(ctx) {
     }
 
     const existingSess = store.lnsGetSessionByDevEui(ownerUserId, devEui);
-    const suppressJoinMs = envInt('SYSCOM_LNS_SUPPRESS_JOIN_IF_LIVE_MS', 3 * 60 * 60 * 1000);
+    /** 45 s: cubre JR duplicado en el mismo ciclo; no bloquear OTAA real (antes 3 h y el medidor quedaba mudo). */
+    const suppressJoinMs = envInt('SYSCOM_LNS_SUPPRESS_JOIN_IF_LIVE_MS', 45_000);
     if (shouldSuppressOtaaJoinForLiveSession(existingSess, Date.now(), suppressJoinMs)) {
       console.log(
         '[LNS] Join-Request ignorado: sesión de datos viva (fcntUp',
@@ -1477,7 +1478,7 @@ function createLorawanLnsEngine(ctx) {
     let flushBuf = buf;
     let flushFPort = row.fPort;
     let flushHex = row.payloadHex;
-    if (timewaveWaterMeter.looksLikeTimewaveFrame(buf)) {
+    if (timewaveWaterMeter.looksLikeTimewaveHex(row.payloadHex)) {
       try {
         const ud =
           (typeof store.getUserDeviceByDevEuiNorm === 'function'

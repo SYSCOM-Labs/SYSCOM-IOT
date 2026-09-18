@@ -108,17 +108,21 @@ function resolveClassARxDelaySec(sessionRxDelaySec, isUs915) {
 }
 
 /**
- * Si el nodo ya tiene sesión de datos reciente, un Join-Request no debe rotar NwkSKey/AppSKey:
- * el Join-Accept usa la ventana RX del JR (no lleva el HEX de válvula) y las claves nuevas
- * invalidan el próximo uplink de aplicación (MIC) si el JA no se oye.
+ * Evita rotar claves por un Join-Request **inmediato** tras un uplink de datos
+ * (el Join-Accept ocuparía RX1 y no llevaría el HEX de válvula).
  *
- * @param {{ fcntUp?: number, lastUplinkWallMs?: number } | null | undefined} session
+ * No debe bloquear un rejoin real: Timewave hace AT+Link confirmado; si no hay ACK,
+ * entra en OTAA. Un veto de horas deja al medidor mudo (y el botón de 5 s tampoco
+ * reporta). Tampoco vetar si `pendingMacAck` sigue true: el nodo no vio el ACK.
+ *
+ * @param {{ fcntUp?: number, lastUplinkWallMs?: number, pendingMacAck?: boolean } | null | undefined} session
  * @param {number} nowMs
  * @param {number} suppressMs 0 = no suprimir
  */
 function shouldSuppressOtaaJoinForLiveSession(session, nowMs, suppressMs) {
   const win = Number(suppressMs);
   if (!Number.isFinite(win) || win <= 0 || !session) return false;
+  if (session.pendingMacAck === true) return false;
   const fcntUp = Number(session.fcntUp);
   if (!Number.isFinite(fcntUp) || fcntUp < 0) return false;
   const t = Number(session.lastUplinkWallMs);
