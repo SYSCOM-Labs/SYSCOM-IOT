@@ -116,9 +116,25 @@ test('resolveTimewaveContextFromSources usa historial si el último uplink no es
   assert.equal(ctx.lastAppFPort, 2);
 });
 
+test('resolveTimewaveMeterNoFromHints lee 14 hex ultrasónico desde payload', () => {
+  const payloadHex = '6811404100262002000404a01700999a16';
+  assert.equal(tw.resolveTimewaveMeterNoFromHints({ payloadHex }), '00022026004140');
+});
+
 test('resolveTimewaveDownlinkFPort no hereda el 85 de Milesight', () => {
   assert.equal(tw.resolveTimewaveDownlinkFPort({ explicitFPort: 85, configChannel: 85 }), 2);
   assert.equal(tw.resolveTimewaveDownlinkFPort({ lastUplinkFPort: 2, configChannel: 85 }), 2);
   assert.equal(tw.resolveTimewaveDownlinkFPort({ explicitFPort: 1 }), 1);
   assert.equal(tw.resolveTimewaveDownlinkFPort({ configChannel: '2' }), 2);
+});
+
+test('cierre de válvula es sticky; intervalo no; valve_ack libera', () => {
+  const closeHex = tw.buildValveCommand(REAL, false).toString('hex');
+  const intervalHex = tw.buildIntervalCommand(REAL, 1440).toString('hex');
+  assert.equal(tw.isStickyTimewaveValveHex(closeHex), true);
+  assert.equal(tw.isStickyTimewaveValveHex(intervalHex), false);
+  assert.equal(tw.uplinkConfirmsValveCommand({ timewave_frame: 'valve_ack' }), true);
+  assert.equal(tw.uplinkConfirmsValveCommand({ timewave_status: { valveClosed: true } }), true);
+  assert.equal(tw.uplinkConfirmsValveCommand({ timewave_status: { valveClosed: false } }), false);
+  assert.equal(tw.uplinkConfirmsValveCommand({ payload_hex: '0D' }), false);
 });

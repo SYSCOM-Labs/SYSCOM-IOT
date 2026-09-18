@@ -5,6 +5,8 @@
  */
 'use strict';
 
+const timewaveUltrasonic = require('./timewave-ultrasonic-water-meter');
+
 const PREAMBLE = Buffer.from([0xfe, 0xfe, 0xfe, 0xfe]);
 const START = 0x68;
 const END = 0x16;
@@ -270,6 +272,8 @@ function decodeFrame(input) {
     };
   }
   if (parsed && typeof parsed === 'object') {
+    parsed.timewave_protocol = true;
+    parsed.timewave_family = 'mechanical_dlt645';
     parsed.timewave_meterNo = meterId;
     parsed.timewave_checksum_ok = checksumOk;
     if (!checksumOk) {
@@ -322,9 +326,10 @@ function looksLikeTimewaveHex(hex) {
   const h = String(hex || '')
     .replace(/\s/g, '')
     .replace(/^0x/i, '');
-  if (!h || h.length % 2 !== 0 || h.length < 40 || !/^[0-9a-fA-F]+$/.test(h)) return false;
+  if (!h || h.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(h)) return false;
   try {
-    return looksLikeTimewaveFrame(Buffer.from(h, 'hex'));
+    const buf = Buffer.from(h, 'hex');
+    return looksLikeTimewaveFrame(buf) || timewaveUltrasonic.looksLikeUltrasonicFrame(buf);
   } catch {
     return false;
   }
@@ -339,32 +344,55 @@ function firstNormalizedMeterNo12(values) {
   return null;
 }
 
+function firstNormalizedMeterNo14(values) {
+  const list = Array.isArray(values) ? values : [values];
+  for (const v of list) {
+    const n = timewaveUltrasonic.normalizeMeterNo14(v);
+    if (n) return n;
+  }
+  return null;
+}
+
 /**
  * Número de medidor para armar/reescribir downlinks.
  * Cada candidato se prueba por separado: un DevEUI (16 hex) en serial no debe tapar el n.º real.
  */
 function resolveTimewaveMeterNoFromHints(hints) {
   const h = hints && typeof hints === 'object' ? hints : {};
-  const fromFields = firstNormalizedMeterNo12([
+  const fromFields12 = firstNormalizedMeterNo12([
     h.timewaveMeterNo,
     h.timewave_meterNo,
     h.meterNumber,
     h.meterNo,
   ]);
-  if (fromFields) return fromFields;
+  if (fromFields12) return fromFields12;
+  const fromFields14 = firstNormalizedMeterNo14([
+    h.timewaveMeterNo,
+    h.timewave_meterNo,
+    h.meterNumber,
+    h.meterNo,
+  ]);
+  if (fromFields14) return fromFields14;
   const payloadHex = String(h.payloadHex || h.payload_hex || '')
     .replace(/\s/g, '')
     .replace(/^0x/i, '');
-  if (payloadHex.length >= 40 && /^[0-9a-fA-F]+$/.test(payloadHex)) {
+  if (payloadHex.length >= 26 && /^[0-9a-fA-F]+$/.test(payloadHex)) {
     try {
-      const decoded = decodeFrame(Buffer.from(payloadHex, 'hex'));
-      const fromFrame = normalizeTimewaveMeterNo12(decoded && decoded.timewave_meterNo);
-      if (fromFrame) return fromFrame;
+      const buf = Buffer.from(payloadHex, 'hex');
+      const decoded = decodeFrame(buf);
+      const fromDlt = normalizeTimewaveMeterNo12(decoded && decoded.timewave_meterNo);
+      if (fromDlt) return fromDlt;
+      const us = timewaveUltrasonic.decodeFrame(buf);
+      const fromUs = timewaveUltrasonic.normalizeMeterNo14(us && us.timewave_meterNo);
+      if (fromUs) return fromUs;
     } catch {
       /* ignore */
     }
   }
-  return firstNormalizedMeterNo12([h.deviceSerialHex, h.serialHex]);
+  return (
+    firstNormalizedMeterNo12([h.deviceSerialHex, h.serialHex]) ||
+    firstNormalizedMeterNo14([h.deviceSerialHex, h.serialHex])
+  );
 }
 
 function hintsFromTelemetryProperties(p) {
@@ -388,6 +416,7 @@ function parseAppFPort(raw) {
 function hintsLookLikeTimewave(h) {
   if (!h || typeof h !== 'object') return false;
   if (firstNormalizedMeterNo12([h.timewave_meterNo, h.meterNumber, h.meterNo, h.timewaveMeterNo])) return true;
+  if (firstNormalizedMeterNo14([h.timewave_meterNo, h.meterNumber, h.meterNo, h.timewaveMeterNo])) return true;
   return looksLikeTimewaveHex(h.payloadHex || h.payload_hex);
 }
 
@@ -446,6 +475,43 @@ function resolveTimewaveDownlinkFPort(opts) {
   return TIMEWAVE_DEFAULT_FPORT;
 }
 
+/**
+ * El ACK de válvula o una lectura con válvula ya cerrada: dejar de reenviar el HEX.
+ * @param {Record<string, unknown>|Buffer|null|undefined} decodedOrBuf
+ */
+function uplinkConfirmsValveCommand(decodedOrBuf) {
+  let d = decodedOrBuf;
+  if (Buffer.isBuffer(decodedOrBuf) || Array.isArray(decodedOrBuf)) {
+    d = decodeFrame(decodedOrBuf);
+  }
+  if (!d || typeof d !== 'object') return false;
+  if (d.timewave_frame === 'valve_ack') return true;
+  if (d.timewave_status && d.timewave_status.valveClosed === true) return true;
+  return false;
+}
+
+/**
+ * Comando de válvula DLT/645 (control 0x14): debe sobrevivir OTAA / RX1 hasta el ACK.
+ * @param {string} hex
+ */
+function isStickyTimewaveValveHex(hex) {
+  if (!looksLikeTimewaveHex(hex)) return false;
+  const h = String(hex || '')
+    .replace(/\s/g, '')
+    .replace(/^0x/i, '')
+    .toLowerCase();
+  let buf;
+  try {
+    buf = Buffer.from(h, 'hex');
+  } catch {
+    return false;
+  }
+  if (!looksLikeTimewaveFrame(buf) || buf.length < 18) return false;
+  if (buf[12] !== 0x14) return false;
+  const diPlain = dataUnscramble(buf.subarray(14, 18));
+  return diPlain.equals(DI_VALVE);
+}
+
 function looksLikeTimewaveFrame(buf) {
   if (!buf || buf.length < 20) return false;
   if (buf[0] !== 0xfe || buf[1] !== 0xfe || buf[2] !== 0xfe || buf[3] !== 0xfe) return false;
@@ -471,31 +537,33 @@ function rewriteDownlinkHex(hex, meterNoHex12) {
   } catch {
     return null;
   }
-  if (!looksLikeTimewaveFrame(buf)) return null;
-  const dataLen = buf[13];
-  const endIdx = 14 + dataLen;
-  const out = Buffer.from(buf);
-  const meter = normalizeTimewaveMeterNo12(meterNoHex12);
-  if (meter) {
-    meterNoToFrameBytes(meter).copy(out, 5);
-  }
-  const control = out[12];
-  if (control === 0x14 && dataLen >= 14) {
-    const diPlain = dataUnscramble(out.subarray(14, 18));
-    if (diPlain.equals(DI_VALVE)) {
-      const a0 = out[26];
-      const a1 = out[27];
-      if (a0 === 0xaa && a1 === 0xaa) {
-        out[26] = 0xdd;
-        out[27] = 0xdd;
-      } else if (a0 === 0xbb && a1 === 0xbb) {
-        out[26] = 0xee;
-        out[27] = 0xee;
+  if (looksLikeTimewaveFrame(buf)) {
+    const dataLen = buf[13];
+    const endIdx = 14 + dataLen;
+    const out = Buffer.from(buf);
+    const meter = normalizeTimewaveMeterNo12(meterNoHex12);
+    if (meter) {
+      meterNoToFrameBytes(meter).copy(out, 5);
+    }
+    const control = out[12];
+    if (control === 0x14 && dataLen >= 14) {
+      const diPlain = dataUnscramble(out.subarray(14, 18));
+      if (diPlain.equals(DI_VALVE)) {
+        const a0 = out[26];
+        const a1 = out[27];
+        if (a0 === 0xaa && a1 === 0xaa) {
+          out[26] = 0xdd;
+          out[27] = 0xdd;
+        } else if (a0 === 0xbb && a1 === 0xbb) {
+          out[26] = 0xee;
+          out[27] = 0xee;
+        }
       }
     }
+    out[endIdx] = checksumFromBody(out.subarray(4, endIdx));
+    return out.toString('hex');
   }
-  out[endIdx] = checksumFromBody(out.subarray(4, endIdx));
-  return out.toString('hex');
+  return timewaveUltrasonic.rewriteDownlinkHex(hex, meterNoHex12);
 }
 
 /**
@@ -533,6 +601,8 @@ module.exports = {
   rewriteDownlinkHex,
   looksLikeTimewaveFrame,
   looksLikeTimewaveHex,
+  uplinkConfirmsValveCommand,
+  isStickyTimewaveValveHex,
   TIMEWAVE_DEFAULT_FPORT,
   TIMEWAVE_EXAMPLE_METER_NO,
   MILESIGHT_DEFAULT_FPORT,

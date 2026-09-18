@@ -111,6 +111,15 @@ test('shouldSendMacAckOnlyAfterUplink: no tapa un HEX de válvula encolado', () 
     shouldSendMacAckOnlyAfterUplink({ flushed: null, deferredStillQueued: false, pendingMacAck: false }),
     false
   );
+  assert.equal(
+    shouldSendMacAckOnlyAfterUplink({
+      flushed: null,
+      deferredStillQueued: false,
+      pendingMacAck: true,
+      macAnsSent: true,
+    }),
+    false
+  );
 });
 
 test('parseClassAAppRestoreFromPullJson: solo clase A con payload de app', () => {
@@ -176,5 +185,35 @@ test('ACK-only FPort 0: MIC válido con NwkSKey', () => {
   const mic = pkt.MIC;
   assert.ok(Buffer.isBuffer(mic) && mic.length === 4);
   assert.notEqual(mic.toString('hex').toLowerCase(), 'eeeeeeee');
+  assert.equal(lora_packet.verifyMIC(pkt, nwk, undefined, Buffer.from('0000', 'hex')), true);
+});
+
+test('DeviceTimeReq FPort 0 0x0D exige DeviceTimeAns, no un ACK vacío', () => {
+  const { uplinkHasDeviceTimeReq, buildDeviceTimeAnsMac, DEVICE_TIME_CID } = require('../lib/lorawan-class-behavior.cjs');
+  assert.equal(uplinkHasDeviceTimeReq(0, Buffer.from([0x0d]), Buffer.alloc(0)), true);
+  assert.equal(uplinkHasDeviceTimeReq(2, Buffer.from([0xfe, 0xfe]), Buffer.alloc(0)), false);
+  assert.equal(uplinkHasDeviceTimeReq(2, Buffer.alloc(0), Buffer.from([0x0d])), true);
+  const ans = buildDeviceTimeAnsMac(1_789_766_928_675);
+  assert.equal(ans.length, 6);
+  assert.equal(ans[0], DEVICE_TIME_CID);
+  const lora_packet = require('lora-packet');
+  const nwk = Buffer.alloc(16, 1);
+  const app = Buffer.alloc(16, 2);
+  const pkt = lora_packet.fromFields(
+    {
+      MType: 'Unconfirmed Data Down',
+      DevAddr: Buffer.from('F915C7E7', 'hex'),
+      FCtrl: { ADR: false, ACK: true, FPending: false },
+      FCnt: 4,
+      FPort: 2,
+      payload: Buffer.from('fefefefe6818360026200268140e35dd93373533333363636363eeee9a16', 'hex'),
+      FOpts: ans,
+    },
+    app,
+    nwk,
+    null
+  );
+  assert.equal(pkt.getFPort(), 2);
+  assert.ok(Buffer.isBuffer(pkt.FOpts) && pkt.FOpts.equals(ans));
   assert.equal(lora_packet.verifyMIC(pkt, nwk, undefined, Buffer.from('0000', 'hex')), true);
 });

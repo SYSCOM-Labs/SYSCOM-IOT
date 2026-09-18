@@ -220,6 +220,39 @@ test('TOO_LATE clase A devuelve el HEX a la cola diferida, no lo pasa a imme', (
   }
 });
 
+test('TOO_LATE no duplica el HEX si la cola sticky ya lo tiene', () => {
+  const file = tmpDb();
+  const store = new Store(file);
+  try {
+    seedUser(store, 'syscom', 'superadmin');
+    const hex = 'fefefefe6818360026200268140e35dd93373533333363636363eeee9a16';
+    const ins = store.lnsInsertDeferredAppDownlink('syscom', DEV_EUI, 2, hex, { deviceClass: 'A' });
+    assert.equal(ins.ok, true);
+    const pull = {
+      txpk: { imme: false, tmst: 1 },
+      _syscomAppRestore: {
+        fPort: 2,
+        payloadHex: hex,
+        deviceClass: 'A',
+        confirmed: false,
+        devEui: DEV_EUI,
+      },
+    };
+    assert.equal(
+      store._lnsRestoreClassAAppDownlink({
+        user_id: 'syscom',
+        tx_dev_eui: DEV_EUI,
+        pull_resp_json: JSON.stringify(pull),
+      }),
+      true
+    );
+    assert.equal(store.lnsCountDeferredAppDownlinks('syscom', DEV_EUI), 1);
+  } finally {
+    store.close();
+    unlinkDb(file);
+  }
+});
+
 test('uplink de datos cancela Join-Accept pendiente del mismo DevEUI', () => {
   const file = tmpDb();
   const store = new Store(file);

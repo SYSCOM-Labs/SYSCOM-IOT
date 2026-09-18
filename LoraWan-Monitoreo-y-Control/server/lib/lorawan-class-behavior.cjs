@@ -148,12 +148,53 @@ function classAUplinkFlushPriority(rowPriority) {
 /**
  * Un uplink confirmado exige ACK, pero no si eso tapa el HEX de aplicación (válvula).
  * Solo ACK FPort 0 cuando no hay comando encolado ni flush hecho (el flush ya lleva el bit ACK).
+ * DeviceTimeAns / LinkCheckAns ya llevan el bit ACK: no mandar un segundo FPort 0 vacío.
  */
-function shouldSendMacAckOnlyAfterUplink({ flushed, deferredStillQueued, pendingMacAck }) {
+function shouldSendMacAckOnlyAfterUplink({ flushed, deferredStillQueued, pendingMacAck, macAnsSent }) {
   if (!pendingMacAck) return false;
   if (flushed) return false;
   if (deferredStillQueued) return false;
+  if (macAnsSent) return false;
   return true;
+}
+
+/** CID DeviceTimeReq / DeviceTimeAns (LoRaWAN 1.0.3). */
+const DEVICE_TIME_CID = 0x0d;
+/** Unix 1980-01-06 00:00:00 UTC; GPS time del ANS suma leap seconds. */
+const GPS_UNIX_OFFSET_SEC = 315964800;
+const GPS_LEAP_SECONDS = 18;
+
+/**
+ * DeviceTimeAns: CID + GPS seconds LE + fracción 1/256 s.
+ * @param {number} [nowMs]
+ * @returns {Buffer}
+ */
+function buildDeviceTimeAnsMac(nowMs) {
+  const t = Number(nowMs);
+  const ms = Number.isFinite(t) && t > 0 ? t : Date.now();
+  const unixSec = Math.floor(ms / 1000);
+  const gpsSec = (unixSec - GPS_UNIX_OFFSET_SEC + GPS_LEAP_SECONDS) >>> 0;
+  const frac = Math.floor(((ms % 1000) / 1000) * 256) & 0xff;
+  const buf = Buffer.alloc(6);
+  buf[0] = DEVICE_TIME_CID;
+  buf.writeUInt32LE(gpsSec, 1);
+  buf[5] = frac;
+  return buf;
+}
+
+/**
+ * Timewave (y otros) mandan DeviceTimeReq en FPort 0 (`0D`) o en FOpts.
+ * Sin DeviceTimeAns el nodo reintenta OTAA y el HEX de RX1 queda en una sesión muerta.
+ * @param {number|null|undefined} fPort
+ * @param {Buffer|null|undefined} plainFrmpayload
+ * @param {Buffer|null|undefined} fopts
+ */
+function uplinkHasDeviceTimeReq(fPort, plainFrmpayload, fopts) {
+  const plain = Buffer.isBuffer(plainFrmpayload) ? plainFrmpayload : Buffer.alloc(0);
+  const opts = Buffer.isBuffer(fopts) ? fopts : Buffer.alloc(0);
+  if (Number(fPort) === 0 && plain.length >= 1 && (plain[0] & 0xff) === DEVICE_TIME_CID) return true;
+  if (opts.length >= 1 && (opts[0] & 0xff) === DEVICE_TIME_CID) return true;
+  return false;
 }
 
 /**
@@ -208,4 +249,7 @@ module.exports = {
   classAUplinkFlushPriority,
   shouldSendMacAckOnlyAfterUplink,
   parseClassAAppRestoreFromPullJson,
+  DEVICE_TIME_CID,
+  buildDeviceTimeAnsMac,
+  uplinkHasDeviceTimeReq,
 };

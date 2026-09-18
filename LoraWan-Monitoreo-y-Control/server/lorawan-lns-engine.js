@@ -12,6 +12,8 @@ const {
   resolveClassARxDelaySec: resolveClassARxDelaySecFromSession,
   shouldSendMacAckOnlyAfterUplink,
   shouldSuppressOtaaJoinForLiveSession,
+  buildDeviceTimeAnsMac,
+  uplinkHasDeviceTimeReq,
 } = require('./lib/lorawan-class-behavior.cjs');
 const { syncDeviceTemplateFromCatalog } = require('./lib/auto-fleet-sync.cjs');
 const timewaveWaterMeter = require('./timewave-water-meter');
@@ -611,6 +613,8 @@ function uplinkMacPayloadLenAfterCid(cid) {
       return 0; // RXTimingSetupAns, TXParamSetupAns
     case 0x0a:
       return 1; // DlChannelAns
+    case 0x0d:
+      return 0; // DeviceTimeReq
     default:
       return -1;
   }
@@ -644,6 +648,10 @@ function otaaUplinkHasLinkCheckReq(packet, fPort, plainFrmpayload) {
 
 function linkCheckAnsToDeviceEnabled() {
   return String(process.env.SYSCOM_LNS_LINK_CHECK_ANS || '1').trim() !== '0';
+}
+
+function deviceTimeAnsToDeviceEnabled() {
+  return String(process.env.SYSCOM_LNS_DEVICE_TIME_ANS || '1').trim() !== '0';
 }
 
 /**
@@ -936,6 +944,98 @@ function createLorawanLnsEngine(ctx) {
     return buf;
   }
 
+  /**
+   * El HEX de cierre se borraba al primer PULL_RESP. Un OTAA posterior deja la cola vacía
+   * y el DeviceTimeReq solo recibe ACK MAC. Reponer el último comando de válvula hasta el ACK.
+   */
+  function requeueStickyTimewaveFromLog(userId, devEui) {
+    const deui = String(devEui || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (deui.length !== 16) return false;
+    if (
+      typeof store.lnsPeekOldestDeferredAppDownlink === 'function' &&
+      store.lnsPeekOldestDeferredAppDownlink(userId, deui)
+    ) {
+      return false;
+    }
+    const ud =
+      (typeof store.getUserDeviceByDevEuiNorm === 'function'
+        ? store.getUserDeviceByDevEuiNorm(userId, deui)
+        : null) ||
+      (typeof store.getUserDevice === 'function' ? store.getUserDevice(userId, deui) : null);
+    const deviceId = ud && ud.deviceId ? String(ud.deviceId) : deui;
+    try {
+      const latest =
+        typeof store.getLatestForDevice === 'function' ? store.getLatestForDevice(userId, deviceId) : null;
+      const props = latest && latest.properties && typeof latest.properties === 'object' ? latest.properties : {};
+      if (timewaveWaterMeter.uplinkConfirmsValveCommand(props)) return false;
+    } catch {
+      /* ignore */
+    }
+    let list = [];
+    try {
+      if (typeof store.listDownlinksForDevice === 'function') {
+        list = store.listDownlinksForDevice(userId, deviceId, 80) || [];
+      }
+      if ((!list || !list.length) && typeof store.listDownlinks === 'function') {
+        list = store.listDownlinks(userId, 120) || [];
+      }
+    } catch {
+      list = [];
+    }
+    let hex = null;
+    let fPort = 2;
+    for (const row of list) {
+      const rowDeui = String(row.devEUI || row.devEui || '')
+        .replace(/[^0-9a-fA-F]/g, '')
+        .toLowerCase();
+      const rowDid = String(row.deviceId || '').trim();
+      if (rowDeui.length === 16 && rowDeui !== deui) continue;
+      if (rowDeui.length !== 16) {
+        if (rowDid && rowDid !== deviceId && rowDid.toLowerCase() !== deui) continue;
+        if (!rowDid) continue;
+      }
+      const h = String(row.payloadHex || row.payload_hex || '')
+        .replace(/\s/g, '')
+        .toLowerCase();
+      if (!timewaveWaterMeter.isStickyTimewaveValveHex(h)) continue;
+      hex = h;
+      const fp = Number(row.fPort);
+      fPort = Number.isFinite(fp) && fp >= 1 && fp <= 223 ? fp : 2;
+      break;
+    }
+    if (!hex || typeof store.lnsInsertDeferredAppDownlink !== 'function') return false;
+    const ins = store.lnsInsertDeferredAppDownlink(userId, deui, fPort, hex, {
+      deviceClass: 'A',
+      priority: 254,
+    });
+    if (ins && ins.ok) {
+      console.log('[LNS] HEX Timewave reencolado (sobrevive OTAA / RX1 previo) →', deui, 'cola id', ins.id);
+      return true;
+    }
+    return false;
+  }
+
+  function dropStickyTimewaveIfValveConfirmed(userId, devEui, plain) {
+    if (!timewaveWaterMeter.uplinkConfirmsValveCommand(plain)) return false;
+    const row =
+      typeof store.lnsPeekOldestDeferredAppDownlink === 'function'
+        ? store.lnsPeekOldestDeferredAppDownlink(userId, devEui)
+        : null;
+    if (!row || !timewaveWaterMeter.isStickyTimewaveValveHex(row.payloadHex)) return true;
+    store.lnsDeleteDeferredAppDownlinkById(row.id);
+    if (typeof store.markDownlinkLogFlushedByPendingId === 'function') {
+      try {
+        store.markDownlinkLogFlushedByPendingId(userId, row.id, { valveConfirmed: true });
+      } catch {
+        /* ignore */
+      }
+    }
+    console.log('[LNS] HEX Timewave confirmado por el medidor; cola diferida liberada →', devEui);
+    return true;
+  }
+
   function processJoin(gatewayUserId, gatewayEuiNorm, p, rxpk) {
     const joinEui = buf8ToHex16(p.AppEUI);
     const devEui = buf8ToHex16(p.DevEUI);
@@ -1147,6 +1247,7 @@ function createLorawanLnsEngine(ctx) {
         }
       }
       store.lnsUpsertSessionJoin(upsertPayload);
+      requeueStickyTimewaveFromLog(ownerUserId, devEui);
       saveIngestEntry(ownerUserId, {
         deviceId: telemetryDeviceId,
         deviceName: displayName,
@@ -1364,12 +1465,19 @@ function createLorawanLnsEngine(ctx) {
      * **antes** del decoder/SQLite; si se espera a `saveIngestEntry`, `classARxStillOpen`
      * ya es false y el comando (válvula TimeWave) se queda en cola para siempre.
      */
+    dropStickyTimewaveIfValveConfirmed(ownerUserId, devEui, plain);
+    requeueStickyTimewaveFromLog(ownerUserId, devEui);
+    const wantsDeviceTimeAns =
+      deviceTimeAnsToDeviceEnabled() && uplinkHasDeviceTimeReq(fPort, plain, p.FOpts);
+    const deviceTimeAnsBuf = wantsDeviceTimeAns ? buildDeviceTimeAnsMac() : null;
     const hasDeferredAppDl =
       typeof store.lnsPeekOldestDeferredAppDownlink === 'function' &&
       Boolean(store.lnsPeekOldestDeferredAppDownlink(ownerUserId, devEui));
     let flushed = null;
     if (hasDeferredAppDl) {
-      flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false);
+      flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false, {
+        macFOpts: deviceTimeAnsBuf,
+      });
       if (flushed && flushed.macAckIncluded) session.pendingMacAck = false;
       if (flushed && flushed.fCnt != null) session.fcntDown = flushed.fCnt;
     }
@@ -1382,9 +1490,27 @@ function createLorawanLnsEngine(ctx) {
         typeof store.lnsPeekOldestDeferredAppDownlink === 'function' &&
         Boolean(store.lnsPeekOldestDeferredAppDownlink(ownerUserId, devEui));
       if (stillQueued) {
-        flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false);
+        flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false, {
+          macFOpts: deviceTimeAnsBuf,
+        });
         if (flushed && flushed.macAckIncluded) session.pendingMacAck = false;
         if (flushed && flushed.fCnt != null) session.fcntDown = flushed.fCnt;
+      }
+    }
+    let macAnsSent = false;
+    if (!flushed && deviceTimeAnsBuf) {
+      try {
+        const timeSent = enqueueAppDownlink(ownerUserId, devEui, 0, deviceTimeAnsBuf, {
+          skipTxAckTrack: true,
+          fromUplinkFlush: true,
+          priority: appDownlinkDefaultPriority(),
+        });
+        macAnsSent = true;
+        if (timeSent && timeSent.macAckIncluded) session.pendingMacAck = false;
+        if (timeSent && timeSent.fCnt != null) session.fcntDown = timeSent.fCnt;
+        console.log('[LNS] DeviceTimeAns tras DeviceTimeReq →', devEui);
+      } catch (eTime) {
+        console.warn('[LNS] DeviceTimeAns no enviado:', eTime && eTime.message ? eTime.message : eTime);
       }
     }
     if (
@@ -1395,6 +1521,7 @@ function createLorawanLnsEngine(ctx) {
             store.lnsPeekOldestDeferredAppDownlink(ownerUserId, devEui)
         ),
         pendingMacAck: session.pendingMacAck,
+        macAnsSent,
       })
     ) {
       try {
@@ -1479,7 +1606,7 @@ function createLorawanLnsEngine(ctx) {
    * El HEX TimeWave ya se reescribió al encolar; aquí solo se confirma el n.º con la última telemetría
    * (sin recorrer historial: eso retrasaba RX1 y el comando de válvula nunca salía).
    */
-  function tryFlushOneDeferredAppDownlinkAfterUplink(userId, devEui, skipBecauseLinkCheckQueued) {
+  function tryFlushOneDeferredAppDownlinkAfterUplink(userId, devEui, skipBecauseLinkCheckQueued, extraOpts) {
     if (skipBecauseLinkCheckQueued) return null;
     if (typeof store.lnsPeekOldestDeferredAppDownlink !== 'function') return null;
     const row = store.lnsPeekOldestDeferredAppDownlink(userId, devEui);
@@ -1530,6 +1657,10 @@ function createLorawanLnsEngine(ctx) {
       typeof store.lnsCountDeferredAppDownlinks === 'function'
         ? store.lnsCountDeferredAppDownlinks(userId, devEui)
         : 1;
+    const macFOpts =
+      extraOpts && Buffer.isBuffer(extraOpts.macFOpts) && extraOpts.macFOpts.length
+        ? extraOpts.macFOpts
+        : null;
     const flushOpts = {
       confirmed: row.confirmed,
       delayMs: 0,
@@ -1539,6 +1670,7 @@ function createLorawanLnsEngine(ctx) {
       skipTxAckTrack: true,
       fPending: queuedCount > 1,
       fromUplinkFlush: true,
+      ...(macFOpts ? { macFOpts } : {}),
     };
     try {
       let sent;
@@ -1559,7 +1691,20 @@ function createLorawanLnsEngine(ctx) {
           throw eFirst;
         }
       }
-      store.lnsDeleteDeferredAppDownlinkById(row.id);
+      const stickyValve = timewaveWaterMeter.isStickyTimewaveValveHex(flushHex);
+      if (!stickyValve) {
+        store.lnsDeleteDeferredAppDownlinkById(row.id);
+        if (typeof store.markDownlinkLogFlushedByPendingId === 'function') {
+          try {
+            store.markDownlinkLogFlushedByPendingId(userId, row.id, {
+              fPort: flushFPort,
+              payloadHex: flushHex,
+            });
+          } catch (eLog) {
+            console.warn('[LNS] mark downlink log flushed:', eLog.message);
+          }
+        }
+      }
       if (row.userId && String(row.userId) !== String(userId)) {
         console.log(
           '[LNS] Downlink diferido enviado tras uplink →',
@@ -1568,34 +1713,34 @@ function createLorawanLnsEngine(ctx) {
           flushFPort,
           'cola id',
           row.id,
+          stickyValve ? '(Timewave sticky hasta ACK)' : '',
           'encolado_por',
           row.userId,
           'sesión',
           userId
         );
       } else {
-        console.log('[LNS] Downlink diferido enviado tras uplink →', devEui, 'fPort', flushFPort, 'cola id', row.id);
-      }
-      if (typeof store.markDownlinkLogFlushedByPendingId === 'function') {
-        try {
-          store.markDownlinkLogFlushedByPendingId(userId, row.id, {
-            fPort: flushFPort,
-            payloadHex: flushHex,
-          });
-        } catch (eLog) {
-          console.warn('[LNS] mark downlink log flushed:', eLog.message);
-        }
+        console.log(
+          '[LNS] Downlink diferido enviado tras uplink →',
+          devEui,
+          'fPort',
+          flushFPort,
+          'cola id',
+          row.id,
+          stickyValve ? '(Timewave sticky hasta ACK)' : ''
+        );
       }
       try {
         insertUiEvent(
           userId,
           devEui,
-          'downlink_deferred_flushed',
+          stickyValve ? 'downlink_rx1_retry' : 'downlink_deferred_flushed',
           JSON.stringify({
             fPort: flushFPort,
             payloadHex: flushHex,
             deferredQueueId: row.id,
             pendingId: row.id,
+            stickyUntilValveAck: Boolean(stickyValve),
           })
         );
       } catch (e2) {
@@ -1775,19 +1920,20 @@ function createLorawanLnsEngine(ctx) {
     const macAck = Boolean(session.pendingMacAck) || Boolean(opt.ackOnly);
     const mType = opt.confirmed ? 'Confirmed Data Down' : 'Unconfirmed Data Down';
     const ackOnly = Boolean(opt.ackOnly);
-    const down = lora_packet.fromFields(
-      {
-        MType: mType,
-        DevAddr: Buffer.from(session.devAddr, 'hex'),
-        FCtrl: { ADR: false, ACK: macAck, FPending: Boolean(opt.fPending) },
-        FCnt: nextDown,
-        FPort: ackOnly ? 0 : fPort,
-        payload: ackOnly ? Buffer.alloc(0) : payloadBuf,
-      },
-      session.appSKey,
-      session.nwkSKey,
-      null
-    );
+    const macFOpts =
+      !ackOnly && opt.macFOpts && Buffer.isBuffer(opt.macFOpts) && opt.macFOpts.length > 0 && opt.macFOpts.length <= 15
+        ? opt.macFOpts
+        : null;
+    const downFields = {
+      MType: mType,
+      DevAddr: Buffer.from(session.devAddr, 'hex'),
+      FCtrl: { ADR: false, ACK: macAck, FPending: Boolean(opt.fPending) },
+      FCnt: nextDown,
+      FPort: ackOnly ? 0 : fPort,
+      payload: ackOnly ? Buffer.alloc(0) : payloadBuf,
+    };
+    if (macFOpts) downFields.FOpts = macFOpts;
+    const down = lora_packet.fromFields(downFields, session.appSKey, session.nwkSKey, null);
     const phy = down.getPHYPayload();
     if (!useTrack) {
       store.lnsSetFcntDown(userId, devEuiNorm16, nextDown);
@@ -1943,7 +2089,7 @@ function createLorawanLnsEngine(ctx) {
       opt.priority != null && Number.isFinite(Number(opt.priority))
         ? Math.max(0, Math.min(255, Math.floor(Number(opt.priority))))
         : appDownlinkDefaultPriority();
-    if (opt.fromUplinkFlush && cls !== 'C') {
+    if (opt.fromUplinkFlush && cls !== 'C' && !ackOnly && payloadBuf && payloadBuf.length) {
       dlPriority = classAUplinkFlushPriority(dlPriority);
     }
     /**

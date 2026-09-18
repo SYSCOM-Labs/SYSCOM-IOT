@@ -3321,7 +3321,10 @@ class Store {
     let pullJson = String(row.pull_resp_json);
     try {
       const pullObj = JSON.parse(pullJson);
+      if (pullObj && pullObj._syscomLnsKind === 'join_accept') return;
       const tx = pullObj && pullObj.txpk;
+      /** ACK/MAC clase A sin HEX de app: no forzar `imme` (satura el concentrador y no lo oye Timewave). */
+      if (tx && typeof tx === 'object' && tx.imme !== true && !pullObj._syscomAppRestore) return;
       if (tx && typeof tx === 'object') {
         tx.imme = true;
         delete tx.tmst;
@@ -3844,6 +3847,10 @@ class Store {
         .replace(/[^0-9a-fA-F]/g, '')
         .toLowerCase();
     if (deui.length !== 16) return false;
+    const existing = this.lnsPeekOldestDeferredAppDownlink(row.user_id, deui);
+    if (existing && String(existing.payloadHex || '').toLowerCase() === restore.payloadHex) {
+      return true;
+    }
     const ins = this.lnsInsertDeferredAppDownlink(row.user_id, deui, restore.fPort, restore.payloadHex, {
       confirmed: restore.confirmed,
       priority: CLASS_A_UPLINK_FLUSH_PRIORITY,
