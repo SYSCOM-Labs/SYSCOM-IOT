@@ -176,6 +176,7 @@ function parseReading91(dataAfterLen) {
     battery_percent: batteryPercent,
     timewave_control: 0x91,
     timewave_frame: 'reading',
+    timewave_valve: status.valveClosed ? 'closed' : status.valveOpen ? 'open' : 'exception',
   };
 }
 
@@ -190,7 +191,8 @@ function parseAck94(dataAfterLen) {
       timewave_di: diPlain.toString('hex'),
     };
   }
-  if (dataAfterLen.length >= 12 && diPlain.equals(DI_VALVE)) {
+  /** ACK de válvula: DI(4)+lectura(4)+estado(2) = 10 B. El umbral 12 dejaba `ack_unknown` y la UI no veía el estado. */
+  if (dataAfterLen.length >= 10 && diPlain.equals(DI_VALVE)) {
     const readingEnc = dataAfterLen.subarray(4, 8);
     const statusEnc = dataAfterLen.subarray(8, 10);
     const readingRaw = dataUnscramble(readingEnc);
@@ -202,6 +204,7 @@ function parseAck94(dataAfterLen) {
       timewave_control: 0x94,
       water_cumulative_m3: parseFloat(cumulativeM3) || cumulativeM3,
       timewave_status: status,
+      timewave_valve: status.valveClosed ? 'closed' : status.valveOpen ? 'open' : 'exception',
     };
   }
   return {
@@ -224,7 +227,7 @@ function parseFailD4(dataAfterLen) {
     timewave_error: err,
     timewave_di: diPlain.toString('hex'),
   };
-  if (dataAfterLen.length >= 13 && diPlain.equals(DI_VALVE)) {
+  if (dataAfterLen.length >= 11 && diPlain.equals(DI_VALVE)) {
     const readingEnc = dataAfterLen.subarray(5, 9);
     const statusEnc = dataAfterLen.subarray(9, 11);
     const readingRaw = dataUnscramble(readingEnc);
@@ -485,7 +488,7 @@ function uplinkConfirmsValveCommand(decodedOrBuf) {
     d = decodeFrame(decodedOrBuf);
   }
   if (!d || typeof d !== 'object') return false;
-  if (d.timewave_frame === 'valve_ack') return true;
+  if (d.timewave_valve === 'closed') return true;
   if (d.timewave_status && d.timewave_status.valveClosed === true) return true;
   return false;
 }
@@ -510,6 +513,22 @@ function isStickyTimewaveValveHex(hex) {
   if (buf[12] !== 0x14) return false;
   const diPlain = dataUnscramble(buf.subarray(14, 18));
   return diPlain.equals(DI_VALVE);
+}
+
+/** Cierre en aire: acción scrambleada `EEEE` (lógico BBBB). `DDDD` es abrir. */
+function isTimewaveValveCloseHex(hex) {
+  if (!isStickyTimewaveValveHex(hex)) return false;
+  const h = String(hex || '')
+    .replace(/\s/g, '')
+    .replace(/^0x/i, '')
+    .toLowerCase();
+  let buf;
+  try {
+    buf = Buffer.from(h, 'hex');
+  } catch {
+    return false;
+  }
+  return buf.length >= 28 && buf[26] === 0xee && buf[27] === 0xee;
 }
 
 function looksLikeTimewaveFrame(buf) {
@@ -603,6 +622,7 @@ module.exports = {
   looksLikeTimewaveHex,
   uplinkConfirmsValveCommand,
   isStickyTimewaveValveHex,
+  isTimewaveValveCloseHex,
   TIMEWAVE_DEFAULT_FPORT,
   TIMEWAVE_EXAMPLE_METER_NO,
   MILESIGHT_DEFAULT_FPORT,

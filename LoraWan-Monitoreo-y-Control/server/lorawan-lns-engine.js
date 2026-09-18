@@ -22,6 +22,8 @@ const LORAWAN_US915_ONLY = lorawanUs915Only();
 
 /** Seguimiento en memoria de downlinks app con `track_tx_ack` (libera `setTimeout` al llegar GW_TX_ACK). */
 const pendingDownlinks = new Map();
+/** Cierres Timewave enviados en RX1 de un uplink de aplicación (FPort≥1) en esta sesión OTAA. */
+const timewaveValveAppFlushCount = new Map();
 
 function normGwPendingKey(gw) {
   return String(gw || '')
@@ -945,34 +947,10 @@ function createLorawanLnsEngine(ctx) {
   }
 
   /**
-   * El HEX de cierre se borraba al primer PULL_RESP. Un OTAA posterior deja la cola vacía
-   * y el DeviceTimeReq solo recibe ACK MAC. Reponer el último comando de válvula hasta el ACK.
+   * El HEX en el log puede ser un OPEN, un HEX viejo o basura de RX1 MAC.
+   * En un uplink de aplicación (FPort 2) se arma un cierre fresco con el n.º de medidor de esta trama.
    */
-  function requeueStickyTimewaveFromLog(userId, devEui) {
-    const deui = String(devEui || '')
-      .replace(/[^0-9a-fA-F]/g, '')
-      .toLowerCase();
-    if (deui.length !== 16) return false;
-    if (
-      typeof store.lnsPeekOldestDeferredAppDownlink === 'function' &&
-      store.lnsPeekOldestDeferredAppDownlink(userId, deui)
-    ) {
-      return false;
-    }
-    const ud =
-      (typeof store.getUserDeviceByDevEuiNorm === 'function'
-        ? store.getUserDeviceByDevEuiNorm(userId, deui)
-        : null) ||
-      (typeof store.getUserDevice === 'function' ? store.getUserDevice(userId, deui) : null);
-    const deviceId = ud && ud.deviceId ? String(ud.deviceId) : deui;
-    try {
-      const latest =
-        typeof store.getLatestForDevice === 'function' ? store.getLatestForDevice(userId, deviceId) : null;
-      const props = latest && latest.properties && typeof latest.properties === 'object' ? latest.properties : {};
-      if (timewaveWaterMeter.uplinkConfirmsValveCommand(props)) return false;
-    } catch {
-      /* ignore */
-    }
+  function listTimewaveDownlinkRows(userId, deui, deviceId) {
     let list = [];
     try {
       if (typeof store.listDownlinksForDevice === 'function') {
@@ -984,56 +962,102 @@ function createLorawanLnsEngine(ctx) {
     } catch {
       list = [];
     }
-    let hex = null;
-    let fPort = 2;
-    for (const row of list) {
+    return list.filter((row) => {
       const rowDeui = String(row.devEUI || row.devEui || '')
         .replace(/[^0-9a-fA-F]/g, '')
         .toLowerCase();
       const rowDid = String(row.deviceId || '').trim();
-      if (rowDeui.length === 16 && rowDeui !== deui) continue;
-      if (rowDeui.length !== 16) {
-        if (rowDid && rowDid !== deviceId && rowDid.toLowerCase() !== deui) continue;
-        if (!rowDid) continue;
-      }
+      if (rowDeui.length === 16) return rowDeui === deui;
+      if (rowDid && (rowDid === deviceId || rowDid.toLowerCase() === deui)) return true;
+      return false;
+    });
+  }
+
+  function lastTimewaveValveDownlinkWasClose(userId, deui) {
+    const ud =
+      (typeof store.getUserDeviceByDevEuiNorm === 'function'
+        ? store.getUserDeviceByDevEuiNorm(userId, deui)
+        : null) ||
+      (typeof store.getUserDevice === 'function' ? store.getUserDevice(userId, deui) : null);
+    const deviceId = ud && ud.deviceId ? String(ud.deviceId) : deui;
+    for (const row of listTimewaveDownlinkRows(userId, deui, deviceId)) {
       const h = String(row.payloadHex || row.payload_hex || '')
         .replace(/\s/g, '')
         .toLowerCase();
       if (!timewaveWaterMeter.isStickyTimewaveValveHex(h)) continue;
-      hex = h;
-      const fp = Number(row.fPort);
-      fPort = Number.isFinite(fp) && fp >= 1 && fp <= 223 ? fp : 2;
-      break;
+      return timewaveWaterMeter.isTimewaveValveCloseHex(h);
     }
-    if (!hex || typeof store.lnsInsertDeferredAppDownlink !== 'function') return false;
-    const ins = store.lnsInsertDeferredAppDownlink(userId, deui, fPort, hex, {
+    const peek =
+      typeof store.lnsPeekOldestDeferredAppDownlink === 'function'
+        ? store.lnsPeekOldestDeferredAppDownlink(userId, deui)
+        : null;
+    if (peek && timewaveWaterMeter.isStickyTimewaveValveHex(peek.payloadHex)) {
+      return timewaveWaterMeter.isTimewaveValveCloseHex(peek.payloadHex);
+    }
+    return false;
+  }
+
+  function dropStickyTimewaveIfValveConfirmed(userId, devEui, decodedOrPlain) {
+    if (!timewaveWaterMeter.uplinkConfirmsValveCommand(decodedOrPlain)) return false;
+    const row =
+      typeof store.lnsPeekOldestDeferredAppDownlink === 'function'
+        ? store.lnsPeekOldestDeferredAppDownlink(userId, devEui)
+        : null;
+    if (row && timewaveWaterMeter.isStickyTimewaveValveHex(row.payloadHex)) {
+      store.lnsDeleteDeferredAppDownlinkById(row.id);
+      if (typeof store.markDownlinkLogFlushedByPendingId === 'function') {
+        try {
+          store.markDownlinkLogFlushedByPendingId(userId, row.id, { valveConfirmed: true });
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    timewaveValveAppFlushCount.delete(`${userId}:${devEui}`);
+    console.log('[LNS] Válvula Timewave cerrada según el medidor; cola diferida liberada →', devEui);
+    return true;
+  }
+
+  /** Un cierre nuevo (no reenviar el HEX del log). Solo si el usuario pidió cerrar y el medidor sigue abierta. */
+  function queueFreshTimewaveCloseIfNeeded(userId, devEui, twDecoded) {
+    if (!twDecoded || twDecoded.timewave_protocol !== true) return false;
+    if (timewaveWaterMeter.uplinkConfirmsValveCommand(twDecoded)) return false;
+    if (!lastTimewaveValveDownlinkWasClose(userId, devEui)) return false;
+    const meter = timewaveWaterMeter.normalizeTimewaveMeterNo12(twDecoded.timewave_meterNo);
+    if (!meter) return false;
+    const peek =
+      typeof store.lnsPeekOldestDeferredAppDownlink === 'function'
+        ? store.lnsPeekOldestDeferredAppDownlink(userId, devEui)
+        : null;
+    if (peek && timewaveWaterMeter.isTimewaveValveCloseHex(peek.payloadHex)) return true;
+    if (peek && timewaveWaterMeter.isStickyTimewaveValveHex(peek.payloadHex)) {
+      store.lnsDeleteDeferredAppDownlinkById(peek.id);
+    }
+    let hex;
+    try {
+      hex = timewaveWaterMeter.buildValveCommand(meter, false).toString('hex');
+    } catch {
+      return false;
+    }
+    const ins = store.lnsInsertDeferredAppDownlink(userId, devEui, 2, hex, {
       deviceClass: 'A',
       priority: 254,
     });
     if (ins && ins.ok) {
-      console.log('[LNS] HEX Timewave reencolado (sobrevive OTAA / RX1 previo) →', deui, 'cola id', ins.id);
+      console.log('[LNS] Cierre Timewave fresco encolado (FPort 2, n.º medidor', meter, ') →', devEui);
       return true;
     }
     return false;
   }
 
-  function dropStickyTimewaveIfValveConfirmed(userId, devEui, plain) {
-    if (!timewaveWaterMeter.uplinkConfirmsValveCommand(plain)) return false;
-    const row =
-      typeof store.lnsPeekOldestDeferredAppDownlink === 'function'
-        ? store.lnsPeekOldestDeferredAppDownlink(userId, devEui)
-        : null;
-    if (!row || !timewaveWaterMeter.isStickyTimewaveValveHex(row.payloadHex)) return true;
-    store.lnsDeleteDeferredAppDownlinkById(row.id);
-    if (typeof store.markDownlinkLogFlushedByPendingId === 'function') {
-      try {
-        store.markDownlinkLogFlushedByPendingId(userId, row.id, { valveConfirmed: true });
-      } catch {
-        /* ignore */
-      }
-    }
-    console.log('[LNS] HEX Timewave confirmado por el medidor; cola diferida liberada →', devEui);
-    return true;
+  function canFlushTimewaveValveOnAppUplink(userId, deui) {
+    const max = Math.max(1, envInt('SYSCOM_LNS_TIMEWAVE_VALVE_APP_FLUSH_MAX', 3));
+    return (timewaveValveAppFlushCount.get(`${userId}:${deui}`) || 0) < max;
+  }
+
+  function noteTimewaveValveAppFlush(userId, deui) {
+    const k = `${userId}:${deui}`;
+    timewaveValveAppFlushCount.set(k, (timewaveValveAppFlushCount.get(k) || 0) + 1);
   }
 
   function processJoin(gatewayUserId, gatewayEuiNorm, p, rxpk) {
@@ -1247,7 +1271,7 @@ function createLorawanLnsEngine(ctx) {
         }
       }
       store.lnsUpsertSessionJoin(upsertPayload);
-      requeueStickyTimewaveFromLog(ownerUserId, devEui);
+      timewaveValveAppFlushCount.delete(`${ownerUserId}:${devEui}`);
       saveIngestEntry(ownerUserId, {
         deviceId: telemetryDeviceId,
         deviceName: displayName,
@@ -1461,38 +1485,62 @@ function createLorawanLnsEngine(ctx) {
     }
 
     /**
-     * Clase A: RX1/RX2 se mide en 1–5 s desde el uplink. Hay que programar el PULL_RESP
-     * **antes** del decoder/SQLite; si se espera a `saveIngestEntry`, `classARxStillOpen`
-     * ya es false y el comando (válvula TimeWave) se queda en cola para siempre.
+     * Clase A: RX1 es única. No mezclar HEX de válvula con DeviceTimeAns/FOpts:
+     * el medidor ACK'ea 0x94 pero no actúa el motor si el despertar fue MAC (FPort 0).
+     * Válvula solo en uplink de aplicación (FPort ≥ 1). FPort 0 → solo DeviceTimeAns.
      */
-    dropStickyTimewaveIfValveConfirmed(ownerUserId, devEui, plain);
-    requeueStickyTimewaveFromLog(ownerUserId, devEui);
+    let twDecoded = null;
+    try {
+      if (timewaveWaterMeter.looksLikeTimewaveFrame(plain)) {
+        twDecoded = timewaveWaterMeter.decodeFrame(plain);
+      }
+    } catch {
+      twDecoded = null;
+    }
+    dropStickyTimewaveIfValveConfirmed(ownerUserId, devEui, twDecoded || plain);
+    const isAppUplink = Number(fPort) >= 1;
+    if (isAppUplink && twDecoded) {
+      queueFreshTimewaveCloseIfNeeded(ownerUserId, devEui, twDecoded);
+    }
     const wantsDeviceTimeAns =
       deviceTimeAnsToDeviceEnabled() && uplinkHasDeviceTimeReq(fPort, plain, p.FOpts);
     const deviceTimeAnsBuf = wantsDeviceTimeAns ? buildDeviceTimeAnsMac() : null;
-    const hasDeferredAppDl =
-      typeof store.lnsPeekOldestDeferredAppDownlink === 'function' &&
-      Boolean(store.lnsPeekOldestDeferredAppDownlink(ownerUserId, devEui));
+    const peekValve =
+      typeof store.lnsPeekOldestDeferredAppDownlink === 'function'
+        ? store.lnsPeekOldestDeferredAppDownlink(ownerUserId, devEui)
+        : null;
+    const queuedIsTimewaveValve = Boolean(
+      peekValve && timewaveWaterMeter.isStickyTimewaveValveHex(peekValve.payloadHex)
+    );
+    const allowValveFlush =
+      isAppUplink &&
+      queuedIsTimewaveValve &&
+      canFlushTimewaveValveOnAppUplink(ownerUserId, devEui);
+    const allowOtherAppFlush = Boolean(peekValve) && (!queuedIsTimewaveValve || allowValveFlush);
     let flushed = null;
-    if (hasDeferredAppDl) {
-      flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false, {
-        macFOpts: deviceTimeAnsBuf,
-      });
-      if (flushed && flushed.macAckIncluded) session.pendingMacAck = false;
-      if (flushed && flushed.fCnt != null) session.fcntDown = flushed.fCnt;
+    if (allowOtherAppFlush && peekValve) {
+      if (queuedIsTimewaveValve && !allowValveFlush) {
+        console.warn(
+          '[LNS] Cierre Timewave no se reenvía en este uplink (límite FPort 2 / sesión) →',
+          devEui
+        );
+      } else {
+        flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false, {});
+        if (flushed && queuedIsTimewaveValve) noteTimewaveValveAppFlush(ownerUserId, devEui);
+        if (flushed && flushed.macAckIncluded) session.pendingMacAck = false;
+        if (flushed && flushed.fCnt != null) session.fcntDown = flushed.fCnt;
+      }
     }
     /**
      * Uplink confirmado: ACK en RX1. Si el flush del HEX falló, reintentar el comando
      * (no mandar ACK FPort 0: esa ventana es única y el medidor no oiría la válvula).
      */
-    if (!flushed && session.pendingMacAck) {
+    if (!flushed && session.pendingMacAck && isAppUplink) {
       const stillQueued =
         typeof store.lnsPeekOldestDeferredAppDownlink === 'function' &&
         Boolean(store.lnsPeekOldestDeferredAppDownlink(ownerUserId, devEui));
       if (stillQueued) {
-        flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false, {
-          macFOpts: deviceTimeAnsBuf,
-        });
+        flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false, {});
         if (flushed && flushed.macAckIncluded) session.pendingMacAck = false;
         if (flushed && flushed.fCnt != null) session.fcntDown = flushed.fCnt;
       }
@@ -1580,7 +1628,8 @@ function createLorawanLnsEngine(ctx) {
     });
 
     const deferLinkCheck =
-      hasDeferredAppDl ||
+      Boolean(flushed) ||
+      Boolean(peekValve) ||
       (typeof store.lnsHasPendingPullRespForDev === 'function' &&
         store.lnsHasPendingPullRespForDev(ownerUserId, devEui));
     if (linkCheckAnsToDeviceEnabled() && !deferLinkCheck && otaaUplinkHasLinkCheckReq(p, fPort, plain)) {
@@ -1691,18 +1740,15 @@ function createLorawanLnsEngine(ctx) {
           throw eFirst;
         }
       }
-      const stickyValve = timewaveWaterMeter.isStickyTimewaveValveHex(flushHex);
-      if (!stickyValve) {
-        store.lnsDeleteDeferredAppDownlinkById(row.id);
-        if (typeof store.markDownlinkLogFlushedByPendingId === 'function') {
-          try {
-            store.markDownlinkLogFlushedByPendingId(userId, row.id, {
-              fPort: flushFPort,
-              payloadHex: flushHex,
-            });
-          } catch (eLog) {
-            console.warn('[LNS] mark downlink log flushed:', eLog.message);
-          }
+      store.lnsDeleteDeferredAppDownlinkById(row.id);
+      if (typeof store.markDownlinkLogFlushedByPendingId === 'function') {
+        try {
+          store.markDownlinkLogFlushedByPendingId(userId, row.id, {
+            fPort: flushFPort,
+            payloadHex: flushHex,
+          });
+        } catch (eLog) {
+          console.warn('[LNS] mark downlink log flushed:', eLog.message);
         }
       }
       if (row.userId && String(row.userId) !== String(userId)) {
@@ -1713,34 +1759,24 @@ function createLorawanLnsEngine(ctx) {
           flushFPort,
           'cola id',
           row.id,
-          stickyValve ? '(Timewave sticky hasta ACK)' : '',
           'encolado_por',
           row.userId,
           'sesión',
           userId
         );
       } else {
-        console.log(
-          '[LNS] Downlink diferido enviado tras uplink →',
-          devEui,
-          'fPort',
-          flushFPort,
-          'cola id',
-          row.id,
-          stickyValve ? '(Timewave sticky hasta ACK)' : ''
-        );
+        console.log('[LNS] Downlink diferido enviado tras uplink →', devEui, 'fPort', flushFPort, 'cola id', row.id);
       }
       try {
         insertUiEvent(
           userId,
           devEui,
-          stickyValve ? 'downlink_rx1_retry' : 'downlink_deferred_flushed',
+          'downlink_deferred_flushed',
           JSON.stringify({
             fPort: flushFPort,
             payloadHex: flushHex,
             deferredQueueId: row.id,
             pendingId: row.id,
-            stickyUntilValveAck: Boolean(stickyValve),
           })
         );
       } catch (e2) {

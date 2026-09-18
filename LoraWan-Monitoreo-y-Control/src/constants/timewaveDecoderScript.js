@@ -57,7 +57,9 @@ function decodeUplink(input) {
   if (frame === 'interval_ack') {
     d.message = 'Intervalo cambiado correctamente';
   } else if (frame === 'valve_ack') {
-    d.message = 'Comando de válvula ejecutado';
+    var vs = st && st.valveClosed ? 'cerrada' : st && st.valveOpen ? 'sigue abierta' : 'estado desconocido';
+    d.message = 'ACK de válvula (' + vs + ')';
+    if (st && st.forceStatusOn) d.message += '; force status ON';
   } else if (frame === 'command_fail') {
     if (di === '0460aa02') d.message = 'Fallo en comando de válvula';
     else if (di === '04700102') d.message = 'Error al cambiar intervalo';

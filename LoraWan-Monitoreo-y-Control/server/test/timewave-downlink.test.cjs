@@ -128,13 +128,29 @@ test('resolveTimewaveDownlinkFPort no hereda el 85 de Milesight', () => {
   assert.equal(tw.resolveTimewaveDownlinkFPort({ configChannel: '2' }), 2);
 });
 
-test('cierre de válvula es sticky; intervalo no; valve_ack libera', () => {
+test('cierre de válvula es sticky; intervalo no; solo valveClosed libera', () => {
   const closeHex = tw.buildValveCommand(REAL, false).toString('hex');
+  const openHex = tw.buildValveCommand(REAL, true).toString('hex');
   const intervalHex = tw.buildIntervalCommand(REAL, 1440).toString('hex');
   assert.equal(tw.isStickyTimewaveValveHex(closeHex), true);
+  assert.equal(tw.isTimewaveValveCloseHex(closeHex), true);
+  assert.equal(tw.isTimewaveValveCloseHex(openHex), false);
   assert.equal(tw.isStickyTimewaveValveHex(intervalHex), false);
-  assert.equal(tw.uplinkConfirmsValveCommand({ timewave_frame: 'valve_ack' }), true);
+  assert.equal(tw.uplinkConfirmsValveCommand({ timewave_frame: 'valve_ack' }), false);
   assert.equal(tw.uplinkConfirmsValveCommand({ timewave_status: { valveClosed: true } }), true);
   assert.equal(tw.uplinkConfirmsValveCommand({ timewave_status: { valveClosed: false } }), false);
   assert.equal(tw.uplinkConfirmsValveCommand({ payload_hex: '0D' }), false);
+});
+
+test('ACK 94h de 10 B (campo) es valve_ack abierta, no ack_unknown', () => {
+  const hex = 'FEFEFEFE6818360026200268940A35DD93373933333373335816';
+  const d = tw.decodeFrame(Buffer.from(hex, 'hex'));
+  assert.equal(d.timewave_frame, 'valve_ack');
+  assert.equal(d.timewave_meterNo, '022026003618');
+  assert.equal(d.timewave_valve, 'open');
+  assert.equal(d.timewave_status.valveOpen, true);
+  assert.equal(d.timewave_status.valveClosed, false);
+  assert.equal(d.timewave_status.forceStatusOn, true);
+  assert.equal(d.water_cumulative_m3, 0.06);
+  assert.equal(tw.uplinkConfirmsValveCommand(d), false);
 });
