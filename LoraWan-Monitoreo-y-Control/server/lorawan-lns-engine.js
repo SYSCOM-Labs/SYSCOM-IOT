@@ -5,7 +5,12 @@ const lora_packet = require('lora-packet');
 const { deriveSessionKeys10x, parseKeyHex32 } = require('./lorawan-lns-crypto');
 const { lorawanUs915Only } = require('./lorawan-us915-region');
 const { resolveDownlinkDeviceClassForLns } = require('./lib/resolve-downlink-class.cjs');
-const { classARxStillOpen, downlinkPullRespUsesClassCGwFloor, resolveClassARxDelaySec: resolveClassARxDelaySecFromSession } = require('./lib/lorawan-class-behavior.cjs');
+const {
+  classARxStillOpen,
+  downlinkPullRespUsesClassCGwFloor,
+  resolveClassARxDelaySec: resolveClassARxDelaySecFromSession,
+  shouldSuppressOtaaJoinForLiveSession,
+} = require('./lib/lorawan-class-behavior.cjs');
 const { syncDeviceTemplateFromCatalog } = require('./lib/auto-fleet-sync.cjs');
 const timewaveWaterMeter = require('./timewave-water-meter');
 
@@ -985,6 +990,22 @@ function createLorawanLnsEngine(ctx) {
       noteGwRxActivity(ownerUserId, gatewayEuiNorm, Number(rxpk.tmst));
     }
 
+    const existingSess = store.lnsGetSessionByDevEui(ownerUserId, devEui);
+    const suppressJoinMs = envInt('SYSCOM_LNS_SUPPRESS_JOIN_IF_LIVE_MS', 3 * 60 * 60 * 1000);
+    if (shouldSuppressOtaaJoinForLiveSession(existingSess, Date.now(), suppressJoinMs)) {
+      console.log(
+        '[LNS] Join-Request ignorado: sesión de datos viva (fcntUp',
+        existingSess.fcntUp,
+        'DevAddr',
+        existingSess.devAddr,
+        '). El HEX encolado sale en el próximo uplink de aplicación, no en el join.',
+        'dev_eui',
+        devEui,
+        `(SYSCOM_LNS_SUPPRESS_JOIN_IF_LIVE_MS=${suppressJoinMs})`
+      );
+      return true;
+    }
+
     let devAddrBuf;
     try {
       devAddrBuf = pickOtaaJoinDevAddrBuf(ownerUserId, devEui);
@@ -1343,9 +1364,30 @@ function createLorawanLnsEngine(ctx) {
     const hasDeferredAppDl =
       typeof store.lnsPeekOldestDeferredAppDownlink === 'function' &&
       Boolean(store.lnsPeekOldestDeferredAppDownlink(ownerUserId, devEui));
+    let flushed = null;
     if (hasDeferredAppDl) {
-      const flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false);
+      flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false);
       if (flushed && flushed.macAckIncluded) session.pendingMacAck = false;
+      if (flushed && flushed.fCnt != null) session.fcntDown = flushed.fCnt;
+    }
+    /**
+     * LoRaWAN: un uplink confirmado exige ACK en RX1 aunque no haya HEX de aplicación.
+     * Sin eso el medidor reintenta y acaba en OTAA; el join usa esa ventana y el comando de válvula no sale.
+     */
+    if (!flushed && session.pendingMacAck) {
+      try {
+        const ackSent = enqueueAppDownlink(ownerUserId, devEui, 0, Buffer.alloc(0), {
+          skipTxAckTrack: true,
+          fromUplinkFlush: true,
+          ackOnly: true,
+          priority: appDownlinkDefaultPriority(),
+        });
+        if (ackSent && ackSent.macAckIncluded) session.pendingMacAck = false;
+        if (ackSent && ackSent.fCnt != null) session.fcntDown = ackSent.fCnt;
+        console.log('[LNS] ACK MAC (sin payload de app) tras uplink confirmado →', devEui);
+      } catch (eAck) {
+        console.warn('[LNS] ACK MAC no enviado:', eAck && eAck.message ? eAck.message : eAck);
+      }
     }
 
     try {
@@ -1690,16 +1732,17 @@ function createLorawanLnsEngine(ctx) {
       err.code = 'DOWNLINK_IN_FLIGHT';
       throw err;
     }
-    const macAck = Boolean(session.pendingMacAck);
+    const macAck = Boolean(session.pendingMacAck) || Boolean(opt.ackOnly);
     const mType = opt.confirmed ? 'Confirmed Data Down' : 'Unconfirmed Data Down';
+    const ackOnly = Boolean(opt.ackOnly);
     const down = lora_packet.fromFields(
       {
         MType: mType,
         DevAddr: Buffer.from(session.devAddr, 'hex'),
         FCtrl: { ADR: false, ACK: macAck, FPending: Boolean(opt.fPending) },
         FCnt: nextDown,
-        FPort: fPort,
-        payload: payloadBuf,
+        FPort: ackOnly ? 0 : fPort,
+        payload: ackOnly ? Buffer.alloc(0) : payloadBuf,
       },
       session.appSKey,
       session.nwkSKey,
@@ -1708,6 +1751,7 @@ function createLorawanLnsEngine(ctx) {
     const phy = down.getPHYPayload();
     if (!useTrack) {
       store.lnsSetFcntDown(userId, devEuiNorm16, nextDown);
+      session.fcntDown = nextDown;
       if (opt.confirmed) {
         store.lnsMarkAwaitingConfirmedDeviceAck(userId, devEuiNorm16);
       }
@@ -2194,4 +2238,9 @@ function createLorawanLnsEngine(ctx) {
   };
 }
 
-module.exports = { createLorawanLnsEngine, getUs915Rx1Datr, getUs915Rx1Freq };
+module.exports = {
+  createLorawanLnsEngine,
+  getUs915Rx1Datr,
+  getUs915Rx1Freq,
+  shouldSuppressOtaaJoinForLiveSession,
+};

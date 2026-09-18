@@ -45,3 +45,55 @@ test('resolveClassARxDelaySec: US915 no transmite a +1 s si la sesión quedó en
   assert.equal(resolveClassARxDelaySec(1, false), 1);
   assert.equal(resolveClassARxDelaySec(null, false), 1);
 });
+
+test('shouldSuppressOtaaJoinForLiveSession: no rotar claves si hay fcntUp reciente', () => {
+  const { shouldSuppressOtaaJoinForLiveSession } = require('../lib/lorawan-class-behavior.cjs');
+  const now = 1_789_745_324_126;
+  const win = 3 * 60 * 60 * 1000;
+  assert.equal(
+    shouldSuppressOtaaJoinForLiveSession(
+      { fcntUp: 2, lastUplinkWallMs: now - 60 * 60 * 1000 },
+      now,
+      win
+    ),
+    true
+  );
+  assert.equal(
+    shouldSuppressOtaaJoinForLiveSession({ fcntUp: -1, lastUplinkWallMs: now - 1000 }, now, win),
+    false
+  );
+  assert.equal(
+    shouldSuppressOtaaJoinForLiveSession(
+      { fcntUp: 2, lastUplinkWallMs: now - 4 * 60 * 60 * 1000 },
+      now,
+      win
+    ),
+    false
+  );
+  assert.equal(shouldSuppressOtaaJoinForLiveSession({ fcntUp: 2, lastUplinkWallMs: now }, now, 0), false);
+});
+
+test('ACK-only FPort 0: MIC válido con NwkSKey', () => {
+  const lora_packet = require('lora-packet');
+  const nwk = Buffer.alloc(16, 1);
+  const app = Buffer.alloc(16, 2);
+  const pkt = lora_packet.fromFields(
+    {
+      MType: 'Unconfirmed Data Down',
+      DevAddr: Buffer.from('2412B410', 'hex'),
+      FCtrl: { ADR: false, ACK: true, FPending: false },
+      FCnt: 0,
+      FPort: 0,
+      payload: Buffer.alloc(0),
+    },
+    app,
+    nwk,
+    null
+  );
+  assert.equal(pkt.getFPort(), 0);
+  assert.equal(pkt.getFCtrlACK(), true);
+  const mic = pkt.MIC;
+  assert.ok(Buffer.isBuffer(mic) && mic.length === 4);
+  assert.notEqual(mic.toString('hex').toLowerCase(), 'eeeeeeee');
+  assert.equal(lora_packet.verifyMIC(pkt, nwk, undefined, Buffer.from('0000', 'hex')), true);
+});

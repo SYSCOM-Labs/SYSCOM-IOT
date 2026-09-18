@@ -107,6 +107,28 @@ function resolveClassARxDelaySec(sessionRxDelaySec, isUs915) {
   return 1;
 }
 
+/**
+ * Si el nodo ya tiene sesión de datos reciente, un Join-Request no debe rotar NwkSKey/AppSKey:
+ * el Join-Accept usa la ventana RX del JR (no lleva el HEX de válvula) y las claves nuevas
+ * invalidan el próximo uplink de aplicación (MIC) si el JA no se oye.
+ *
+ * @param {{ fcntUp?: number, lastUplinkWallMs?: number } | null | undefined} session
+ * @param {number} nowMs
+ * @param {number} suppressMs 0 = no suprimir
+ */
+function shouldSuppressOtaaJoinForLiveSession(session, nowMs, suppressMs) {
+  const win = Number(suppressMs);
+  if (!Number.isFinite(win) || win <= 0 || !session) return false;
+  const fcntUp = Number(session.fcntUp);
+  if (!Number.isFinite(fcntUp) || fcntUp < 0) return false;
+  const t = Number(session.lastUplinkWallMs);
+  if (!Number.isFinite(t) || t <= 0) return false;
+  const now = Number(nowMs);
+  if (!Number.isFinite(now) || now <= 0) return false;
+  const age = now - t;
+  return age >= 0 && age < win;
+}
+
 module.exports = {
   normalizeLorawanClassLetter,
   downlinkDeferUntilUplink,
@@ -115,4 +137,5 @@ module.exports = {
   classCGwFloorMissesClassARx1,
   downlinkPullRespUsesClassCGwFloor,
   resolveClassARxDelaySec,
+  shouldSuppressOtaaJoinForLiveSession,
 };
