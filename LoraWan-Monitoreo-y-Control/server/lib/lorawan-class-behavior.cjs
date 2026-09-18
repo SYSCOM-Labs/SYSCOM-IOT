@@ -133,6 +133,68 @@ function shouldSuppressOtaaJoinForLiveSession(session, nowMs, suppressMs) {
   return age >= 0 && age < win;
 }
 
+/**
+ * Prioridad PULL_RESP al vaciar un HEX clase A en RX1.
+ * La cola diferida guardaba 0 y el ACK MAC / clase C (128) salían antes → TOO_LATE.
+ */
+const CLASS_A_UPLINK_FLUSH_PRIORITY = 254;
+
+function classAUplinkFlushPriority(rowPriority) {
+  const p = Number(rowPriority);
+  const base = Number.isFinite(p) ? Math.max(0, Math.min(255, Math.floor(p))) : 0;
+  return Math.max(base, CLASS_A_UPLINK_FLUSH_PRIORITY);
+}
+
+/**
+ * Un uplink confirmado exige ACK, pero no si eso tapa el HEX de aplicación (válvula).
+ * Solo ACK FPort 0 cuando no hay comando encolado ni flush hecho (el flush ya lleva el bit ACK).
+ */
+function shouldSendMacAckOnlyAfterUplink({ flushed, deferredStillQueued, pendingMacAck }) {
+  if (!pendingMacAck) return false;
+  if (flushed) return false;
+  if (deferredStillQueued) return false;
+  return true;
+}
+
+/**
+ * Si el concentrador rechaza un TX clase A (TOO_LATE), hay que devolver el HEX a la cola
+ * diferida: reintentar el mismo `tmst` o pasarlo a `imme` no lo oye un nodo a pilas.
+ * @returns {{ fPort: number, payloadHex: string, deviceClass: string, confirmed: boolean, devEui: string } | null}
+ */
+function parseClassAAppRestoreFromPullJson(pullRespJson) {
+  let o = pullRespJson;
+  if (typeof pullRespJson === 'string') {
+    try {
+      o = JSON.parse(pullRespJson);
+    } catch {
+      return null;
+    }
+  }
+  if (!o || typeof o !== 'object') return null;
+  if (o._syscomLnsKind === 'join_accept') return null;
+  const r = o._syscomAppRestore;
+  if (!r || typeof r !== 'object') return null;
+  const hex = String(r.payloadHex || '')
+    .replace(/\s/g, '')
+    .toLowerCase();
+  if (!hex || hex.length % 2 !== 0 || !/^[0-9a-f]+$/.test(hex)) return null;
+  const cls = normalizeLorawanClassLetter(r.deviceClass);
+  if (cls === 'C') return null;
+  if (o.txpk && o.txpk.imme === true) return null;
+  const fPort = Math.floor(Number(r.fPort));
+  if (!Number.isFinite(fPort) || fPort < 1 || fPort > 223) return null;
+  const deui = String(r.devEui || '')
+    .replace(/[^0-9a-fA-F]/g, '')
+    .toLowerCase();
+  return {
+    fPort,
+    payloadHex: hex,
+    deviceClass: cls,
+    confirmed: Boolean(r.confirmed),
+    devEui: deui.length === 16 ? deui : '',
+  };
+}
+
 module.exports = {
   normalizeLorawanClassLetter,
   downlinkDeferUntilUplink,
@@ -142,4 +204,8 @@ module.exports = {
   downlinkPullRespUsesClassCGwFloor,
   resolveClassARxDelaySec,
   shouldSuppressOtaaJoinForLiveSession,
+  CLASS_A_UPLINK_FLUSH_PRIORITY,
+  classAUplinkFlushPriority,
+  shouldSendMacAckOnlyAfterUplink,
+  parseClassAAppRestoreFromPullJson,
 };

@@ -187,6 +187,39 @@ test('Join-Accept caducado se descarta y no tapa el HEX de aplicación', () => {
   }
 });
 
+test('TOO_LATE clase A devuelve el HEX a la cola diferida, no lo pasa a imme', () => {
+  const file = tmpDb();
+  const store = new Store(file);
+  try {
+    seedUser(store, 'syscom', 'superadmin');
+    const hex = 'fefefefe6818360026200268140e35dd93373533333363636363eeee9a16';
+    const pull = {
+      txpk: { imme: false, tmst: 99, freq: 923.3, datr: 'SF10BW500' },
+      _syscomAppRestore: {
+        fPort: 2,
+        payloadHex: hex,
+        deviceClass: 'A',
+        confirmed: false,
+        devEui: DEV_EUI,
+      },
+    };
+    const restored = store._lnsRestoreClassAAppDownlink({
+      user_id: 'syscom',
+      tx_dev_eui: DEV_EUI,
+      pull_resp_json: JSON.stringify(pull),
+    });
+    assert.equal(restored, true);
+    const peeked = store.lnsPeekOldestDeferredAppDownlink('syscom', DEV_EUI);
+    assert.ok(peeked);
+    assert.equal(peeked.payloadHex, hex);
+    assert.equal(peeked.fPort, 2);
+    assert.ok(peeked.priority >= 254);
+  } finally {
+    store.close();
+    unlinkDb(file);
+  }
+});
+
 test('uplink de datos cancela Join-Accept pendiente del mismo DevEUI', () => {
   const file = tmpDb();
   const store = new Store(file);

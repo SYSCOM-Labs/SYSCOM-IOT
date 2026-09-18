@@ -81,6 +81,79 @@ test('shouldSuppressOtaaJoinForLiveSession: no rotar claves si hay fcntUp recien
   );
 });
 
+test('classAUplinkFlushPriority: el HEX de RX1 gana al ACK MAC / clase C', () => {
+  const {
+    CLASS_A_UPLINK_FLUSH_PRIORITY,
+    classAUplinkFlushPriority,
+  } = require('../lib/lorawan-class-behavior.cjs');
+  assert.equal(CLASS_A_UPLINK_FLUSH_PRIORITY, 254);
+  assert.equal(classAUplinkFlushPriority(undefined), 254);
+  assert.equal(classAUplinkFlushPriority(0), 254);
+  assert.equal(classAUplinkFlushPriority(128), 254);
+  assert.equal(classAUplinkFlushPriority(255), 255);
+});
+
+test('shouldSendMacAckOnlyAfterUplink: no tapa un HEX de válvula encolado', () => {
+  const { shouldSendMacAckOnlyAfterUplink } = require('../lib/lorawan-class-behavior.cjs');
+  assert.equal(
+    shouldSendMacAckOnlyAfterUplink({ flushed: true, deferredStillQueued: false, pendingMacAck: true }),
+    false
+  );
+  assert.equal(
+    shouldSendMacAckOnlyAfterUplink({ flushed: null, deferredStillQueued: true, pendingMacAck: true }),
+    false
+  );
+  assert.equal(
+    shouldSendMacAckOnlyAfterUplink({ flushed: null, deferredStillQueued: false, pendingMacAck: true }),
+    true
+  );
+  assert.equal(
+    shouldSendMacAckOnlyAfterUplink({ flushed: null, deferredStillQueued: false, pendingMacAck: false }),
+    false
+  );
+});
+
+test('parseClassAAppRestoreFromPullJson: solo clase A con payload de app', () => {
+  const { parseClassAAppRestoreFromPullJson } = require('../lib/lorawan-class-behavior.cjs');
+  const hex = 'fefefefe6818360026200268140e35dd93373533333363636363eeee9a16';
+  const ok = {
+    txpk: { imme: false, tmst: 1 },
+    _syscomAppRestore: {
+      fPort: 2,
+      payloadHex: hex,
+      deviceClass: 'A',
+      confirmed: false,
+      devEui: '004a7701240c107c',
+    },
+  };
+  const parsed = parseClassAAppRestoreFromPullJson(JSON.stringify(ok));
+  assert.ok(parsed);
+  assert.equal(parsed.fPort, 2);
+  assert.equal(parsed.payloadHex, hex);
+  assert.equal(parsed.devEui, '004a7701240c107c');
+  assert.equal(
+    parseClassAAppRestoreFromPullJson({
+      _syscomLnsKind: 'join_accept',
+      _syscomAppRestore: ok._syscomAppRestore,
+    }),
+    null
+  );
+  assert.equal(
+    parseClassAAppRestoreFromPullJson({
+      txpk: { imme: true },
+      _syscomAppRestore: { ...ok._syscomAppRestore, deviceClass: 'A' },
+    }),
+    null
+  );
+  assert.equal(
+    parseClassAAppRestoreFromPullJson({
+      txpk: { imme: false },
+      _syscomAppRestore: { ...ok._syscomAppRestore, deviceClass: 'C' },
+    }),
+    null
+  );
+});
+
 test('ACK-only FPort 0: MIC válido con NwkSKey', () => {
   const lora_packet = require('lora-packet');
   const nwk = Buffer.alloc(16, 1);

@@ -12,6 +12,10 @@ const path = require('path');
 const crypto = require('crypto');
 
 const { DatabaseSync } = require('node:sqlite');
+const {
+  CLASS_A_UPLINK_FLUSH_PRIORITY,
+  parseClassAAppRestoreFromPullJson,
+} = require(path.join(__dirname, 'lib', 'lorawan-class-behavior.cjs'));
 const { telemetryRowHasPropertyKey } = require(path.join(__dirname, 'lib', 'telemetryPropertyPath.js'));
 const {
   expandNestedGatewayTelemetry,
@@ -3310,6 +3314,10 @@ class Store {
       .get(gwKey, now - lookbackMs);
     if (!row || !row.pull_resp_json) return;
 
+    if (this._lnsRestoreClassAAppDownlink(row)) {
+      return;
+    }
+
     let pullJson = String(row.pull_resp_json);
     try {
       const pullObj = JSON.parse(pullJson);
@@ -3599,7 +3607,8 @@ class Store {
         }
         const retries = (row.tx_retries_left != null ? Number(row.tx_retries_left) : 0) - 1;
         this.st.lnsDlDeleteById.run(row.downlink_id);
-        const willRequeue = Number(row.track_tx_ack) === 1 && retries > 0;
+        const restoredClassA = this._lnsRestoreClassAAppDownlink(row);
+        const willRequeue = !restoredClassA && Number(row.track_tx_ack) === 1 && retries > 0;
         if (willRequeue) {
           const pr = row.priority != null ? Math.max(0, Math.min(255, Math.floor(Number(row.priority)))) : 0;
           const now = Date.now();
@@ -3802,7 +3811,10 @@ class Store {
     const max = this.lnsDeferAppDownlinkMaxPerDev();
     if (count >= max) return { ok: false, reason: 'QUEUE_FULL', queueLength: count };
     const conf = o.confirmed ? 1 : 0;
-    const pri = o.priority != null ? Math.max(0, Math.min(255, Math.floor(Number(o.priority)))) : 0;
+    const pri =
+      o.priority != null
+        ? Math.max(0, Math.min(255, Math.floor(Number(o.priority))))
+        : CLASS_A_UPLINK_FLUSH_PRIORITY;
     const dly = o.delayMs != null ? Math.max(0, Math.floor(Number(o.delayMs))) : 0;
     let gw = String(o.gatewayEui || '')
       .replace(/[^0-9a-fA-F]/g, '')
@@ -3816,6 +3828,38 @@ class Store {
     const info = this.st.lnsDefDlInsert.run(uid, deui, fp, hex, conf, pri, dly, gw, dc, now);
     const id = Number(info.lastInsertRowid);
     return { ok: true, id, queueLength: count + 1 };
+  }
+
+  /**
+   * TOO_LATE/TOO_EARLY en clase A: el `tmst` de esa RX1 ya no sirve.
+   * Devuelve el payload a `lorawan_lns_deferred_app_dl` para el próximo uplink.
+   */
+  _lnsRestoreClassAAppDownlink(row) {
+    if (!row) return false;
+    const restore = parseClassAAppRestoreFromPullJson(row.pull_resp_json);
+    if (!restore) return false;
+    const deui =
+      restore.devEui ||
+      String(row.tx_dev_eui || '')
+        .replace(/[^0-9a-fA-F]/g, '')
+        .toLowerCase();
+    if (deui.length !== 16) return false;
+    const ins = this.lnsInsertDeferredAppDownlink(row.user_id, deui, restore.fPort, restore.payloadHex, {
+      confirmed: restore.confirmed,
+      priority: CLASS_A_UPLINK_FLUSH_PRIORITY,
+      deviceClass: restore.deviceClass,
+    });
+    if (ins && ins.ok) {
+      console.warn(
+        '[LNS] TX clase A rechazado → HEX devuelto a cola diferida (próximo uplink) →',
+        deui,
+        'fPort',
+        restore.fPort
+      );
+      return true;
+    }
+    console.warn('[LNS] No se pudo devolver HEX clase A a cola diferida:', ins && ins.reason);
+    return false;
   }
 
   _mapDeferredAppDlRow(r) {

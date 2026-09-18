@@ -7,8 +7,10 @@ const { lorawanUs915Only } = require('./lorawan-us915-region');
 const { resolveDownlinkDeviceClassForLns } = require('./lib/resolve-downlink-class.cjs');
 const {
   classARxStillOpen,
+  classAUplinkFlushPriority,
   downlinkPullRespUsesClassCGwFloor,
   resolveClassARxDelaySec: resolveClassARxDelaySecFromSession,
+  shouldSendMacAckOnlyAfterUplink,
   shouldSuppressOtaaJoinForLiveSession,
 } = require('./lib/lorawan-class-behavior.cjs');
 const { syncDeviceTemplateFromCatalog } = require('./lib/auto-fleet-sync.cjs');
@@ -1372,10 +1374,29 @@ function createLorawanLnsEngine(ctx) {
       if (flushed && flushed.fCnt != null) session.fcntDown = flushed.fCnt;
     }
     /**
-     * LoRaWAN: un uplink confirmado exige ACK en RX1 aunque no haya HEX de aplicación.
-     * Sin eso el medidor reintenta y acaba en OTAA; el join usa esa ventana y el comando de válvula no sale.
+     * Uplink confirmado: ACK en RX1. Si el flush del HEX falló, reintentar el comando
+     * (no mandar ACK FPort 0: esa ventana es única y el medidor no oiría la válvula).
      */
     if (!flushed && session.pendingMacAck) {
+      const stillQueued =
+        typeof store.lnsPeekOldestDeferredAppDownlink === 'function' &&
+        Boolean(store.lnsPeekOldestDeferredAppDownlink(ownerUserId, devEui));
+      if (stillQueued) {
+        flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false);
+        if (flushed && flushed.macAckIncluded) session.pendingMacAck = false;
+        if (flushed && flushed.fCnt != null) session.fcntDown = flushed.fCnt;
+      }
+    }
+    if (
+      shouldSendMacAckOnlyAfterUplink({
+        flushed,
+        deferredStillQueued: Boolean(
+          typeof store.lnsPeekOldestDeferredAppDownlink === 'function' &&
+            store.lnsPeekOldestDeferredAppDownlink(ownerUserId, devEui)
+        ),
+        pendingMacAck: session.pendingMacAck,
+      })
+    ) {
       try {
         const ackSent = enqueueAppDownlink(ownerUserId, devEui, 0, Buffer.alloc(0), {
           skipTxAckTrack: true,
@@ -1509,17 +1530,35 @@ function createLorawanLnsEngine(ctx) {
       typeof store.lnsCountDeferredAppDownlinks === 'function'
         ? store.lnsCountDeferredAppDownlinks(userId, devEui)
         : 1;
+    const flushOpts = {
+      confirmed: row.confirmed,
+      delayMs: 0,
+      priority: classAUplinkFlushPriority(row.priority),
+      deviceClass: row.deviceClass || 'A',
+      gatewayEui: row.gatewayEui && row.gatewayEui.length === 16 ? row.gatewayEui : undefined,
+      skipTxAckTrack: true,
+      fPending: queuedCount > 1,
+      fromUplinkFlush: true,
+    };
     try {
-      const sent = enqueueAppDownlink(userId, devEui, flushFPort, flushBuf, {
-        confirmed: row.confirmed,
-        delayMs: row.delayMs,
-        priority: row.priority,
-        deviceClass: row.deviceClass || 'A',
-        gatewayEui: row.gatewayEui && row.gatewayEui.length === 16 ? row.gatewayEui : undefined,
-        skipTxAckTrack: false,
-        fPending: queuedCount > 1,
-        fromUplinkFlush: true,
-      });
+      let sent;
+      try {
+        sent = enqueueAppDownlink(userId, devEui, flushFPort, flushBuf, flushOpts);
+      } catch (eFirst) {
+        const cFirst = eFirst && eFirst.code ? String(eFirst.code) : '';
+        if (cFirst === 'DOWNLINK_IN_FLIGHT') {
+          try {
+            if (typeof store.lnsPruneAbandonedTrackedAppDownlinksForDev === 'function') {
+              store.lnsPruneAbandonedTrackedAppDownlinksForDev(userId, devEui);
+            }
+          } catch {
+            /* ignore */
+          }
+          sent = enqueueAppDownlink(userId, devEui, flushFPort, flushBuf, flushOpts);
+        } else {
+          throw eFirst;
+        }
+      }
       store.lnsDeleteDeferredAppDownlinkById(row.id);
       if (row.userId && String(row.userId) !== String(userId)) {
         console.log(
@@ -1871,6 +1910,15 @@ function createLorawanLnsEngine(ctx) {
       classAWindow: cls === 'A' && !useImme ? classAWindow : 'RX1',
       band: gwBandU,
     });
+    if (!ackOnly && payloadBuf && payloadBuf.length && cls !== 'C') {
+      pullObj._syscomAppRestore = {
+        fPort,
+        payloadHex: payloadBuf.toString('hex').toLowerCase(),
+        deviceClass: cls,
+        confirmed: Boolean(opt.confirmed),
+        devEui: devEuiNorm16,
+      };
+    }
     try {
       const tx = pullObj && pullObj.txpk;
       if (tx && String(process.env.SYSCOM_LNS_LOG_DOWNLINK_SCHEDULE || '').trim() === '1') {
@@ -1891,10 +1939,13 @@ function createLorawanLnsEngine(ctx) {
     } catch {
       /* ignore log */
     }
-    const dlPriority =
+    let dlPriority =
       opt.priority != null && Number.isFinite(Number(opt.priority))
         ? Math.max(0, Math.min(255, Math.floor(Number(opt.priority))))
         : appDownlinkDefaultPriority();
+    if (opt.fromUplinkFlush && cls !== 'C') {
+      dlPriority = classAUplinkFlushPriority(dlPriority);
+    }
     /**
      * El hueco por gateway es solo para clase C `imme` (apagador / TOO_EARLY en UG65).
      * `processDataUp` ya reservó ese silencio. Si clase A vuelve a llamar
