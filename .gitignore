@@ -75,8 +75,7 @@ Desktop.ini
 *.sw?
 
 # Asistentes IA (configuración local — no compartir entre máquinas)
-CLAUDE.md
-**/CLAUDE.md
+# CLAUDE.md sí se versiona: es el import delgado de AGENTS.md (paridad Claude Code en clones).
 .claude/
 **/.claude/
 .cursor/
