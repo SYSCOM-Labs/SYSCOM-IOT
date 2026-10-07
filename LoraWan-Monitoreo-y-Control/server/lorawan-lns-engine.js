@@ -1834,22 +1834,6 @@ function createLorawanLnsEngine(ctx) {
       } else {
         console.log('[LNS] Downlink diferido enviado tras uplink →', devEui, 'fPort', flushFPort, 'cola id', row.id);
       }
-      try {
-        insertUiEvent(
-          userId,
-          devEui,
-          'downlink_deferred_flushed',
-          JSON.stringify({
-            fPort: flushFPort,
-            payloadHex: flushHex,
-            deferredQueueId: row.id,
-            pendingId: row.id,
-            origin: row.origin || '',
-          })
-        );
-      } catch (e2) {
-        console.warn('[LNS] UI event deferred flush:', e2.message);
-      }
       return sent || { ok: true };
     } catch (e) {
       const c = e && e.code ? String(e.code) : '';
