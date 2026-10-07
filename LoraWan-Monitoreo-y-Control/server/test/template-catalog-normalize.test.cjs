@@ -110,6 +110,69 @@ test('sanitizeTemplatesCatalog: Timewave conserva HEX operativos ya actualizados
   assert.equal(out[0].downlinks[0].hex, hex);
 });
 
+test('sanitizeTemplatesCatalog: ultrasónico no recibe HEX DLT/645 mecánico', () => {
+  const { sanitizeTemplatesCatalog } = require('../lib/template-catalog-normalize.cjs');
+  const usClose = '6811404100262002000404a01700999a16';
+  const out = sanitizeTemplatesCatalog([
+    {
+      id: 'us',
+      marca: 'Timewave',
+      modelo: 'Ultrasonic-Water-Meter-LoRa',
+      channel: '2',
+      lorawanClass: 'A',
+      downlinks: [],
+    },
+    {
+      id: 'mech',
+      marca: 'Timewave',
+      modelo: 'Water-Meter-LoRa',
+      channel: '2',
+      lorawanClass: 'A',
+      downlinks: [{ name: 'Cerrar válvula', hex: 'fefefefe6818360026200268140e35dd93373533333363636363eeee9a16' }],
+    },
+  ]);
+  const us = out.find((t) => t.modelo === 'Ultrasonic-Water-Meter-LoRa');
+  const mech = out.find((t) => t.modelo === 'Water-Meter-LoRa');
+  assert.ok(us);
+  assert.equal(us.downlinks[0].hex, usClose);
+  assert.equal(us.downlinks[0].hex.startsWith('fefefefe'), false);
+  assert.equal(mech.downlinks[0].hex.startsWith('fefefefe'), true);
+});
+
+test('sanitizeTemplatesCatalog: HEX DLT/645 en plantilla ultrasónica se sustituye por CJ/T 188', () => {
+  const { sanitizeTemplatesCatalog } = require('../lib/template-catalog-normalize.cjs');
+  const out = sanitizeTemplatesCatalog([
+    {
+      id: 'us',
+      marca: 'Timewave',
+      modelo: 'Ultrasonic-Water-Meter-LoRa',
+      channel: '2',
+      downlinks: [{ name: 'Cerrar válvula', hex: 'fefefefe6818360026200268140e35dd93373533333363636363eeee9a16' }],
+    },
+  ]);
+  assert.equal(out[0].downlinks[0].hex, '6811404100262002000404a01700999a16');
+});
+
+test('sanitizeTemplatesCatalog: WT201 gana consigna 24 °C en frío sin borrar las demás', () => {
+  const { sanitizeTemplatesCatalog } = require('../lib/template-catalog-normalize.cjs');
+  const out = sanitizeTemplatesCatalog([
+    {
+      id: 'tpl_builtin_wt201',
+      marca: 'Milesight',
+      modelo: 'WT201',
+      channel: '85',
+      lorawanClass: 'C',
+      downlinks: [
+        { name: 'Consigna 23 °C (frío)', hex: 'ffb70217' },
+        { name: 'Reiniciar dispositivo', hex: 'ff10ff' },
+      ],
+    },
+  ]);
+  assert.equal(out[0].downlinks[1].name, 'Consigna 24 °C (frío)');
+  assert.equal(out[0].downlinks[1].hex, 'ffb70218');
+  assert.equal(out[0].downlinks[2].hex, 'ff10ff');
+});
+
 test('sanitizeTemplatesCatalog: elimina Timewave Water-Meter aunque no exista LoRa', () => {
   const { sanitizeTemplatesCatalog } = require('../lib/template-catalog-normalize.cjs');
   const out = sanitizeTemplatesCatalog([

@@ -413,6 +413,15 @@ function executeDownlinkAction(userId, action, rule) {
     automationLnsEnqueueExtras()
   );
   if (!r.ok) return;
+  if (r.duplicateSkipped) {
+    console.info(
+      '[automation] downlink omitido: la misma acción ya está en cola device=%s fPort=%s kind=%s',
+      targetId,
+      r.fPort,
+      r.duplicateKind || ''
+    );
+    return;
+  }
 
   if (r.deferred) {
     appendDownlinkLog(userId, {

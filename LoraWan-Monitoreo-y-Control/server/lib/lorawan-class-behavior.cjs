@@ -150,12 +150,30 @@ function classAUplinkFlushPriority(rowPriority) {
  * Solo ACK FPort 0 cuando no hay comando encolado ni flush hecho (el flush ya lleva el bit ACK).
  * DeviceTimeAns / LinkCheckAns ya llevan el bit ACK: no mandar un segundo FPort 0 vacío.
  */
-function shouldSendMacAckOnlyAfterUplink({ flushed, deferredStillQueued, pendingMacAck, macAnsSent }) {
+function shouldSendMacAckOnlyAfterUplink({
+  flushed,
+  deferredStillQueued,
+  pendingMacAck,
+  macAnsSent,
+  suppressQueuedFlush,
+}) {
   if (!pendingMacAck) return false;
   if (flushed) return false;
-  if (deferredStillQueued) return false;
+  if (deferredStillQueued && !suppressQueuedFlush) return false;
   if (macAnsSent) return false;
   return true;
+}
+
+/**
+ * Copia del mismo uplink (otra pasarela o reintento confirmado). fCnt no avanzó.
+ * El primer uplink tras join deja fcnt_up en -1 y no cuenta como retransmisión.
+ */
+function isRetransmittedUplinkFcnt(previousFcnt, nextFcnt) {
+  const prev = Number(previousFcnt);
+  const next = Number(nextFcnt);
+  if (!Number.isFinite(prev) || prev < 0) return false;
+  if (!Number.isFinite(next) || next < 0) return false;
+  return (next >>> 0) === (prev >>> 0);
 }
 
 /** CID DeviceTimeReq / DeviceTimeAns (LoRaWAN 1.0.3). */
@@ -248,6 +266,7 @@ module.exports = {
   CLASS_A_UPLINK_FLUSH_PRIORITY,
   classAUplinkFlushPriority,
   shouldSendMacAckOnlyAfterUplink,
+  isRetransmittedUplinkFcnt,
   parseClassAAppRestoreFromPullJson,
   DEVICE_TIME_CID,
   buildDeviceTimeAnsMac,

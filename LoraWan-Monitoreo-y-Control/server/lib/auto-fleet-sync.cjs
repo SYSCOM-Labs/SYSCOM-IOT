@@ -5,6 +5,7 @@ const path = require('path');
 const { resolveDownlinkDeviceClassForLns, normalizeDeviceClass } = require('./resolve-downlink-class.cjs');
 const { remapWs501LegacyDownlinkHex, remapWs501DownlinkList } = require('./ws501-downlink-legacy.cjs');
 const { sanitizeTemplateCatalogEntry, sanitizeTemplatesCatalog, isTimewaveBrandTemplate } = require('./template-catalog-normalize.cjs');
+const { WT201_DOWNLINK_PRESETS } = require('./wt201-downlink-encode.cjs');
 
 const ROOT = path.join(__dirname, '..', '..');
 
@@ -93,14 +94,7 @@ function builtinCatalogTemplates() {
       channel: '85',
       lorawanClass: 'C',
       decoderScript: wt201Decoder,
-      downlinks: normalizeDownlinks([
-        { name: 'Encender (control temperatura)', hex: 'ffc501' },
-        { name: 'Apagar (control temperatura)', hex: 'ffc500' },
-        { name: 'Consigna 22 °C (auto)', hex: 'ffb70316' },
-        { name: 'Consigna 23 °C (auto)', hex: 'ffb70317' },
-        { name: 'Reiniciar dispositivo', hex: 'ff10ff' },
-        { name: 'Consultar estado', hex: 'ff28ff' },
-      ]),
+      downlinks: normalizeDownlinks(WT201_DOWNLINK_PRESETS),
     },
   ];
 }

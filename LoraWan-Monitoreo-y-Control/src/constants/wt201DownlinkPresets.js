@@ -8,6 +8,7 @@ export const WT201_DOWNLINK_PRESETS = [
   { name: 'Consigna 23 °C (auto)', hex: 'ffb70317' },
   { name: 'Consigna 22 °C (frío)', hex: 'ffb70216' },
   { name: 'Consigna 23 °C (frío)', hex: 'ffb70217' },
+  { name: 'Consigna 24 °C (frío)', hex: 'ffb70218' },
   { name: 'Reiniciar dispositivo', hex: 'ff10ff' },
   { name: 'Consultar estado', hex: 'ff28ff' },
 ];

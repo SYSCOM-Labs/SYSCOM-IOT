@@ -8,6 +8,7 @@
 
 const vm = require('node:vm');
 const timewaveWaterMeter = require('./timewave-water-meter');
+const timewaveUltrasonicWaterMeter = require('./timewave-ultrasonic-water-meter');
 const eastronSdm230 = require('./eastron-sdm230');
 const shengdaAppLayer = require('./shengda-app-layer');
 const { DECODER_SCRIPT: VS133_DECODER_SCRIPT } = require('./milesight-vs133-decoder.cjs');
@@ -143,7 +144,7 @@ function runDecoderScript(script, fPortNum, byteBuffer) {
   const bytes = Array.from(byteBuffer);
 
   const sandbox = {
-    /** Timewave / DLT645 medidor de agua LoRaWAN (Wuhan TimeWave). */
+    /** Timewave mecánico / DLT645 (Water-Meter-LoRa). No usar para ultrasónico. */
     Timewave: {
       decodeFrame(bytes) {
         const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
@@ -156,6 +157,19 @@ function runDecoderScript(script, fPortNum, byteBuffer) {
       },
       buildIntervalCommandHex(meterNo12, minutes) {
         return timewaveWaterMeter.buildIntervalCommand(meterNo12, minutes).toString('hex');
+      },
+    },
+    /** Timewave ultrasónico / CJ/T 188-2004 V1.0.2 (Ultrasonic-Water-Meter-LoRa). */
+    TimewaveUltrasonic: {
+      decodeFrame(bytes) {
+        const buf = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
+        return timewaveUltrasonicWaterMeter.decodeFrame(buf);
+      },
+      buildOpenValveCommandHex(meterNo14) {
+        return timewaveUltrasonicWaterMeter.buildOpenValveCommand(meterNo14).toString('hex');
+      },
+      buildCloseValveCommandHex(meterNo14) {
+        return timewaveUltrasonicWaterMeter.buildCloseValveCommand(meterNo14).toString('hex');
       },
     },
     /** Eastron SDM230-LoraWAN (carga activa + Modbus RTU en downlink). Esclavo por defecto 1. */

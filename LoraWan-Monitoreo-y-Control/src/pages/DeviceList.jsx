@@ -600,7 +600,7 @@ const DeviceList = ({ listSearchQuery = '', onListSearchQueryChange }) => {
           '❌ No hay puerto LoRaWAN (FPort) guardado para este dispositivo. Debe coincidir con el «puerto» de la plantilla (decoder en servidor): reaplique la plantilla o pida al superadmin que actualice el canal.';
       } else if (status === 400 && err.response?.data?.code === 'TIMEWAVE_METER_NO_MISSING') {
         friendlyError =
-          '❌ Timewave: no se conoce el número de medidor (12 hex) de la última lectura. El DevEUI no sirve. Espere un uplink DLT/645 o capture el n.º en el alta.';
+          '❌ Timewave: no se conoce el número de medidor de la última lectura (12 hex DLT/645 mecánico, o 14 hex CJ/T 188 ultrasónico). El DevEUI no sirve. Espere un uplink o capture el n.º en el alta.';
       } else if (status === 400 && err.response?.data?.code === 'CLASS_A_RX_WINDOW_CLOSED') {
         friendlyError =
           '❌ Clase A: ventana RX cerrada y el servidor no encoló el comando (reinicie el backend con la última versión; si persiste, revise logs del servidor).';

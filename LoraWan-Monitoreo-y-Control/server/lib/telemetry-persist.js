@@ -47,11 +47,36 @@ const DEDUP_IGNORE_KEYS = new Set([
   'status',
   'source',
   'uplink_id',
+  'lastAppUplinkMs',
+  'fCnt',
+  'fcnt',
+  'FCnt',
+  'timewave_seq',
 ]);
 
 function envMs(name, fallback) {
   const n = parseInt(String(process.env[name] || '').trim(), 10);
   return Number.isFinite(n) ? Math.max(0, n) : fallback;
+}
+
+function payloadHexOf(props) {
+  if (!props || props.payload_hex == null) return '';
+  return String(props.payload_hex).trim().toUpperCase();
+}
+
+/** Misma lectura de medidor aunque cambien seq, RSSI o el reloj de ingesta. */
+function sameTimewaveReading(prev, next) {
+  if (!prev || !next) return false;
+  if (prev.timewave_protocol !== true || next.timewave_protocol !== true) return false;
+  const meterA = String(prev.timewave_meterNo || '').trim();
+  const meterB = String(next.timewave_meterNo || '').trim();
+  if (!meterA || meterA !== meterB) return false;
+  if (String(prev.timewave_frame || '') !== String(next.timewave_frame || '')) return false;
+  if (String(prev.timewave_di || '').toLowerCase() !== String(next.timewave_di || '').toLowerCase()) return false;
+  const volA = prev.water_cumulative_raw != null ? prev.water_cumulative_raw : prev.water_cumulative_m3;
+  const volB = next.water_cumulative_raw != null ? next.water_cumulative_raw : next.water_cumulative_m3;
+  if (volA == null || volB == null) return false;
+  return String(volA) === String(volB);
 }
 
 function isJoinOnlyProperties(props) {
@@ -149,8 +174,16 @@ function shouldSkipTelemetryInsert(store, userId, deviceId, properties) {
   }
 
   const dedupMs = Math.min(300_000, envMs('SYSCOM_TELEMETRY_DEDUP_MS', 12_000));
-  const prevHex = prevProps.payload_hex != null ? String(prevProps.payload_hex).trim().toUpperCase() : '';
-  const nextHex = prepared.payload_hex != null ? String(prepared.payload_hex).trim().toUpperCase() : '';
+  /** El intervalo más corto de estos medidores es 1 h; una trama igual antes de eso es retransmisión. */
+  const sameReadingMs = envMs('SYSCOM_TELEMETRY_SAME_READING_DEDUP_MS', 60 * 60 * 1000);
+  const prevHex = payloadHexOf(prevProps);
+  const nextHex = payloadHexOf(prepared);
+  if (ageMs < sameReadingMs && prevHex && nextHex && prevHex === nextHex) {
+    return { skip: true, reason: 'same_payload', prepared, suppressRealtime: true };
+  }
+  if (ageMs < sameReadingMs && sameTimewaveReading(prevProps, prepared)) {
+    return { skip: true, reason: 'same_reading', prepared, suppressRealtime: true };
+  }
   if (prevHex && nextHex && prevHex !== nextHex) {
     return { skip: false, prepared };
   }
@@ -174,5 +207,6 @@ module.exports = {
   telemetryIngestFingerprint,
   shouldSkipTelemetryInsert,
   isJoinOnlyProperties,
+  sameTimewaveReading,
   STRIP_BEFORE_PERSIST,
 };

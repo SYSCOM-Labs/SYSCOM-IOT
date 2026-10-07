@@ -15,7 +15,13 @@
 import { SEED_DEVICE_TEMPLATES } from '../constants/seedDeviceTemplates';
 import { downlinkDeferUntilUplink, forcedLorawanClassForProductModel } from '../utils/lorawanClassBehavior';
 import { remapWs501DownlinkList } from '../utils/ws501DownlinkHex';
-import { pickTimewaveMeterNoFromDevice, pickTimewaveDownlinkFPort, isTimewaveBrandLabel } from '../utils/timewaveDownlinkHex';
+import {
+  pickTimewaveMeterNoFromDevice,
+  pickTimewaveDownlinkFPort,
+  isTimewaveBrandLabel,
+  isTimewaveWaterMeterLoraLabel,
+  isTimewaveUltrasonicLabel,
+} from '../utils/timewaveDownlinkHex';
 import { getLocalUser } from './localAuth';
 
 const STORAGE_KEY = 'device_profile_templates_v1';
@@ -861,7 +867,7 @@ function timewaveCatalogDownlinksNeedRefresh(downlinks) {
     )
     .filter(Boolean);
   if (!hexes.length) return true;
-  return hexes.some((h) => h.includes('aaaa') || h.includes('bbbb') || h.includes('551900252002'));
+  return hexes.some((h) => h.includes('aaaa') || h.includes('bbbb') || h.includes('551900252002') || !h.startsWith('fefefefe'));
 }
 
 function canonicalTimewaveSeedDownlinks() {
@@ -877,13 +883,81 @@ function canonicalTimewaveSeedDownlinks() {
   return normalizeDownlinks(seed?.downlinks);
 }
 
+function canonicalTimewaveUltrasonicSeedDownlinks() {
+  const seed = SEED_DEVICE_TEMPLATES.find(
+    (s) =>
+      String(s?.marca || '')
+        .trim()
+        .toLowerCase() === 'timewave' &&
+      String(s?.modelo || '')
+        .trim()
+        .toLowerCase() === 'ultrasonic-water-meter-lora'
+  );
+  return normalizeDownlinks(seed?.downlinks);
+}
+
+function timewaveUltrasonicCatalogDownlinksNeedRefresh(downlinks) {
+  const list = Array.isArray(downlinks) ? downlinks : [];
+  const hexes = list
+    .map((d) =>
+      String(d?.hex || '')
+        .trim()
+        .replace(/\s/g, '')
+        .replace(/^0x/i, '')
+        .toLowerCase()
+    )
+    .filter(Boolean);
+  if (!hexes.length) return true;
+  return hexes.some((h) => h.startsWith('fefefefe') || h.includes('aaaa') || h.includes('bbbb'));
+}
+
 function applyTimewaveManufacturerDownlinkLabels(list) {
-  const canonical = canonicalTimewaveSeedDownlinks();
+  const canonicalMech = canonicalTimewaveSeedDownlinks();
+  const canonicalUs = canonicalTimewaveUltrasonicSeedDownlinks();
   return (Array.isArray(list) ? list : []).map((t) => {
     if (!t) return t;
-    if (!isTimewaveBrandLabel(t.marca, t.modelo)) return t;
+    if (isTimewaveUltrasonicLabel(t.marca, t.modelo)) {
+      if (!timewaveUltrasonicCatalogDownlinksNeedRefresh(t.downlinks)) return t;
+      return { ...t, downlinks: canonicalUs };
+    }
+    if (!isTimewaveWaterMeterLoraLabel(t.marca, t.modelo)) return t;
     if (!timewaveCatalogDownlinksNeedRefresh(t.downlinks)) return t;
-    return { ...t, downlinks: canonical };
+    return { ...t, downlinks: canonicalMech };
+  });
+}
+
+function appendMissingWt201Cool24(list) {
+  const seed = SEED_DEVICE_TEMPLATES.find(
+    (s) => String(s?.modelo || '').trim().toLowerCase() === 'wt201'
+  );
+  const extra = (seed?.downlinks || []).find((d) => String(d?.hex || '').replace(/\s/g, '').toLowerCase() === 'ffb70218');
+  if (!extra) return list;
+  const hex = 'ffb70218';
+  return (Array.isArray(list) ? list : []).map((t) => {
+    if (!t || String(t.modelo || '').trim().toLowerCase() !== 'wt201') return t;
+    const current = Array.isArray(t.downlinks) ? t.downlinks : [];
+    const has = current.some(
+      (d) =>
+        String(d?.hex || '')
+          .trim()
+          .replace(/\s/g, '')
+          .replace(/^0x/i, '')
+          .toLowerCase() === hex
+    );
+    if (has) return t;
+    const row = { name: String(extra.name || 'Consigna 24 °C (frío)').trim(), hex };
+    const after23 = current.findIndex(
+      (d) =>
+        String(d?.hex || '')
+          .trim()
+          .replace(/\s/g, '')
+          .replace(/^0x/i, '')
+          .toLowerCase() === 'ffb70217'
+    );
+    const downlinks = current.slice();
+    if (after23 >= 0) downlinks.splice(after23 + 1, 0, row);
+    else downlinks.push(row);
+    return { ...t, downlinks };
   });
 }
 
@@ -894,14 +968,18 @@ export function getDeviceTemplates() {
         pruneStaleTimewaveWaterMeterTemplates(filterCatalogByExcludedBuiltinSeeds(serverTemplatesState.templates))
       )
     );
-    return applyTimewaveManufacturerDownlinkLabels(
-      pruneStaleTimewaveWaterMeterTemplates(dedupeCustomCatalogByModelo(mergeSeedsIntoTemplateList(custom)))
+    return appendMissingWt201Cool24(
+      applyTimewaveManufacturerDownlinkLabels(
+        pruneStaleTimewaveWaterMeterTemplates(dedupeCustomCatalogByModelo(mergeSeedsIntoTemplateList(custom)))
+      )
     );
   }
   ensureBuiltinSeedsMerged();
-  return applyTimewaveManufacturerDownlinkLabels(
-    pruneStaleTimewaveWaterMeterTemplates(
-      dedupeCustomCatalogByModelo(filterCatalogByExcludedBuiltinSeeds(loadRaw()))
+  return appendMissingWt201Cool24(
+    applyTimewaveManufacturerDownlinkLabels(
+      pruneStaleTimewaveWaterMeterTemplates(
+        dedupeCustomCatalogByModelo(filterCatalogByExcludedBuiltinSeeds(loadRaw()))
+      )
     )
   );
 }

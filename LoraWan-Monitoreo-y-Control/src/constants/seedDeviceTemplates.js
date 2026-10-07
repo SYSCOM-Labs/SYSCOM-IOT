@@ -9,6 +9,7 @@ import { WS501_DECODER_SCRIPT } from './ws501DecoderScript.js';
 import { UC300_DECODER_SCRIPT } from './uc300DecoderScript.js';
 import { SHENGDA_V16_DECODER_SCRIPT } from './shengdaV16DecoderScript.js';
 import { TIMEWAVE_DECODER_SCRIPT } from './timewaveDecoderScript.js';
+import { TIMEWAVE_ULTRASONIC_DECODER_SCRIPT } from './timewaveUltrasonicDecoderScript.js';
 import { VS133_DECODER_SCRIPT } from './vs133DecoderScript.js';
 import { WT201_DOWNLINK_PRESETS } from './wt201DownlinkPresets.js';
 import { WT201_DECODER_SCRIPT } from './wt201DecoderScript.js';
@@ -59,6 +60,25 @@ export const SEED_DEVICE_TEMPLATES = [
       { name: 'Intervalo de 1440 min (24 h)', hex: 'fefefefe6818360026200268140e3534a33735333333636363637347df16' },
       { name: 'Intervalo de 720 min (12 h)', hex: 'fefefefe6818360026200268140e3534a3373533333363636363533ab216' },
       { name: 'Intervalo de 60 min (1 h)', hex: 'fefefefe6818360026200268140e3534a33735333333636363639333eb16' },
+    ],
+  },
+  {
+    modelo: 'Ultrasonic-Water-Meter-LoRa',
+    marca: 'Timewave',
+    /** FPort de aplicación US915 según ficha V1.0.2 (habitualmente 2). */
+    channel: '2',
+    lorawanClass: 'A',
+    decoderScript: TIMEWAVE_ULTRASONIC_DECODER_SCRIPT,
+    /**
+     * HEX CJ/T 188 (medidor ejemplo 00022026004140). Sin FEFEFEFE, sin +0x33.
+     * Al enviar, el servidor sustituye el n.º real de 14 hex.
+     */
+    downlinks: [
+      { name: 'Cerrar válvula', hex: '6811404100262002000404a01700999a16' },
+      { name: 'Abrir válvula', hex: '6811404100262002000404a01700555616' },
+      { name: 'Intervalo de reporte 24 h', hex: '681140410026200200020ca119009097180190983c0800b616' },
+      { name: 'Intervalo de reporte 12 h', hex: '681140410026200200020ca1190090970c0190983c0800aa16' },
+      { name: 'Intervalo de reporte 1 h', hex: '681140410026200200020ca119009097010190983c08009f16' },
     ],
   },
   {

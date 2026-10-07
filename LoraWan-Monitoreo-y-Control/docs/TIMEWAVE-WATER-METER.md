@@ -1,4 +1,17 @@
-# Timewave — medidor de agua LoRaWAN (DLT/645)
+# Timewave — medidores de agua LoRaWAN
+
+Hay **dos protocolos distintos**. No se mezclan HEX, decoder ni número de medidor.
+
+| Familia | Plantilla | Trama | N.º medidor | Válvula |
+|---------|-----------|--------|-------------|---------|
+| **Mecánico** DLT/645 | `Timewave · Water-Meter-LoRa` | `FEFEFEFE 68 … 68 C L DATA CS 16` con **+0x33** | **12 hex** (6 B) | C=`14h` / ACK `94h`; aire `DDDD` abrir / `EEEE` cerrar |
+| **Ultrasónico** CJ/T 188-2004 V1.0.2 | `Timewave · Ultrasonic-Water-Meter-LoRa` | `68 11` + 7 B addr LE + `C L DATA CS 16` **sin** segundo `68` ni +0x33 | **14 hex** (7 B) | C=`04h` / ACK `84h`; `55H` abrir / `99H` cerrar; DI `A017` |
+
+Las pruebas actuales con medidor mecánico usan **Water-Meter-LoRa**. El documento *Wuhan Timewave Ultrasonic Water Meter LoRaWAN Protocol V1.0.2* **no** aplica a ese equipo.
+
+---
+
+# Timewave — medidor mecánico (DLT/645)
 
 Compatibilidad con **Wuhan TimeWave Network Technology Co., Ltd.** — protocolo **Water Meter Data** (basado en DLT/645) sobre el **FRMPayload** LoRaWAN.
 
@@ -98,8 +111,35 @@ node -e "const t=require('./server/timewave-water-meter.js'); const m='022026003
 
 ## Módulo servidor
 
-- `server/timewave-water-meter.js` — `decodeFrame`, `buildValveCommand`, `buildIntervalCommand`, utilidades `+33`/`-33`.
+- `server/timewave-water-meter.js` — DLT/645 mecánico: `decodeFrame`, `buildValveCommand`, `buildIntervalCommand`, `+33`/`-33`.
+- `server/timewave-ultrasonic-water-meter.js` — CJ/T 188 ultrasónico V1.0.2: `decodeFrame`, `buildOpenValveCommand` / `buildCloseValveCommand` (`55H`/`99H`), `buildUploadParamsCommand` (intervalo en **horas**).
+
+En el sandbox del decoder: `Timewave.decodeFrame` (mecánico) y `TimewaveUltrasonic.decodeFrame` (ultrasónico). No intercambiarlos.
 
 ## Referencia del fabricante
 
-Documento **Water Meter Data Protocol** — *Wuhan TimeWave Network Technology Co., Ltd.* (lectura `91h`, válvula `14h`/`94h`/`D4h`, intervalo `14h`/`94h`/`D4h`, bits de estado §3.1–3.2).
+- Mecánico: documento **Water Meter Data Protocol** — *Wuhan TimeWave Network Technology Co., Ltd.* (lectura `91h`, válvula `14h`/`94h`/`D4h`, intervalo `14h`/`94h`/`D4h`, bits de estado §3.1–3.2).
+- Ultrasónico: **Wuhan Timewave Ultrasonic Water Meter LoRaWAN Communication Protocol Specification V1.0.2** (CJ/T 188-2004, T=`11H`, DI `9097` / `A017` / `A119`).
+
+## Ultrasónico (CJ/T 188) — resumen
+
+| Tramo | Contenido |
+|--------|-------------|
+| `68` | Inicio |
+| `11` | Tipo ultrasónico (frío `10H`) |
+| 7 B | Dirección **low byte first** (en pantalla: invertir → 14 hex, ej. `00022026004140` ← aire `40 41 00 26 20 02 00`) |
+| `C` | Control (`01` leer, `04` escribir válvula, `02` parámetros; respuesta bit7 → `81`/`84`/`82`) |
+| `L` | Longitud del campo DATA |
+| DATA | DI (2 B en orden de documento, p. ej. `90 97`, `A0 17`) + SEQ + datos **sin +0x33** |
+| CS | Suma desde `68` hasta el byte anterior al CS, mod 256 |
+| `16` | Fin |
+
+Ejemplos de la ficha (medidor `00022026004140`):
+
+```
+cerrar  6811404100262002000404A01700999A16
+abrir   6811404100262002000404A01700555616
+lectura 681140410026200200811F9097…1416
+```
+
+Tras un comando de válvula el medidor responde `84`/`C4` y luego reporta una lectura `9097`. Clase A: el HEX se entrega en RX1 del **uplink de datos**, no del Join-Accept. Antes de cada reporte el módulo hace `AT+Link` (uplink confirmado): el LNS debe ACK en RX1.

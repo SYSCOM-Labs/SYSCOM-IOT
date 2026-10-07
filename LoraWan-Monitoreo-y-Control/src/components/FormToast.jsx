@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import { AlertCircle, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import './FormToast.css';
 
@@ -8,12 +8,14 @@ import './FormToast.css';
  */
 export default function FormToast({ type, message, title, onDismiss, durationMs = 5000, large = false }) {
   const hasContent = Boolean((message && String(message).trim()) || (title && String(title).trim()));
+  const onDismissRef = useRef(onDismiss);
+  onDismissRef.current = onDismiss;
 
   useEffect(() => {
     if (!hasContent || durationMs <= 0) return undefined;
-    const t = setTimeout(() => onDismiss?.(), durationMs);
+    const t = setTimeout(() => onDismissRef.current?.(), durationMs);
     return () => clearTimeout(t);
-  }, [hasContent, durationMs, onDismiss]);
+  }, [hasContent, message, title, durationMs]);
 
   if (!hasContent) return null;
 

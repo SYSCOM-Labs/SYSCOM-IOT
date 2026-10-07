@@ -93,6 +93,27 @@ test('classAUplinkFlushPriority: el HEX de RX1 gana al ACK MAC / clase C', () =>
   assert.equal(classAUplinkFlushPriority(255), 255);
 });
 
+test('isRetransmittedUplinkFcnt: reintento y primer paquete tras join', () => {
+  const { isRetransmittedUplinkFcnt } = require('../lib/lorawan-class-behavior.cjs');
+  assert.equal(isRetransmittedUplinkFcnt(-1, 0), false);
+  assert.equal(isRetransmittedUplinkFcnt(0, 0), true);
+  assert.equal(isRetransmittedUplinkFcnt(12, 12), true);
+  assert.equal(isRetransmittedUplinkFcnt(12, 13), false);
+});
+
+test('shouldSendMacAckOnlyAfterUplink: confirma aunque el cierre de válvula ya no se reenvíe', () => {
+  const { shouldSendMacAckOnlyAfterUplink } = require('../lib/lorawan-class-behavior.cjs');
+  assert.equal(
+    shouldSendMacAckOnlyAfterUplink({
+      flushed: null,
+      deferredStillQueued: true,
+      pendingMacAck: true,
+      suppressQueuedFlush: true,
+    }),
+    true
+  );
+});
+
 test('shouldSendMacAckOnlyAfterUplink: no tapa un HEX de válvula encolado', () => {
   const { shouldSendMacAckOnlyAfterUplink } = require('../lib/lorawan-class-behavior.cjs');
   assert.equal(

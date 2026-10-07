@@ -18,6 +18,10 @@ test('WT201 setpoint auto 22/23', () => {
   assert.equal(encodeTemperatureControl(3, 23, 0), 'ffb70317');
 });
 
+test('WT201 setpoint frío 24 °C', () => {
+  assert.equal(encodeTemperatureControl(2, 24, 0), 'ffb70218');
+});
+
 test('resolveWt201DownlinkHex aliases', () => {
   assert.equal(resolveWt201DownlinkHex('encender'), 'ffc501');
   assert.equal(resolveWt201DownlinkHex('temp_22'), 'ffb70316');

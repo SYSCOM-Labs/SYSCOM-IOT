@@ -272,3 +272,82 @@ test('uplink de datos cancela Join-Accept pendiente del mismo DevEUI', () => {
     unlinkDb(file);
   }
 });
+
+test('no duplica la misma acción diferida; otra acción sí se encola', () => {
+  const file = tmpDb();
+  const store = new Store(file);
+  try {
+    seedUser(store, 'syscom', 'superadmin');
+    const first = store.lnsInsertDeferredAppDownlink('syscom', DEV_EUI, 85, 'ff01', { deviceClass: 'C' });
+    assert.equal(first.ok, true);
+    assert.equal(first.duplicate, undefined);
+    const again = store.lnsInsertDeferredAppDownlink('syscom', DEV_EUI, 85, 'ff01', { deviceClass: 'C' });
+    assert.equal(again.ok, true);
+    assert.equal(again.duplicate, true);
+    assert.equal(again.id, first.id);
+    assert.equal(again.kind, 'deferred');
+    assert.equal(store.lnsCountDeferredAppDownlinks('syscom', DEV_EUI), 1);
+    const other = store.lnsInsertDeferredAppDownlink('syscom', DEV_EUI, 85, 'ff00', { deviceClass: 'C' });
+    assert.equal(other.ok, true);
+    assert.equal(other.duplicate, undefined);
+    assert.equal(store.lnsCountDeferredAppDownlinks('syscom', DEV_EUI), 2);
+  } finally {
+    store.close();
+    unlinkDb(file);
+  }
+});
+
+test('misma acción en PULL_RESP pendiente bloquea otra copia; al enviarse se puede volver a encolar', () => {
+  const file = tmpDb();
+  const store = new Store(file);
+  try {
+    seedUser(store, 'syscom', 'superadmin');
+    const hex = 'ff01';
+    store.lnsEnqueuePullResp(
+      'syscom',
+      '24e124fffefaf79f',
+      {
+        txpk: { imme: true },
+        _syscomAppAction: { fPort: 85, payloadHex: hex, devEui: DEV_EUI },
+      },
+      0,
+      200,
+      { devEui: DEV_EUI }
+    );
+    const queued = store.lnsFindQueuedSameAppAction(DEV_EUI, 85, hex);
+    assert.ok(queued);
+    assert.equal(queued.kind, 'pending');
+    const dup = store.lnsInsertDeferredAppDownlink('syscom', DEV_EUI, 85, hex, { deviceClass: 'C' });
+    assert.equal(dup.duplicate, true);
+    assert.equal(dup.kind, 'pending');
+    assert.equal(store.lnsCountDeferredAppDownlinks('syscom', DEV_EUI), 0);
+    store.db.prepare(`UPDATE lorawan_lns_downlink SET status = 'sent'`).run();
+    assert.equal(store.lnsFindQueuedSameAppAction(DEV_EUI, 85, hex), null);
+    const fresh = store.lnsInsertDeferredAppDownlink('syscom', DEV_EUI, 85, hex, { deviceClass: 'C' });
+    assert.equal(fresh.ok, true);
+    assert.equal(fresh.duplicate, undefined);
+    assert.equal(store.lnsCountDeferredAppDownlinks('syscom', DEV_EUI), 1);
+  } finally {
+    store.close();
+    unlinkDb(file);
+  }
+});
+
+test('soltar radio de un DevEUI sin alta borra sesión y cola', () => {
+  const file = tmpDb();
+  const store = new Store(file);
+  try {
+    seedUser(store, 'syscom', 'superadmin');
+    upsertSession(store, { userId: 'syscom', devAddr: '384A726A', updatedAt: '2026-10-07T15:00:00.000Z' });
+    store.lnsInsertDeferredAppDownlink('syscom', DEV_EUI, 2, HEX, { deviceClass: 'A' });
+    assert.equal(store.userDeviceExistsForDevEui(DEV_EUI), false);
+    const dropped = store.lnsDropRadioStateForDevEui(DEV_EUI);
+    assert.equal(dropped.sessions, 1);
+    assert.equal(dropped.deferred, 1);
+    assert.equal(store.lnsGetSessionByDevEui('syscom', DEV_EUI), null);
+    assert.equal(store.lnsPeekOldestDeferredAppDownlink('syscom', DEV_EUI), null);
+  } finally {
+    store.close();
+    unlinkDb(file);
+  }
+});

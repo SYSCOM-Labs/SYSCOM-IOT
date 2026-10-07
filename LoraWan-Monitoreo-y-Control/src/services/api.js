@@ -535,6 +535,7 @@ export const sendDownlink = async (deviceId, hex, _credentials, _token, opts = {
                   ? Number(d.txAckMaxWaitMs)
                   : null,
               deferred: Boolean(d.deferred),
+              duplicateSkipped: Boolean(d.duplicateSkipped),
               deferredReason: d.deferredReason,
               pendingId: d.pendingId,
               pendingQueueLength: d.pendingQueueLength,

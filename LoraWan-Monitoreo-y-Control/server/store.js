@@ -683,6 +683,10 @@ class Store {
         );
         CREATE INDEX IF NOT EXISTS idx_lns_def_dl_user_dev ON lorawan_lns_deferred_app_dl(user_id, dev_eui, id);
       `);
+      const cols = this.db.prepare('PRAGMA table_info(lorawan_lns_deferred_app_dl)').all();
+      if (!cols.some((c) => c.name === 'origin')) {
+        this.db.exec("ALTER TABLE lorawan_lns_deferred_app_dl ADD COLUMN origin TEXT NOT NULL DEFAULT ''");
+      }
     } catch (e) {
       console.warn('[Syscom] Migración LNS deferred app dl:', e.message);
     }
@@ -1152,19 +1156,46 @@ class Store {
         SELECT COUNT(*) AS n FROM lorawan_lns_deferred_app_dl
         WHERE user_id = ? AND dev_eui = ?
       `),
+      /** Misma acción (FPort + HEX) ya diferida para este DevEUI, sin importar la cuenta. */
+      lnsDefDlFindSameAction: this.db.prepare(`
+        SELECT id FROM lorawan_lns_deferred_app_dl
+        WHERE dev_eui = ? AND f_port = ? AND lower(payload_hex) = ?
+        ORDER BY id ASC LIMIT 1
+      `),
+      /**
+       * Misma acción ya en PULL_RESP (pending / await_tx_ack).
+       * `_syscomAppAction` cubre clase C; `_syscomAppRestore` cubre clase A/B encolada antes de TX.
+       */
+      lnsDlFindSamePendingAction: this.db.prepare(`
+        SELECT id FROM lorawan_lns_downlink
+        WHERE status IN ('pending', 'await_tx_ack')
+          AND lower(replace(replace(replace(ifnull(tx_dev_eui,''),':',''),'-',''),' ','')) = ?
+          AND (join_session_json IS NULL OR trim(join_session_json) = '')
+          AND (
+            (
+              lower(json_extract(pull_resp_json, '$._syscomAppAction.payloadHex')) = ?
+              AND CAST(json_extract(pull_resp_json, '$._syscomAppAction.fPort') AS INTEGER) = ?
+            )
+            OR (
+              lower(json_extract(pull_resp_json, '$._syscomAppRestore.payloadHex')) = ?
+              AND CAST(json_extract(pull_resp_json, '$._syscomAppRestore.fPort') AS INTEGER) = ?
+            )
+          )
+        ORDER BY id ASC LIMIT 1
+      `),
       lnsDefDlInsert: this.db.prepare(`
         INSERT INTO lorawan_lns_deferred_app_dl (
-          user_id, dev_eui, f_port, payload_hex, confirmed, priority, delay_ms, gateway_eui, device_class, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          user_id, dev_eui, f_port, payload_hex, confirmed, priority, delay_ms, gateway_eui, device_class, created_at, origin
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `),
       lnsDefDlPeekOldest: this.db.prepare(`
-        SELECT id, user_id, dev_eui, f_port, payload_hex, confirmed, priority, delay_ms, gateway_eui, device_class, created_at
+        SELECT id, user_id, dev_eui, f_port, payload_hex, confirmed, priority, delay_ms, gateway_eui, device_class, created_at, origin
         FROM lorawan_lns_deferred_app_dl
         WHERE user_id = ? AND dev_eui = ?
         ORDER BY id ASC LIMIT 1
       `),
       lnsDefDlPeekOldestByDev: this.db.prepare(`
-        SELECT id, user_id, dev_eui, f_port, payload_hex, confirmed, priority, delay_ms, gateway_eui, device_class, created_at
+        SELECT id, user_id, dev_eui, f_port, payload_hex, confirmed, priority, delay_ms, gateway_eui, device_class, created_at, origin
         FROM lorawan_lns_deferred_app_dl
         WHERE dev_eui = ?
         ORDER BY id ASC LIMIT 1
@@ -1175,6 +1206,13 @@ class Store {
       lnsSessionDeleteOtherUsersForDev: this.db.prepare(
         'DELETE FROM lorawan_lns_sessions WHERE dev_eui = ? AND user_id != ?'
       ),
+      lnsSessionDeleteAllForDev: this.db.prepare('DELETE FROM lorawan_lns_sessions WHERE dev_eui = ?'),
+      udExistsByDevEui: this.db.prepare(`
+        SELECT 1 AS x FROM user_devices
+        WHERE lower(replace(replace(replace(ifnull(dev_eui,''),':',''),'-',''),' ','')) = ?
+           OR lower(replace(replace(replace(ifnull(device_id,''),':',''),'-',''),' ','')) = ?
+        LIMIT 1
+      `),
       lnsSessionLatestUserForDev: this.db.prepare(`
         SELECT user_id FROM lorawan_lns_sessions
         WHERE dev_eui = ?
@@ -3009,6 +3047,65 @@ class Store {
    * @param {string} devEuiNorm16 hex 16 chars lower
    * @returns {{ removed: number, devEui: string }}
    */
+  /** Hay alguna fila en `user_devices` para este DevEUI (cualquier cuenta). */
+  userDeviceExistsForDevEui(devEuiNorm16) {
+    const h = String(devEuiNorm16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (h.length !== 16 || !this.st.udExistsByDevEui) return false;
+    return Boolean(this.st.udExistsByDevEui.get(h, h));
+  }
+
+  /**
+   * Suelta sesión LNS, cola diferida y PULL_RESP de aplicación de un DevEUI.
+   * Se usa al eliminar el dispositivo para que un uplink posterior no reabra el aviso de ventana RX.
+   */
+  lnsDropRadioStateForDevEui(devEuiNorm16) {
+    const h = String(devEuiNorm16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    if (h.length !== 16) return { deferred: 0, pending: 0, sessions: 0 };
+    let deferred = 0;
+    let pending = 0;
+    let sessions = 0;
+    try {
+      deferred = this.lnsDeleteAllDeferredAppDownlinksForDevEui(h);
+    } catch {
+      /* ignore */
+    }
+    try {
+      pending = this.lnsDeletePendingAppDownlinksForDevEui(h);
+    } catch {
+      /* ignore */
+    }
+    if (this.st.lnsSessionDeleteAllForDev) {
+      const info = this.st.lnsSessionDeleteAllForDev.run(h);
+      sessions = Number(info.changes || 0);
+    }
+    return { deferred, pending, sessions };
+  }
+
+  /** DevEUI de 16 hex asociados a un device_id (fila de alta o el propio id). */
+  _devEuisForDeviceId(deviceId) {
+    const did = String(deviceId || '').trim();
+    const out = new Set();
+    const asEui = did.replace(/[^0-9a-fA-F]/g, '').toLowerCase();
+    if (asEui.length === 16) out.add(asEui);
+    if (!did) return Array.from(out);
+    try {
+      const rows = this.db.prepare('SELECT dev_eui FROM user_devices WHERE device_id = ?').all(did);
+      for (const r of rows) {
+        const h = String(r.dev_eui || '')
+          .replace(/[^0-9a-fA-F]/g, '')
+          .toLowerCase();
+        if (h.length === 16) out.add(h);
+      }
+    } catch {
+      /* ignore */
+    }
+    return Array.from(out);
+  }
+
   lnsDeleteSessionForUserDev(userId, devEuiNorm16) {
     const h = String(devEuiNorm16 || '')
       .replace(/[^0-9a-fA-F]/g, '')
@@ -3791,6 +3888,32 @@ class Store {
   }
 
   /**
+   * Downlink de aplicación ya en cola (diferida o PULL_RESP aún no transmitido) con el mismo FPort y HEX.
+   * Mientras esa fila siga pendiente, no debe encolarse otra copia de la misma acción al mismo DevEUI.
+   * @returns {{ kind: 'deferred'|'pending', id: number } | null}
+   */
+  lnsFindQueuedSameAppAction(devEuiNorm16, fPort, payloadHexLower) {
+    const deui = String(devEuiNorm16 || '')
+      .replace(/[^0-9a-fA-F]/g, '')
+      .toLowerCase();
+    const hex = String(payloadHexLower || '')
+      .replace(/\s/g, '')
+      .toLowerCase();
+    const fp = Math.floor(Number(fPort));
+    if (deui.length !== 16 || !/^[0-9a-f]+$/.test(hex) || hex.length % 2 !== 0) return null;
+    if (!Number.isFinite(fp) || fp < 1 || fp > 223) return null;
+    if (this.st.lnsDefDlFindSameAction) {
+      const def = this.st.lnsDefDlFindSameAction.get(deui, fp, hex);
+      if (def && def.id != null) return { kind: 'deferred', id: Number(def.id) };
+    }
+    if (this.st.lnsDlFindSamePendingAction) {
+      const live = this.st.lnsDlFindSamePendingAction.get(deui, hex, fp, hex, fp);
+      if (live && live.id != null) return { kind: 'pending', id: Number(live.id) };
+    }
+    return null;
+  }
+
+  /**
    * Encola un downlink de aplicación en SQLite hasta el próximo uplink (ventana clase A / tmst / GW).
    * @returns {{ ok: true, id: number, queueLength: number } | { ok: false, reason: string, queueLength?: number }}
    */
@@ -3811,6 +3934,16 @@ class Store {
     this.st.lnsDefDlPruneOldForDev.run(uid, deui, cut);
     const cRow = this.st.lnsDefDlCount.get(uid, deui);
     const count = cRow && cRow.n != null ? Number(cRow.n) : 0;
+    const same = this.lnsFindQueuedSameAppAction(deui, fp, hex);
+    if (same) {
+      return {
+        ok: true,
+        duplicate: true,
+        id: same.id,
+        queueLength: count,
+        kind: same.kind,
+      };
+    }
     const max = this.lnsDeferAppDownlinkMaxPerDev();
     if (count >= max) return { ok: false, reason: 'QUEUE_FULL', queueLength: count };
     const conf = o.confirmed ? 1 : 0;
@@ -3828,7 +3961,8 @@ class Store {
       .toUpperCase();
     if (dc !== 'B' && dc !== 'C') dc = 'A';
     const now = Date.now();
-    const info = this.st.lnsDefDlInsert.run(uid, deui, fp, hex, conf, pri, dly, gw, dc, now);
+    const origin = String(o.origin || '').trim().slice(0, 40);
+    const info = this.st.lnsDefDlInsert.run(uid, deui, fp, hex, conf, pri, dly, gw, dc, now, origin);
     const id = Number(info.lastInsertRowid);
     return { ok: true, id, queueLength: count + 1 };
   }
@@ -3855,14 +3989,17 @@ class Store {
       confirmed: restore.confirmed,
       priority: CLASS_A_UPLINK_FLUSH_PRIORITY,
       deviceClass: restore.deviceClass,
+      origin: 'class_a_restore',
     });
     if (ins && ins.ok) {
-      console.warn(
-        '[LNS] TX clase A rechazado → HEX devuelto a cola diferida (próximo uplink) →',
-        deui,
-        'fPort',
-        restore.fPort
-      );
+      if (!ins.duplicate) {
+        console.warn(
+          '[LNS] TX clase A rechazado → HEX devuelto a cola diferida (próximo uplink) →',
+          deui,
+          'fPort',
+          restore.fPort
+        );
+      }
       return true;
     }
     console.warn('[LNS] No se pudo devolver HEX clase A a cola diferida:', ins && ins.reason);
@@ -3885,6 +4022,7 @@ class Store {
         .toLowerCase(),
       deviceClass: String(r.device_class || 'A').toUpperCase(),
       createdAt: r.created_at != null ? Number(r.created_at) : 0,
+      origin: String(r.origin || ''),
     };
   }
 
@@ -4415,6 +4553,7 @@ class Store {
   /** Elimina el dispositivo de toda la base (telemetría, asignaciones de todos los usuarios, etiquetas, dashboards, decode, licencia). */
   purgeDeviceGlobally(deviceId) {
     const did = String(deviceId);
+    const euis = this._devEuisForDeviceId(did);
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this.st.telemetryDeleteByDevice.run(did);
@@ -4438,6 +4577,9 @@ class Store {
         /* tabla puede no existir en DB muy antigua */
       }
       this.st.licDelete.run(did);
+      for (const eui of euis) {
+        this.lnsDropRadioStateForDevEui(eui);
+      }
       this.db.exec('COMMIT');
     } catch (e) {
       this.db.exec('ROLLBACK');

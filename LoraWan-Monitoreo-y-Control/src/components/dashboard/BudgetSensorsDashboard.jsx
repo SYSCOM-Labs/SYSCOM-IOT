@@ -2331,7 +2331,7 @@ function downlinkErrorMessage(err) {
     return 'FPort no configurado: el «puerto» de la plantilla debe guardarse en el dispositivo (decoder). Reaplique la plantilla o pida al superadmin que actualice el canal.';
   }
   if (err.response?.data?.code === 'TIMEWAVE_METER_NO_MISSING') {
-    return 'Timewave: falta el número de medidor (12 hex) de la última lectura. El DevEUI no sirve; espere un uplink o capture el n.º en el alta.';
+    return 'Timewave: falta el número de medidor (12 hex DLT/645 o 14 hex CJ/T 188) de la última lectura. El DevEUI no sirve; espere un uplink o capture el n.º en el alta.';
   }
   if (msg.toLowerCase().includes('offline') || msg.toLowerCase().includes('desconect')) return 'Dispositivo fuera de línea.';
   if (msg.toLowerCase().includes('hex') || msg.toLowerCase().includes('invalid')) return 'Comando inválido.';

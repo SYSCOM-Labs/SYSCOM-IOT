@@ -11,6 +11,7 @@ const {
   downlinkPullRespUsesClassCGwFloor,
   resolveClassARxDelaySec: resolveClassARxDelaySecFromSession,
   shouldSendMacAckOnlyAfterUplink,
+  isRetransmittedUplinkFcnt,
   shouldSuppressOtaaJoinForLiveSession,
   buildDeviceTimeAnsMac,
   uplinkHasDeviceTimeReq,
@@ -1042,22 +1043,46 @@ function createLorawanLnsEngine(ctx) {
     const ins = store.lnsInsertDeferredAppDownlink(userId, devEui, 2, hex, {
       deviceClass: 'A',
       priority: 254,
+      origin: 'timewave_valve_retry',
     });
     if (ins && ins.ok) {
-      console.log('[LNS] Cierre Timewave fresco encolado (FPort 2, n.º medidor', meter, ') →', devEui);
+      if (!ins.duplicate) {
+        console.log('[LNS] Cierre Timewave fresco encolado (FPort 2, n.º medidor', meter, ') →', devEui);
+      }
       return true;
     }
     return false;
   }
 
+  function timewaveValveFlushSlot(userId, deui) {
+    const raw = timewaveValveAppFlushCount.get(`${userId}:${deui}`);
+    if (raw == null) return null;
+    if (typeof raw === 'number') return { count: raw, at: 0 };
+    return { count: Number(raw.count) || 0, at: Number(raw.at) || 0 };
+  }
+
   function canFlushTimewaveValveOnAppUplink(userId, deui) {
     const max = Math.max(1, envInt('SYSCOM_LNS_TIMEWAVE_VALVE_APP_FLUSH_MAX', 3));
-    return (timewaveValveAppFlushCount.get(`${userId}:${deui}`) || 0) < max;
+    const windowMs = Math.max(
+      60_000,
+      envInt('SYSCOM_LNS_TIMEWAVE_VALVE_APP_FLUSH_WINDOW_MS', 30 * 60 * 1000)
+    );
+    const slot = timewaveValveFlushSlot(userId, deui);
+    if (!slot) return true;
+    if (slot.at && Date.now() - slot.at >= windowMs) {
+      timewaveValveAppFlushCount.delete(`${userId}:${deui}`);
+      return true;
+    }
+    return slot.count < max;
   }
 
   function noteTimewaveValveAppFlush(userId, deui) {
     const k = `${userId}:${deui}`;
-    timewaveValveAppFlushCount.set(k, (timewaveValveAppFlushCount.get(k) || 0) + 1);
+    const prev = timewaveValveFlushSlot(userId, deui);
+    timewaveValveAppFlushCount.set(k, {
+      count: (prev ? prev.count : 0) + 1,
+      at: prev && prev.at ? prev.at : Date.now(),
+    });
   }
 
   function processJoin(gatewayUserId, gatewayEuiNorm, p, rxpk) {
@@ -1426,19 +1451,31 @@ function createLorawanLnsEngine(ctx) {
       }
     }
 
-    if (session.fcntUp >= 0) {
+    const duplicateFcnt = isRetransmittedUplinkFcnt(session.fcntUp, fcnt32);
+    if (session.fcntUp >= 0 && !duplicateFcnt) {
       const prev = session.fcntUp >>> 0;
-      if (fcnt32 === prev) {
-        console.warn('[LNS] Duplicado FCnt (reemisión); se actualiza actividad y telemetría', fcnt32);
-      } else {
-        const delta = fcnt32 - prev;
-        if (delta > 16384) {
-          console.warn('[LNS] FCnt sospechoso (salto grande), se acepta igual:', prev, '→', fcnt32);
-        }
+      const delta = fcnt32 - prev;
+      if (delta > 16384) {
+        console.warn('[LNS] FCnt sospechoso (salto grande), se acepta igual:', prev, '→', fcnt32);
       }
     }
 
     const devEui = session.devEui;
+    /**
+     * El equipo ya se eliminó del alta, pero la sesión LNS seguía viva: cada uplink
+     * reencolaba el downlink y la UI volvía a mostrar «ventana RX del medidor».
+     */
+    if (typeof store.userDeviceExistsForDevEui === 'function' && !store.userDeviceExistsForDevEui(devEui)) {
+      try {
+        if (typeof store.lnsDropRadioStateForDevEui === 'function') {
+          store.lnsDropRadioStateForDevEui(devEui);
+        }
+      } catch (eDrop) {
+        console.warn('[LNS] no se pudo soltar la sesión del dispositivo eliminado:', eDrop && eDrop.message);
+      }
+      console.log('[LNS] Dispositivo eliminado; se ignora uplink y no se avisa downlink →', devEui);
+      return true;
+    }
     const ud =
       store.getUserDevice(ownerUserId, devEui) ||
       store.getUserDeviceByDevEuiNorm(ownerUserId, devEui) ||
@@ -1482,6 +1519,32 @@ function createLorawanLnsEngine(ctx) {
       } catch {
         /* ignore */
       }
+    }
+
+    /**
+     * Misma trama (otra pasarela o reintento LoRaWAN confirmado, típico cada ~5–10 s).
+     * No crea historial ni vuelve a meter un downlink de aplicación en RX1: eso mantenía
+     * al medidor despierto. Solo se confirma el uplink para que vuelva a dormir.
+     */
+    if (duplicateFcnt) {
+      console.warn('[LNS] Duplicado FCnt (reemisión); sin historial ni downlink de aplicación', fcnt32, devEui);
+      if (session.pendingMacAck) {
+        try {
+          const ackSent = enqueueAppDownlink(ownerUserId, devEui, 0, Buffer.alloc(0), {
+            skipTxAckTrack: true,
+            fromUplinkFlush: true,
+            ackOnly: true,
+            priority: appDownlinkDefaultPriority(),
+          });
+          if (ackSent && ackSent.macAckIncluded) session.pendingMacAck = false;
+          if (ackSent && ackSent.fCnt != null) session.fcntDown = ackSent.fCnt;
+          store.lnsUpdateSessionAfterUplink(devEui, session);
+          console.log('[LNS] ACK MAC en reemisión (el medidor puede dormir) →', devEui);
+        } catch (eAck) {
+          console.warn('[LNS] ACK MAC en reemisión no enviado:', eAck && eAck.message ? eAck.message : eAck);
+        }
+      }
+      return true;
     }
 
     /**
@@ -1535,12 +1598,14 @@ function createLorawanLnsEngine(ctx) {
      * Uplink confirmado: ACK en RX1. Si el flush del HEX falló, reintentar el comando
      * (no mandar ACK FPort 0: esa ventana es única y el medidor no oiría la válvula).
      */
-    if (!flushed && session.pendingMacAck && isAppUplink) {
+    const valveFlushSuppressed = queuedIsTimewaveValve && !allowValveFlush;
+    if (!flushed && session.pendingMacAck && isAppUplink && allowOtherAppFlush) {
       const stillQueued =
         typeof store.lnsPeekOldestDeferredAppDownlink === 'function' &&
         Boolean(store.lnsPeekOldestDeferredAppDownlink(ownerUserId, devEui));
       if (stillQueued) {
         flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false, {});
+        if (flushed && queuedIsTimewaveValve) noteTimewaveValveAppFlush(ownerUserId, devEui);
         if (flushed && flushed.macAckIncluded) session.pendingMacAck = false;
         if (flushed && flushed.fCnt != null) session.fcntDown = flushed.fCnt;
       }
@@ -1570,6 +1635,7 @@ function createLorawanLnsEngine(ctx) {
         ),
         pendingMacAck: session.pendingMacAck,
         macAnsSent,
+        suppressQueuedFlush: valveFlushSuppressed,
       })
     ) {
       try {
@@ -1599,6 +1665,7 @@ function createLorawanLnsEngine(ctx) {
       deviceId: telemetryDeviceId,
       deviceName: displayName,
       devEUI: devEui,
+      fCnt: fcnt32,
       properties: {
         devEUI: devEui,
         devAddr: devAddrHex,
@@ -1777,6 +1844,7 @@ function createLorawanLnsEngine(ctx) {
             payloadHex: flushHex,
             deferredQueueId: row.id,
             pendingId: row.id,
+            origin: row.origin || '',
           })
         );
       } catch (e2) {
@@ -2092,14 +2160,23 @@ function createLorawanLnsEngine(ctx) {
       classAWindow: cls === 'A' && !useImme ? classAWindow : 'RX1',
       band: gwBandU,
     });
-    if (!ackOnly && payloadBuf && payloadBuf.length && cls !== 'C') {
-      pullObj._syscomAppRestore = {
+    if (!ackOnly && payloadBuf && payloadBuf.length) {
+      const appHex = payloadBuf.toString('hex').toLowerCase();
+      /** Identidad de la acción para no encolar otra copia mientras esta siga pending/await_tx_ack. */
+      pullObj._syscomAppAction = {
         fPort,
-        payloadHex: payloadBuf.toString('hex').toLowerCase(),
-        deviceClass: cls,
-        confirmed: Boolean(opt.confirmed),
+        payloadHex: appHex,
         devEui: devEuiNorm16,
       };
+      if (cls !== 'C') {
+        pullObj._syscomAppRestore = {
+          fPort,
+          payloadHex: appHex,
+          deviceClass: cls,
+          confirmed: Boolean(opt.confirmed),
+          devEui: devEuiNorm16,
+        };
+      }
     }
     try {
       const tx = pullObj && pullObj.txpk;

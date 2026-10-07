@@ -99,6 +99,7 @@ module.exports = {
     { name: 'Consigna 23 °C (auto)', hex: encodeTemperatureControl(MODE.auto, 23, 0) },
     { name: 'Consigna 22 °C (frío)', hex: encodeTemperatureControl(MODE.cool, 22, 0) },
     { name: 'Consigna 23 °C (frío)', hex: encodeTemperatureControl(MODE.cool, 23, 0) },
+    { name: 'Consigna 24 °C (frío)', hex: encodeTemperatureControl(MODE.cool, 24, 0) },
     { name: 'Reiniciar dispositivo', hex: 'ff10ff' },
     { name: 'Consultar estado', hex: 'ff28ff' },
   ],

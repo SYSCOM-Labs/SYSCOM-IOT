@@ -12,6 +12,7 @@ const { shouldSkipTelemetryInsert, isJoinOnlyProperties } = require('./lib/telem
 const { resolveWt201DownlinkHex } = require('./lib/wt201-downlink-encode.cjs');
 const { remapWs501LegacyDownlinkHex } = require('./lib/ws501-downlink-legacy.cjs');
 const timewaveWaterMeter = require('./timewave-water-meter');
+const timewaveUltrasonic = require('./timewave-ultrasonic-water-meter');
 const { sanitizeTemplatesCatalog, isTimewaveBrandLabel } = require('./lib/template-catalog-normalize.cjs');
 const { resolveDownlinkDeviceClassForLns, productModelForcedClass } = require('./lib/resolve-downlink-class.cjs');
 const {
@@ -307,7 +308,8 @@ const RETENTION_MS =
 const COMMS_STALE_OFFLINE_MS = resolveCommsStaleOfflineMs();
 
 /**
- * Número de medidor TimeWave (12 hex) y FPort de aplicación para reescribir la trama DLT/645 al encolar.
+ * Número de medidor TimeWave (12 hex DLT/645 mecánico, o 14 hex CJ/T 188 ultrasónico)
+ * y FPort de aplicación para reescribir la trama al encolar.
  * El DevEUI LoRaWAN no es el nº de medidor. Recorre historial porque un uplink MAC puede tapar `payload_hex`.
  */
 function resolveTimewaveContextForLnsDevice(userId, deviceId, ud, reqBody) {
@@ -335,7 +337,7 @@ function resolveTimewaveContextForLnsDevice(userId, deviceId, ud, reqBody) {
   });
 }
 
-/** Guarda el n.º de medidor 12 hex en `user_devices.device_serial_hex` cuando llega una trama Timewave. */
+/** Guarda el n.º de medidor (12 hex DLT/645 o 14 hex CJ/T 188) en `user_devices.device_serial_hex`. */
 function persistTimewaveMeterNoFromProperties(userId, deviceId, properties) {
   const meter = timewaveWaterMeter.resolveTimewaveMeterNoFromHints({
     timewave_meterNo: properties?.timewave_meterNo,
@@ -350,8 +352,9 @@ function persistTimewaveMeterNoFromProperties(userId, deviceId, properties) {
       ? store.getAnyUserDeviceForDeviceId(deviceId)
       : null);
   if (!ud) return;
-  const existing = timewaveWaterMeter.normalizeTimewaveMeterNo12(ud.deviceSerialHex);
-  if (existing === meter) return;
+  const existing12 = timewaveWaterMeter.normalizeTimewaveMeterNo12(ud.deviceSerialHex);
+  const existing14 = timewaveUltrasonic.normalizeMeterNo14(ud.deviceSerialHex);
+  if (existing12 === meter || existing14 === meter) return;
   store.upsertUserDevice({
     ...ud,
     deviceSerialHex: meter,
@@ -1368,13 +1371,23 @@ function extractIngestProperties(data) {
  * SEC-05: protección anti-replay por frame counter (fCnt) en la ingesta.
  * Estado en memoria por (userId, deviceId) con el último fCnt aceptado.
  * Se rechaza un uplink cuyo fCnt no avanza respecto al último visto, salvo:
- *   - rejoin (fCnt muy bajo: 0..2) → contador reiniciado por el nodo,
+ *   - rejoin (cae desde un contador > 2 hasta 0..2) → el nodo reinició el contador,
  *   - rollover (caída mayor que medio rango de 16 bits) → 65535→0.
  * Desactivable con SYSCOM_INGEST_FCNT_REPLAY_GUARD=0. No afecta uplinks sin fCnt.
  */
 const lastUplinkFcntByDevice = new Map();
 const FCNT_REPLAY_GUARD_ON = String(process.env.SYSCOM_INGEST_FCNT_REPLAY_GUARD || '1').trim() !== '0';
 const FCNT_ROLLOVER_GAP = 32768; // medio rango de un contador de 16 bits
+
+function readIngestFcnt(data, props) {
+  const sources = [data && data.fCnt, data && data.fcnt, data && data.FCnt, props && props.fCnt, props && props.fcnt, props && props.FCnt];
+  for (const value of sources) {
+    if (value == null || value === '') continue;
+    const n = Number(value);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
 
 function isReplayByFcnt(userId, deviceId, fcnt) {
   if (!FCNT_REPLAY_GUARD_ON) return false;
@@ -1390,7 +1403,7 @@ function isReplayByFcnt(userId, deviceId, fcnt) {
     return false; // avance normal
   }
   // fcnt <= prev: posible replay/reordenado, salvo rejoin o rollover.
-  const rejoin = fcnt <= 2; // nodo reinició el contador (join/rejoin)
+  const rejoin = fcnt <= 2 && prev > 2; // caída desde un contador ya avanzado (join/rejoin)
   const rollover = prev - fcnt > FCNT_ROLLOVER_GAP; // 65535 → 0
   if (rejoin || rollover) {
     lastUplinkFcntByDevice.set(key, fcnt);
@@ -1450,7 +1463,7 @@ function saveIngestEntry(userId, data) {
   }
 
   // SEC-05: descartar uplinks reenviados (fCnt que no avanza) salvo rejoin/rollover.
-  if (isReplayByFcnt(userId, canonicalDeviceId, Number(data.fCnt))) {
+  if (isReplayByFcnt(userId, canonicalDeviceId, readIngestFcnt(data, baseProps))) {
     metrics.inc('telemetry_replay_skipped');
     return { ok: true, saved: false, reason: 'replay_fcnt', deviceId: canonicalDeviceId };
   }
@@ -1494,7 +1507,11 @@ function saveIngestEntry(userId, data) {
       invalidateDevicesLatestCache();
     }
     const sseOnDedup = String(process.env.SYSCOM_TELEMETRY_SSE_ON_DEDUP || '1').trim() !== '0';
-    if (sseOnDedup && (persistCheck.refreshLastSeen || !isJoinOnlyProperties(persistCheck.prepared))) {
+    if (
+      sseOnDedup &&
+      !persistCheck.suppressRealtime &&
+      (persistCheck.refreshLastSeen || !isJoinOnlyProperties(persistCheck.prepared))
+    ) {
       store.broadcastTelemetryRealtime(
         userId,
         canonicalDeviceId,
@@ -1770,7 +1787,7 @@ function shouldInsertDeferredDownlink(body, lnsEnqueueExtras, deferralCode) {
 /**
  * Encola downlink LoRaWAN de aplicación (cola → PULL_RESP → packet forwarder).
  * @param {{ skipTxAckTrack?: boolean, priority?: number, delayMs?: number, deferUntilUplink?: boolean, allowGlobalSessionFallback?: boolean }} [lnsEnqueueExtras] Solo uso interno (p. ej. automatización). `allowGlobalSessionFallback`: superadmin, sesión en otra fila `lorawan_lns_sessions` por DevEUI.
- * @returns {{ ok: true, out: object, fPort: number, confirmedDl: boolean, deviceIdStr: string, deui: string, hex: string, deferred?: false } | { ok: true, deferred: true, pendingId: number, pendingQueueLength: number, deferredReason: string, fPort: number, confirmedDl: boolean, deviceIdStr: string, deui: string, hex: string } | { ok: false, status: number, json: object }}
+ * @returns {{ ok: true, out: object, fPort: number, confirmedDl: boolean, deviceIdStr: string, deui: string, hex: string, deferred?: false } | { ok: true, deferred: true, pendingId: number, pendingQueueLength: number, deferredReason: string, fPort: number, confirmedDl: boolean, deviceIdStr: string, deui: string, hex: string } | { ok: true, duplicateSkipped: true, duplicateKind: string, pendingId: number, fPort: number, confirmedDl: boolean, deviceIdStr: string, deui: string, hex: string } | { ok: false, status: number, json: object }}
  */
 function tryLnsAppDownlinkEnqueue(userId, idStr, ud, body, lnsEnqueueExtras = {}) {
   const eng = getLnsEngine();
@@ -1822,13 +1839,18 @@ function tryLnsAppDownlinkEnqueue(userId, idStr, ud, body, lnsEnqueueExtras = {}
   const twCtx = resolveTimewaveContextForLnsDevice(userId, idStr, ud, body);
   const timewaveRewritten = timewaveWaterMeter.rewriteDownlinkHex(hex, twCtx.meter);
   if (timewaveRewritten) {
-    if (!twCtx.meter) {
+    const ultrasonicHex = timewaveUltrasonic.looksLikeUltrasonicHex(hex);
+    const meterOk = ultrasonicHex
+      ? Boolean(timewaveUltrasonic.normalizeMeterNo14(twCtx.meter))
+      : Boolean(timewaveWaterMeter.normalizeTimewaveMeterNo12(twCtx.meter));
+    if (!meterOk) {
       return {
         ok: false,
         status: 400,
         json: {
-          error:
-            'No se pudo determinar el número de medidor Timewave (12 hex) del último uplink. El DevEUI LoRaWAN no es el n.º de medidor; la plantilla usa un ejemplo del PDF. Espere una lectura DLT/645 o capture el n.º en el alta (serial).',
+          error: ultrasonicHex
+            ? 'No se pudo determinar el número de medidor Timewave ultrasónico (14 hex, CJ/T 188). El DevEUI LoRaWAN no es el n.º de medidor; espere una lectura 6811… o capture el n.º en el alta (serial).'
+            : 'No se pudo determinar el número de medidor Timewave (12 hex, DLT/645) del último uplink. El DevEUI LoRaWAN no es el n.º de medidor; la plantilla usa un ejemplo. Espere una lectura FEFEFEFE… o capture el n.º en el alta (serial).',
           code: 'TIMEWAVE_METER_NO_MISSING',
         },
       };
@@ -1900,6 +1922,33 @@ function tryLnsAppDownlinkEnqueue(userId, idStr, ud, body, lnsEnqueueExtras = {}
     }
   }
 
+  if (!replaceQueued && typeof store.lnsFindQueuedSameAppAction === 'function') {
+    const sameQueued = store.lnsFindQueuedSameAppAction(deui, fPort, hex);
+    if (sameQueued) {
+      console.info(
+        '[LNS] Downlink no encolado: la misma acción ya está en cola',
+        sameQueued.kind,
+        'id',
+        sameQueued.id,
+        'dev',
+        deui,
+        'fPort',
+        fPort
+      );
+      return {
+        ok: true,
+        duplicateSkipped: true,
+        duplicateKind: sameQueued.kind,
+        pendingId: sameQueued.id,
+        fPort,
+        confirmedDl,
+        deviceIdStr: idStr,
+        deui,
+        hex,
+      };
+    }
+  }
+
   try {
     const out = eng.enqueueAppDownlink(sessionUserId, deui, fPort, payloadBuf, {
       confirmed: confirmedDl,
@@ -1920,6 +1969,19 @@ function tryLnsAppDownlinkEnqueue(userId, idStr, ud, body, lnsEnqueueExtras = {}
         gatewayEui: gwOpt && gwOpt.length === 16 ? gwOpt : '',
         deviceClass: dlClass,
       });
+      if (ins.ok && ins.duplicate) {
+        return {
+          ok: true,
+          duplicateSkipped: true,
+          duplicateKind: ins.kind || 'deferred',
+          pendingId: ins.id,
+          fPort,
+          confirmedDl,
+          deviceIdStr: idStr,
+          deui,
+          hex,
+        };
+      }
       if (ins.ok) {
         return {
           ok: true,
@@ -1978,6 +2040,20 @@ function sendHttpResponseAfterLnsAppDownlinkEnqueue(res, userId, r, meta) {
   const integ = Boolean(meta.viaLnsIntegrationToken);
   const attribution = downlinkLogAttributionFields(userId, meta);
   if (!r.ok) return res.status(r.status).json(r.json);
+  if (r.duplicateSkipped) {
+    return res.json({
+      status: 'Success',
+      duplicateSkipped: true,
+      message:
+        'Ya hay un downlink con la misma acción en cola para este dispositivo. No se encoló otro.',
+      devEUI: r.deui,
+      fPort: r.fPort,
+      payloadHex: r.hex,
+      pendingId: r.pendingId ?? null,
+      duplicateKind: r.duplicateKind || null,
+      confirmed: r.confirmedDl,
+    });
+  }
   if (r.deferred) {
     appendDownlinkLog(userId, {
       deviceId: deviceIdStr,
@@ -3872,6 +3948,27 @@ app.get('/api/devices/:deviceId/assign-candidates', authMiddleware, requireDevic
 });
 
 /**
+ * Si nadie conserva el dispositivo, suelta sesión LNS y colas de downlink.
+ * Si no, un uplink del nodo eliminado vuelve a mostrar el aviso de ventana RX.
+ */
+function dropLnsIfDeviceHasNoAssignees(deviceId, devEui) {
+  const did = String(deviceId || '').trim();
+  if (did && store.listUserIdsAssignedToDevice(did).length > 0) return;
+  const eui = String(devEui || did)
+    .replace(/[^0-9a-fA-F]/g, '')
+    .toLowerCase();
+  if (eui.length !== 16 || typeof store.lnsDropRadioStateForDevEui !== 'function') return;
+  try {
+    const dropped = store.lnsDropRadioStateForDevEui(eui);
+    if (dropped && (dropped.sessions || dropped.deferred || dropped.pending)) {
+      console.log('[LNS] Sesión y cola liberadas tras baja del dispositivo', eui, dropped);
+    }
+  } catch (e) {
+    console.warn('[LNS] drop tras baja de dispositivo:', e && e.message ? e.message : e);
+  }
+}
+
+/**
  * Borrado definitivo del equipo en SQLite: telemetría, **todas** las asignaciones (incl. superadmin), decode, licencia, etc.
  * Solo superadmin. Un usuario con permiso «Eliminar» usa `DELETE /api/user-devices/:deviceId` (solo su cuenta).
  */
@@ -3914,6 +4011,7 @@ app.delete('/api/users/:targetUserId/devices/:deviceId', authMiddleware, (req, r
     return res.status(404).json({ error: 'El usuario no tiene este dispositivo asignado' });
   }
   store.deleteUserDevice(targetUserId, ud.deviceId);
+  dropLnsIfDeviceHasNoAssignees(ud.deviceId, ud.devEUI);
   invalidateDevicesListCache();
   res.json({ ok: true, unassignedUserId: targetUserId, deviceId: ud.deviceId });
 });
@@ -4308,7 +4406,9 @@ app.delete(
   requireDeviceDeletePermission,
   (req, res) => {
     const id = decodeURIComponent(req.params.deviceId);
+    const ud = store.getUserDevice(req.user.id, id);
     store.deleteUserDevice(req.user.id, id);
+    dropLnsIfDeviceHasNoAssignees(ud?.deviceId || id, ud?.devEUI);
     invalidateDevicesListCache();
     res.json({ ok: true, unassignedOnly: true, deviceId: id });
   }

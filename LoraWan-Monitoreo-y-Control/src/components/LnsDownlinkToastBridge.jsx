@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import FormToast from './FormToast';
 import { fetchLnsUiEventsAfterId, SYSCOM_LNS_DOWNLINK_SENT_EVENT } from '../services/api';
 import { SYSCOM_REALTIME_LNS } from '../constants/realtimeEvents';
@@ -38,11 +38,30 @@ export default function LnsDownlinkToastBridge() {
   const lastIdRef = useRef(readStoredLastId());
   /** Si ya hay cursor guardado, no absorber el primer lote como histórico. */
   const bootstrappedRef = useRef(readStoredLastId() > 0);
+  const seenEventIdsRef = useRef(new Set());
+  const dismissToast = useCallback(() => setToast(null), []);
+
+  const noteEventSeen = useCallback((ev) => {
+    const id = Number(ev?.id) || 0;
+    if (!id) return false;
+    if (seenEventIdsRef.current.has(id)) return true;
+    seenEventIdsRef.current.add(id);
+    if (seenEventIdsRef.current.size > 400) {
+      const keep = [...seenEventIdsRef.current].slice(-200);
+      seenEventIdsRef.current = new Set(keep);
+    }
+    return false;
+  }, []);
 
   useEffect(() => {
     const onSent = (ev) => {
       const d = ev?.detail || {};
-      if (d.deferred === true) {
+      if (d.duplicateSkipped === true) {
+        setToast({
+          type: 'success',
+          message: 'Esa acción ya está en cola para este dispositivo. No se encoló otro downlink.',
+        });
+      } else if (d.deferred === true) {
         setToast({
           type: 'success',
           message:
@@ -59,14 +78,9 @@ export default function LnsDownlinkToastBridge() {
   useEffect(() => {
     const onSseLns = (ev) => {
       const d = ev.detail;
+      if (noteEventSeen(d)) return;
       if (d?.eventType === 'downlink_device_acked') {
         setToast({ type: 'success', message: 'Dispositivo recibió downlink' });
-      }
-      if (d?.eventType === 'downlink_deferred_flushed') {
-        setToast({
-          type: 'success',
-          message: 'Downlink enviado en la ventana RX del medidor (tras el uplink).',
-        });
       }
       if (d?.eventType === 'gateway_tx_rejected') {
         const m = d.meta && typeof d.meta === 'object' ? d.meta : {};
@@ -95,7 +109,7 @@ export default function LnsDownlinkToastBridge() {
     };
     window.addEventListener(SYSCOM_REALTIME_LNS, onSseLns);
     return () => window.removeEventListener(SYSCOM_REALTIME_LNS, onSseLns);
-  }, []);
+  }, [noteEventSeen]);
 
   useEffect(() => {
     let cancelled = false;
@@ -118,14 +132,9 @@ export default function LnsDownlinkToastBridge() {
         for (const ev of events) {
           const id = Number(ev.id) || 0;
           if (id > maxId) maxId = id;
+          if (noteEventSeen(ev)) continue;
           if (ev.eventType === 'downlink_device_acked') {
             setToast({ type: 'success', message: 'Dispositivo recibió downlink' });
-          }
-          if (ev.eventType === 'downlink_deferred_flushed') {
-            setToast({
-              type: 'success',
-              message: 'Downlink enviado en la ventana RX del medidor (tras el uplink).',
-            });
           }
           if (ev.eventType === 'gateway_tx_rejected') {
             const m = ev.meta && typeof ev.meta === 'object' ? ev.meta : {};
@@ -167,7 +176,7 @@ export default function LnsDownlinkToastBridge() {
       cancelled = true;
       window.clearInterval(iv);
     };
-  }, []);
+  }, [noteEventSeen]);
 
   return (
     <div
@@ -184,7 +193,7 @@ export default function LnsDownlinkToastBridge() {
         <FormToast
           type={toast?.type || 'success'}
           message={toast?.message || ''}
-          onDismiss={() => setToast(null)}
+          onDismiss={dismissToast}
           durationMs={5000}
           large
         />
