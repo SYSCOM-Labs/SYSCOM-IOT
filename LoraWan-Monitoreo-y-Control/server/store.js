@@ -1866,12 +1866,13 @@ class Store {
     return Array.from(affected);
   }
 
-  _emitTelemetryRealtimeHooks(userId, deviceId, deviceName, properties, ts) {
+  _emitTelemetryRealtimeHooks(userId, deviceId, deviceName, properties, ts, opts) {
     const did = String(deviceId);
     const tss = ts || Date.now();
     const userIds = this._telemetryAffectedUserIds(userId, did);
     const props = properties && typeof properties === 'object' ? properties : {};
     const deviceType = props.deviceType != null ? String(props.deviceType) : undefined;
+    const skipAutomation = Boolean(opts && opts.skipAutomation);
     if (this._telemetryBroadcastHook) {
       try {
         this._telemetryBroadcastHook({
@@ -1886,7 +1887,7 @@ class Store {
         console.warn('[store] telemetry broadcast hook:', e.message);
       }
     }
-    if (this._automationTelemetryHook) {
+    if (this._automationTelemetryHook && !skipAutomation) {
       try {
         this._automationTelemetryHook({
           userIds,
@@ -1957,7 +1958,7 @@ class Store {
    * Actualiza `ts` de la última fila (p. ej. join LoRaWAN duplicado: misma carga, nueva actividad en radio).
    * @returns {boolean} false si no hay fila previa.
    */
-  touchLastTelemetryTimestamp(userId, deviceId, deviceName, properties, ts) {
+  touchLastTelemetryTimestamp(userId, deviceId, deviceName, properties, ts, opts) {
     const uidIn = String(userId);
     const did = String(deviceId);
     const tss = ts || Date.now();
@@ -1992,7 +1993,7 @@ class Store {
         }
       }
     }
-    this._emitTelemetryRealtimeHooks(uidIn, did, deviceName, properties, tss);
+    this._emitTelemetryRealtimeHooks(uidIn, did, deviceName, properties, tss, opts);
     return true;
   }
 

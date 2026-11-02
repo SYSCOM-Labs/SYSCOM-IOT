@@ -179,10 +179,10 @@ function shouldSkipTelemetryInsert(store, userId, deviceId, properties) {
   const prevHex = payloadHexOf(prevProps);
   const nextHex = payloadHexOf(prepared);
   if (ageMs < sameReadingMs && prevHex && nextHex && prevHex === nextHex) {
-    return { skip: true, reason: 'same_payload', prepared, suppressRealtime: true };
+    return { skip: true, reason: 'same_payload', prepared, suppressRealtime: true, refreshLastSeen: true };
   }
   if (ageMs < sameReadingMs && sameTimewaveReading(prevProps, prepared)) {
-    return { skip: true, reason: 'same_reading', prepared, suppressRealtime: true };
+    return { skip: true, reason: 'same_reading', prepared, suppressRealtime: true, refreshLastSeen: true };
   }
   if (prevHex && nextHex && prevHex !== nextHex) {
     return { skip: false, prepared };

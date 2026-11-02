@@ -141,6 +141,46 @@ test('Join-Accept diferido (join_session_json, sin sesión en BD)', () => {
   assert.equal(Number(out.txpk.tmst), 7_000_000);
 });
 
+test('Downlink clase A: RX1 sigue el uplink de ese nodo, no el último RX del gateway', () => {
+  const eng = createLorawanLnsEngine({
+    store: mockStoreForJoinRefresh('A'),
+    saveIngestEntry: () => {},
+    runLegacyUplink: () => {},
+    insertUiEvent: () => {},
+  });
+  eng.noteGwRxActivity('u1', '0011223344556677', 9_000_000);
+  const dataTxpk = {
+    txpk: {
+      imme: false,
+      tmst: 6_000_000,
+      freq: 923.3,
+      datr: 'SF10BW500',
+      rfch: 0,
+      powe: 14,
+      modu: 'LORA',
+      ipol: true,
+      size: 12,
+      data: 'AA==',
+    },
+  };
+  const out = JSON.parse(
+    eng.refreshPullRespJsonBeforeSend({
+      userId: 'u1',
+      json: JSON.stringify(dataTxpk),
+      txDevEui: DEV_EUI,
+      priority: 128,
+      txNewFcnt: 3,
+      joinSessionJson: null,
+    })
+  );
+  assert.equal(out.txpk.imme, false);
+  assert.equal(
+    Number(out.txpk.tmst),
+    6_000_000,
+    'RX1 = uplink del nodo (1e6) + RxDelay 5 s, no el RX vecino (9e6 + 5 s)'
+  );
+});
+
 test('US915 RX1: mismo SF y BW500 (RP002 Rx1DROffset 0)', () => {
   const { getUs915Rx1Datr, getUs915Rx1Freq } = require('../lorawan-lns-engine');
   assert.equal(getUs915Rx1Datr('SF10BW125'), 'SF10BW500');

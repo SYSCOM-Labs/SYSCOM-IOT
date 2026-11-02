@@ -1544,6 +1544,21 @@ function createLorawanLnsEngine(ctx) {
           console.warn('[LNS] ACK MAC en reemisión no enviado:', eAck && eAck.message ? eAck.message : eAck);
         }
       }
+      /** La reemisión prueba que el nodo sigue en radio. Sin esto, a los 40 min el listado pasa a desconectado. */
+      try {
+        if (typeof store.touchLastTelemetryTimestamp === 'function') {
+          store.touchLastTelemetryTimestamp(
+            ownerUserId,
+            telemetryDeviceId,
+            displayName,
+            { connectStatus: 'online', devEUI: devEui, fCnt: fcnt32 },
+            Date.now(),
+            { skipAutomation: true }
+          );
+        }
+      } catch (eSeen) {
+        console.warn('[LNS] reemisión sin actualizar Visto:', eSeen && eSeen.message ? eSeen.message : eSeen);
+      }
       return true;
     }
 
@@ -2033,7 +2048,14 @@ function createLorawanLnsEngine(ctx) {
 
     const gwBandU = gwBand.toUpperCase();
     const r2Stub = rx2Defaults(isUs915Plan({ band: gwBandU }, null));
-    const tmstBase = resolveTmstBaseForGw(userId, gatewayQueueEui, session.lastRxTmst);
+    const gwTmstBase = resolveTmstBaseForGw(userId, gatewayQueueEui, session.lastRxTmst);
+    const sessionTmst =
+      session.lastRxTmst != null && Number(session.lastRxTmst) > 0 ? Number(session.lastRxTmst) >>> 0 : 0;
+    /**
+     * Clase A/B escucha solo tras SU uplink. El último `tmst` del concentrador puede ser otro nodo
+     * (clase C en el mismo UG65) y desplaza RX1 → el ACK no llega y el nodo retransmite la misma trama.
+     */
+    const tmstBase = cls === 'C' ? gwTmstBase : sessionTmst || gwTmstBase;
     const rxpkStub = {
       tmst: tmstBase || 0,
       freq: session.lastRxFreq || r2Stub.freq,
@@ -2441,6 +2463,13 @@ function createLorawanLnsEngine(ctx) {
     const maxAge = envInt('SYSCOM_LNS_PULL_TMST_REFRESH_MAX_AGE_MS', 12000);
     const tmstStale = lastWall == null || Date.now() - Number(lastWall) > maxAge;
     const hasTmst = tmstBase > 0;
+    /**
+     * Clase A: anclar al `tmst` y al reloj de pared de ESTE uplink.
+     * `tmstBase` / `lastWall` del gateway siguen al RX más reciente del concentrador (otro nodo).
+     */
+    const classATmst = Number(session.lastRxTmst) > 0 ? Number(session.lastRxTmst) >>> 0 : 0;
+    const classAWall = session.lastUplinkWallMs != null ? Number(session.lastUplinkWallMs) : null;
+    const classAStale = classAWall == null || Date.now() - classAWall > maxAge;
 
     const gwForceImme =
       cls === 'C' &&
@@ -2462,18 +2491,18 @@ function createLorawanLnsEngine(ctx) {
           tx.rfch = 0;
         }
       }
-    } else if (cls === 'A' && hasTmst && !tmstStale) {
+    } else if (cls === 'A' && classATmst > 0 && !classAStale) {
       const rxDelaySec = resolveClassARxDelaySec(session, gwBandU);
       const win = classARxWindowMode();
       tx.imme = false;
       if (win === 'RX2') {
         const afterRx1Sec = getRx2AfterRx1Sec();
         const secOffset = rxDelaySec + afterRx1Sec;
-        tx.tmst = (tmstBase + secOffset * 1_000_000) >>> 0;
+        tx.tmst = (classATmst + secOffset * 1_000_000) >>> 0;
         tx.freq = r2.freq;
         tx.datr = r2.datr;
       } else {
-        tx.tmst = (tmstBase + classARx1DelayUs(rxDelaySec)) >>> 0;
+        tx.tmst = (classATmst + classARx1DelayUs(rxDelaySec)) >>> 0;
         if (isUs) {
           tx.freq = getUs915Rx1Freq(Number(rxpkStub.freq));
           tx.datr = getUs915Rx1Datr(rxpkStub.datr);

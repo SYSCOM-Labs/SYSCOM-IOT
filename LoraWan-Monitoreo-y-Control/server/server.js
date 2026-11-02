@@ -1502,7 +1502,8 @@ function saveIngestEntry(userId, data) {
         canonicalDeviceId,
         normalizedDeviceName,
         properties,
-        tsDedup
+        tsDedup,
+        persistCheck.suppressRealtime ? { skipAutomation: true } : undefined
       );
       invalidateDevicesLatestCache();
     }

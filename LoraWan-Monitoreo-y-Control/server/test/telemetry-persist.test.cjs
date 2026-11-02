@@ -88,6 +88,7 @@ test('shouldSkipTelemetryInsert: misma trama de medidor dentro de una hora', () 
   assert.equal(sameHex.skip, true);
   assert.equal(sameHex.reason, 'same_payload');
   assert.equal(sameHex.suppressRealtime, true);
+  assert.equal(sameHex.refreshLastSeen, true);
 
   const sameVolume = shouldSkipTelemetryInsert(store, '1', 'dev1', {
     payload_hex: '6811BB',
@@ -100,6 +101,7 @@ test('shouldSkipTelemetryInsert: misma trama de medidor dentro de una hora', () 
   });
   assert.equal(sameVolume.skip, true);
   assert.equal(sameVolume.reason, 'same_reading');
+  assert.equal(sameVolume.refreshLastSeen, true);
 });
 
 test('shouldSkipTelemetryInsert: lectura distinta o reporte de la hora siguiente sí se guarda', () => {
