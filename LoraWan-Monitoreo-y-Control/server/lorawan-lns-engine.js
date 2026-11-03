@@ -15,6 +15,8 @@ const {
   shouldSuppressOtaaJoinForLiveSession,
   buildDeviceTimeAnsMac,
   uplinkHasDeviceTimeReq,
+  buildLinkCheckAnsMac,
+  shouldResendSameJoinAccept,
 } = require('./lib/lorawan-class-behavior.cjs');
 const { syncDeviceTemplateFromCatalog } = require('./lib/auto-fleet-sync.cjs');
 const timewaveWaterMeter = require('./timewave-water-meter');
@@ -25,6 +27,11 @@ const LORAWAN_US915_ONLY = lorawanUs915Only();
 const pendingDownlinks = new Map();
 /** Cierres Timewave enviados en RX1 de un uplink de aplicación (FPort≥1) en esta sesión OTAA. */
 const timewaveValveAppFlushCount = new Map();
+/**
+ * PHY del Join-Accept ya entregado a este DevEUI.
+ * Los JR siguientes (Milesight, cada 15 s) reenvían este buffer: mismas claves, `tmst` del JR nuevo.
+ */
+const freshJoinAcceptPhyByEui = new Map();
 
 function normGwPendingKey(gw) {
   return String(gw || '')
@@ -533,7 +540,8 @@ function resolveFcnt32ForMic(sessionFcntUp, wireFcnt16) {
   const prev = sessionFcntUp >>> 0;
   const prevHi = (prev >>> 16) & 0xffff;
   let cand = (((prevHi & 0xffff) << 16) >>> 0) + (lo & 0xffff);
-  if (cand <= prev) cand = (cand + 0x10000) >>> 0;
+  /** Igual que el contador guardado = retransmisión, no un rollover. `<=` lo subía 65536 y el resto de uplinks parecía un retroceso. */
+  if (cand < prev) cand = (cand + 0x10000) >>> 0;
   msb.writeUInt16BE((cand >>> 16) & 0xffff, 0);
   return { fcnt32: cand >>> 0, fCntMSBytes: msb };
 }
@@ -1085,6 +1093,41 @@ function createLorawanLnsEngine(ctx) {
     });
   }
 
+  function macAnswerForUplink(packet, fPort, plain) {
+    const parts = [];
+    if (deviceTimeAnsToDeviceEnabled() && uplinkHasDeviceTimeReq(fPort, plain, packet && packet.FOpts)) {
+      parts.push(buildDeviceTimeAnsMac());
+    }
+    if (linkCheckAnsToDeviceEnabled() && otaaUplinkHasLinkCheckReq(packet, fPort, plain)) {
+      parts.push(
+        buildLinkCheckAnsMac(
+          Math.max(0, Math.min(254, envInt('SYSCOM_LNS_LINK_CHECK_ANS_MARGIN', 10))),
+          Math.max(0, Math.min(255, envInt('SYSCOM_LNS_LINK_CHECK_ANS_GW_CNT', 1)))
+        )
+      );
+    }
+    return parts.length ? Buffer.concat(parts) : null;
+  }
+
+  /**
+   * Una sola trama en RX1 (prioridad por encima de un clase C ya encolado).
+   * Milesight cuenta como fallo cualquier RX1 que no traiga LinkCheckAns.
+   */
+  function enqueueClassAMacDownlink(userId, devEui, payloadBuf) {
+    const ackOnly = !payloadBuf || !payloadBuf.length;
+    return enqueueAppDownlink(userId, devEui, 0, ackOnly ? Buffer.alloc(0) : payloadBuf, {
+      skipTxAckTrack: true,
+      fromUplinkFlush: true,
+      ackOnly,
+      priority: classAUplinkFlushPriority(0),
+    });
+  }
+
+  function rememberFreshJoinAccept(devEui, phy) {
+    const hold = Math.max(15_000, joinReuseDevAddrWindowMs() || 120_000);
+    freshJoinAcceptPhyByEui.set(devEui, { phy, exp: Date.now() + hold });
+  }
+
   function processJoin(gatewayUserId, gatewayEuiNorm, p, rxpk) {
     const joinEui = buf8ToHex16(p.AppEUI);
     const devEui = buf8ToHex16(p.DevEUI);
@@ -1158,6 +1201,45 @@ function createLorawanLnsEngine(ctx) {
       return true;
     }
 
+    const cachedJa = freshJoinAcceptPhyByEui.get(devEui);
+    if (
+      cachedJa &&
+      Buffer.isBuffer(cachedJa.phy) &&
+      cachedJa.phy.length > 0 &&
+      cachedJa.exp > Date.now() &&
+      shouldResendSameJoinAccept(existingSess, Date.now(), joinReuseDevAddrWindowMs())
+    ) {
+      const gwResend =
+        store.lnsGetGatewayByEui(ownerUserId, gatewayEuiNorm) ||
+        store.lnsGetGatewayByEui(gatewayUserId, gatewayEuiNorm) ||
+        (typeof store.lnsGetGatewayByEuiAnyUser === 'function'
+          ? store.lnsGetGatewayByEuiAnyUser(gatewayEuiNorm)
+          : null);
+      const gwBandResend = gwResend ? String(gwResend.frequencyBand || '').toUpperCase() : '';
+      const pullResend = buildTxpk(cachedJa.phy, rxpk, {
+        imme: false,
+        rxDelaySec: existingSess.rxDelaySec,
+        band: gwBandResend,
+      });
+      pullResend._syscomLnsKind = 'join_accept';
+      if (typeof store.lnsCancelPendingJoinAcceptsForDev === 'function') {
+        store.lnsCancelPendingJoinAcceptsForDev(ownerUserId, devEui);
+      }
+      existingSess.lastGatewayEui = gatewayEuiNorm;
+      if (rxpk && rxpk.tmst != null) existingSess.lastRxTmst = Number(rxpk.tmst);
+      if (rxpk && rxpk.freq != null) existingSess.lastRxFreq = Number(rxpk.freq);
+      if (rxpk && rxpk.datr != null) existingSess.lastRxDatr = String(rxpk.datr);
+      if (rxpk && rxpk.codr != null) existingSess.lastRxCodr = String(rxpk.codr);
+      if (rxpk && rxpk.rfch != null) existingSess.lastRxRfch = Number(rxpk.rfch);
+      store.lnsUpdateSessionAfterUplink(devEui, existingSess);
+      store.lnsEnqueuePullResp(ownerUserId, gatewayEuiNorm, pullResend, Date.now(), 255, { devEui });
+      console.log(
+        '[LNS] Join-Accept reenviado con las mismas claves (RX1 de este JR, sin rotar DevAddr) →',
+        devEui
+      );
+      return true;
+    }
+
     let devAddrBuf;
     try {
       devAddrBuf = pickOtaaJoinDevAddrBuf(ownerUserId, devEui);
@@ -1207,6 +1289,7 @@ function createLorawanLnsEngine(ctx) {
       appKeyBuf
     );
     const phy = ja.getPHYPayload();
+    rememberFreshJoinAccept(devEui, phy);
 
     const ud = store.getUserDeviceByDevEuiNorm(ownerUserId, devEui);
     const telemetryDeviceId = ud && ud.deviceId ? ud.deviceId : devEui;
@@ -1528,18 +1611,19 @@ function createLorawanLnsEngine(ctx) {
      */
     if (duplicateFcnt) {
       console.warn('[LNS] Duplicado FCnt (reemisión); sin historial ni downlink de aplicación', fcnt32, devEui);
-      if (session.pendingMacAck) {
+      const macOnRetry = macAnswerForUplink(p, fPort, plain);
+      if (macOnRetry || session.pendingMacAck) {
         try {
-          const ackSent = enqueueAppDownlink(ownerUserId, devEui, 0, Buffer.alloc(0), {
-            skipTxAckTrack: true,
-            fromUplinkFlush: true,
-            ackOnly: true,
-            priority: appDownlinkDefaultPriority(),
-          });
+          const ackSent = enqueueClassAMacDownlink(ownerUserId, devEui, macOnRetry);
           if (ackSent && ackSent.macAckIncluded) session.pendingMacAck = false;
           if (ackSent && ackSent.fCnt != null) session.fcntDown = ackSent.fCnt;
           store.lnsUpdateSessionAfterUplink(devEui, session);
-          console.log('[LNS] ACK MAC en reemisión (el medidor puede dormir) →', devEui);
+          console.log(
+            '[LNS] RX1 de reemisión',
+            macOnRetry ? `MAC ${macOnRetry.toString('hex')}` : 'ACK',
+            '→',
+            devEui
+          );
         } catch (eAck) {
           console.warn('[LNS] ACK MAC en reemisión no enviado:', eAck && eAck.message ? eAck.message : eAck);
         }
@@ -1580,9 +1664,9 @@ function createLorawanLnsEngine(ctx) {
     if (isAppUplink && twDecoded) {
       queueFreshTimewaveCloseIfNeeded(ownerUserId, devEui, twDecoded);
     }
-    const wantsDeviceTimeAns =
-      deviceTimeAnsToDeviceEnabled() && uplinkHasDeviceTimeReq(fPort, plain, p.FOpts);
-    const deviceTimeAnsBuf = wantsDeviceTimeAns ? buildDeviceTimeAnsMac() : null;
+    /** DeviceTimeAns + LinkCheckAns en la misma trama. Milesight manda LinkCheckReq en FPort 0; un segundo PULL_RESP llega tarde y el nodo se reinicia. */
+    const macAnswer = macAnswerForUplink(p, fPort, plain);
+    const macFOpts = macAnswer && macAnswer.length > 0 && macAnswer.length <= 15 ? macAnswer : null;
     const peekValve =
       typeof store.lnsPeekOldestDeferredAppDownlink === 'function'
         ? store.lnsPeekOldestDeferredAppDownlink(ownerUserId, devEui)
@@ -1594,7 +1678,9 @@ function createLorawanLnsEngine(ctx) {
       isAppUplink &&
       queuedIsTimewaveValve &&
       canFlushTimewaveValveOnAppUplink(ownerUserId, devEui);
-    const allowOtherAppFlush = Boolean(peekValve) && (!queuedIsTimewaveValve || allowValveFlush);
+    /** FPort 0 es la ventana del LinkCheckReq. Un HEX de aplicación ahí deja al sensor sin LinkCheckAns. */
+    const allowOtherAppFlush =
+      isAppUplink && Boolean(peekValve) && (!queuedIsTimewaveValve || allowValveFlush);
     let flushed = null;
     if (allowOtherAppFlush && peekValve) {
       if (queuedIsTimewaveValve && !allowValveFlush) {
@@ -1603,7 +1689,9 @@ function createLorawanLnsEngine(ctx) {
           devEui
         );
       } else {
-        flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false, {});
+        flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false, {
+          ...(macFOpts ? { macFOpts } : {}),
+        });
         if (flushed && queuedIsTimewaveValve) noteTimewaveValveAppFlush(ownerUserId, devEui);
         if (flushed && flushed.macAckIncluded) session.pendingMacAck = false;
         if (flushed && flushed.fCnt != null) session.fcntDown = flushed.fCnt;
@@ -1619,26 +1707,24 @@ function createLorawanLnsEngine(ctx) {
         typeof store.lnsPeekOldestDeferredAppDownlink === 'function' &&
         Boolean(store.lnsPeekOldestDeferredAppDownlink(ownerUserId, devEui));
       if (stillQueued) {
-        flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false, {});
+        flushed = tryFlushOneDeferredAppDownlinkAfterUplink(ownerUserId, devEui, false, {
+          ...(macFOpts ? { macFOpts } : {}),
+        });
         if (flushed && queuedIsTimewaveValve) noteTimewaveValveAppFlush(ownerUserId, devEui);
         if (flushed && flushed.macAckIncluded) session.pendingMacAck = false;
         if (flushed && flushed.fCnt != null) session.fcntDown = flushed.fCnt;
       }
     }
     let macAnsSent = false;
-    if (!flushed && deviceTimeAnsBuf) {
+    if (!flushed && macAnswer) {
       try {
-        const timeSent = enqueueAppDownlink(ownerUserId, devEui, 0, deviceTimeAnsBuf, {
-          skipTxAckTrack: true,
-          fromUplinkFlush: true,
-          priority: appDownlinkDefaultPriority(),
-        });
+        const macSent = enqueueClassAMacDownlink(ownerUserId, devEui, macAnswer);
         macAnsSent = true;
-        if (timeSent && timeSent.macAckIncluded) session.pendingMacAck = false;
-        if (timeSent && timeSent.fCnt != null) session.fcntDown = timeSent.fCnt;
-        console.log('[LNS] DeviceTimeAns tras DeviceTimeReq →', devEui);
+        if (macSent && macSent.macAckIncluded) session.pendingMacAck = false;
+        if (macSent && macSent.fCnt != null) session.fcntDown = macSent.fCnt;
+        console.log('[LNS] MAC en RX1', macAnswer.toString('hex'), '→', devEui);
       } catch (eTime) {
-        console.warn('[LNS] DeviceTimeAns no enviado:', eTime && eTime.message ? eTime.message : eTime);
+        console.warn('[LNS] MAC de RX1 no enviado:', eTime && eTime.message ? eTime.message : eTime);
       }
     }
     if (
@@ -1654,12 +1740,7 @@ function createLorawanLnsEngine(ctx) {
       })
     ) {
       try {
-        const ackSent = enqueueAppDownlink(ownerUserId, devEui, 0, Buffer.alloc(0), {
-          skipTxAckTrack: true,
-          fromUplinkFlush: true,
-          ackOnly: true,
-          priority: appDownlinkDefaultPriority(),
-        });
+        const ackSent = enqueueClassAMacDownlink(ownerUserId, devEui, null);
         if (ackSent && ackSent.macAckIncluded) session.pendingMacAck = false;
         if (ackSent && ackSent.fCnt != null) session.fcntDown = ackSent.fCnt;
         console.log('[LNS] ACK MAC (sin payload de app) tras uplink confirmado →', devEui);
@@ -1708,26 +1789,6 @@ function createLorawanLnsEngine(ctx) {
         last_update: Date.now(),
       },
     });
-
-    const deferLinkCheck =
-      Boolean(flushed) ||
-      Boolean(peekValve) ||
-      (typeof store.lnsHasPendingPullRespForDev === 'function' &&
-        store.lnsHasPendingPullRespForDev(ownerUserId, devEui));
-    if (linkCheckAnsToDeviceEnabled() && !deferLinkCheck && otaaUplinkHasLinkCheckReq(p, fPort, plain)) {
-      try {
-        const margin = Math.max(0, Math.min(254, envInt('SYSCOM_LNS_LINK_CHECK_ANS_MARGIN', 10)));
-        const gwcnt = Math.max(0, Math.min(255, envInt('SYSCOM_LNS_LINK_CHECK_ANS_GW_CNT', 1)));
-        /** LinkCheckAns (CID 0x03) en FRMPayload con FPort 0; cifrado con NwkSKey en `enqueueAppDownlink`. */
-        enqueueAppDownlink(ownerUserId, devEui, 0, Buffer.from([0x03, margin, gwcnt]), {
-          priority: 10,
-          skipTxAckTrack: true,
-        });
-        console.log('[LNS] LinkCheckAns encolado →', devEui, 'margin=', margin, 'GwCnt=', gwcnt);
-      } catch (e) {
-        console.warn('[LNS] LinkCheckAns no encolado:', e && e.message ? e.message : e);
-      }
-    }
 
     return true;
   }
@@ -2030,7 +2091,8 @@ function createLorawanLnsEngine(ctx) {
     const downFields = {
       MType: mType,
       DevAddr: Buffer.from(session.devAddr, 'hex'),
-      FCtrl: { ADR: false, ACK: macAck, FPending: Boolean(opt.fPending) },
+      /** ADR en 1: el servidor sigue a cargo del data rate y el nodo no rearranca el plan de canales. */
+      FCtrl: { ADR: true, ACK: macAck, FPending: Boolean(opt.fPending) },
       FCnt: nextDown,
       FPort: ackOnly ? 0 : fPort,
       payload: ackOnly ? Buffer.alloc(0) : payloadBuf,
@@ -2208,7 +2270,7 @@ function createLorawanLnsEngine(ctx) {
       opt.priority != null && Number.isFinite(Number(opt.priority))
         ? Math.max(0, Math.min(255, Math.floor(Number(opt.priority))))
         : appDownlinkDefaultPriority();
-    if (opt.fromUplinkFlush && cls !== 'C' && !ackOnly && payloadBuf && payloadBuf.length) {
+    if (opt.fromUplinkFlush && cls !== 'C') {
       dlPriority = classAUplinkFlushPriority(dlPriority);
     }
     /**
@@ -2567,4 +2629,5 @@ module.exports = {
   getUs915Rx1Datr,
   getUs915Rx1Freq,
   shouldSuppressOtaaJoinForLiveSession,
+  resolveFcnt32ForMic,
 };

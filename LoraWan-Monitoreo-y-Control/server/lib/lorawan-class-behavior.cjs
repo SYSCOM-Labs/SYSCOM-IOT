@@ -182,6 +182,46 @@ const DEVICE_TIME_CID = 0x0d;
 const GPS_UNIX_OFFSET_SEC = 315964800;
 const GPS_LEAP_SECONDS = 18;
 
+/** LinkCheckAns: CID 0x03 + margin + GwCnt. */
+const LINK_CHECK_ANS_CID = 0x03;
+
+/**
+ * @param {number} margin 0..254 (dB)
+ * @param {number} gwCnt gateways que oyeron el uplink
+ * @returns {Buffer}
+ */
+function buildLinkCheckAnsMac(margin, gwCnt) {
+  const m = Number(margin);
+  const g = Number(gwCnt);
+  return Buffer.from([
+    LINK_CHECK_ANS_CID,
+    Math.max(0, Math.min(254, Number.isFinite(m) ? Math.floor(m) : 0)),
+    Math.max(0, Math.min(255, Number.isFinite(g) ? Math.floor(g) : 1)),
+  ]);
+}
+
+/**
+ * Milesight reintenta el Join Request cada ~15 s. Si cada JR genera claves nuevas,
+ * el nodo se queda con el primer Join-Accept que oye y el servidor con el último.
+ * Mientras la sesión recién creada no tenga uplink de datos, hay que reenviar el mismo PHY.
+ *
+ * @param {{ fcntUp?: number, lastUplinkWallMs?: number } | null | undefined} session
+ * @param {number} nowMs
+ * @param {number} holdMs
+ */
+function shouldResendSameJoinAccept(session, nowMs, holdMs) {
+  const hold = Number(holdMs);
+  if (!Number.isFinite(hold) || hold <= 0 || !session) return false;
+  const fcntUp = Number(session.fcntUp);
+  if (Number.isFinite(fcntUp) && fcntUp >= 0) return false;
+  const t = Number(session.lastUplinkWallMs);
+  if (!Number.isFinite(t) || t <= 0) return false;
+  const now = Number(nowMs);
+  if (!Number.isFinite(now)) return false;
+  const age = now - t;
+  return age >= 0 && age < hold;
+}
+
 /**
  * DeviceTimeAns: CID + GPS seconds LE + fracción 1/256 s.
  * @param {number} [nowMs]
@@ -200,6 +240,46 @@ function buildDeviceTimeAnsMac(nowMs) {
   return buf;
 }
 
+function uplinkMacPayloadLenAfterCid(cid) {
+  switch (cid & 0xff) {
+    case 0x02:
+      return 0;
+    case 0x03:
+      return 1;
+    case 0x04:
+      return 0;
+    case 0x05:
+      return 1;
+    case 0x06:
+      return 2;
+    case 0x07:
+      return 1;
+    case 0x08:
+    case 0x09:
+      return 0;
+    case 0x0a:
+      return 1;
+    case 0x0d:
+      return 0;
+    default:
+      return -1;
+  }
+}
+
+function macBufferHasCid(buf, wantCid) {
+  if (!Buffer.isBuffer(buf) || !buf.length) return false;
+  const target = wantCid & 0xff;
+  let i = 0;
+  while (i < buf.length) {
+    const cid = buf[i] & 0xff;
+    if (cid === target) return true;
+    const plen = uplinkMacPayloadLenAfterCid(cid);
+    if (plen < 0 || i + 1 + plen > buf.length) return false;
+    i += 1 + plen;
+  }
+  return false;
+}
+
 /**
  * Timewave (y otros) mandan DeviceTimeReq en FPort 0 (`0D`) o en FOpts.
  * Sin DeviceTimeAns el nodo reintenta OTAA y el HEX de RX1 queda en una sesión muerta.
@@ -210,8 +290,8 @@ function buildDeviceTimeAnsMac(nowMs) {
 function uplinkHasDeviceTimeReq(fPort, plainFrmpayload, fopts) {
   const plain = Buffer.isBuffer(plainFrmpayload) ? plainFrmpayload : Buffer.alloc(0);
   const opts = Buffer.isBuffer(fopts) ? fopts : Buffer.alloc(0);
-  if (Number(fPort) === 0 && plain.length >= 1 && (plain[0] & 0xff) === DEVICE_TIME_CID) return true;
-  if (opts.length >= 1 && (opts[0] & 0xff) === DEVICE_TIME_CID) return true;
+  if (Number(fPort) === 0 && macBufferHasCid(plain, DEVICE_TIME_CID)) return true;
+  if (macBufferHasCid(opts, DEVICE_TIME_CID)) return true;
   return false;
 }
 
@@ -271,4 +351,7 @@ module.exports = {
   DEVICE_TIME_CID,
   buildDeviceTimeAnsMac,
   uplinkHasDeviceTimeReq,
+  LINK_CHECK_ANS_CID,
+  buildLinkCheckAnsMac,
+  shouldResendSameJoinAccept,
 };

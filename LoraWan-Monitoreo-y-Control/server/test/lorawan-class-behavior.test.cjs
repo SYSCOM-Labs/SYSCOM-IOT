@@ -238,3 +238,27 @@ test('DeviceTimeReq FPort 0 0x0D exige DeviceTimeAns, no un ACK vacío', () => {
   assert.ok(Buffer.isBuffer(pkt.FOpts) && pkt.FOpts.equals(ans));
   assert.equal(lora_packet.verifyMIC(pkt, nwk, undefined, Buffer.from('0000', 'hex')), true);
 });
+
+test('LinkCheckAns y reenvío del mismo Join-Accept', () => {
+  const {
+    buildLinkCheckAnsMac,
+    shouldResendSameJoinAccept,
+    uplinkHasDeviceTimeReq,
+  } = require('../lib/lorawan-class-behavior.cjs');
+  const ans = buildLinkCheckAnsMac(10, 1);
+  assert.deepEqual([...ans], [0x03, 10, 1]);
+  assert.equal(buildLinkCheckAnsMac(300, -2)[1], 254);
+  assert.equal(buildLinkCheckAnsMac(300, -2)[2], 0);
+  const fresh = { fcntUp: -1, lastUplinkWallMs: 1_000 };
+  assert.equal(shouldResendSameJoinAccept(fresh, 1_000 + 15_000, 120_000), true);
+  assert.equal(shouldResendSameJoinAccept({ fcntUp: 4, lastUplinkWallMs: 1_000 }, 1_500, 120_000), false);
+  assert.equal(shouldResendSameJoinAccept(fresh, 1_000 + 120_000, 120_000), false);
+  assert.equal(uplinkHasDeviceTimeReq(0, Buffer.from([0x02, 0x0d]), Buffer.alloc(0)), true);
+});
+
+test('FCnt de retransmisión no salta 65536', () => {
+  const { resolveFcnt32ForMic } = require('../lorawan-lns-engine');
+  assert.equal(resolveFcnt32ForMic(10, 10).fcnt32, 10);
+  assert.equal(resolveFcnt32ForMic(10, 11).fcnt32, 11);
+  assert.equal(resolveFcnt32ForMic(65535, 0).fcnt32, 65536);
+});
